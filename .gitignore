@@ -1,0 +1,13 @@
+.DS_Store
+.build/
+dist/
+.swiftpm/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+Packages/
+*.resolved
+
+# Local only
+.claude/settings.local.json
+__pycache__/

@@ -1,0 +1,82 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Inspector test page</title>
+<style>
+  body { font: 15px system-ui; margin: 2em; color: #222; }
+  #log { white-space: pre; font: 12px monospace; }
+  .hero { padding: 12px 20px; background: #eef; border: 2px solid #99f; color: rgb(20, 20, 120); }
+  .hero.big { font-size: 22px; }
+  p.generated { color: #080; margin: 4px 0; }
+  @media (max-width: 300px) { .hero { display: none; } }
+  h1 { color: #369; }
+  .act:hover { color: rgb(200, 0, 0); }
+</style>
+<h1 id="title" class="hero big" style="margin-bottom: 8px">Inspector test page</h1>
+<p id="status">running…</p>
+<div id="log"></div>
+<button id="action" class="act" onclick="window.__attrClicks = (window.__attrClicks || 0) + 1">Action</button>
+<img src="/pixel.png" alt="">
+<script src="/script.js"></script>
+<script src="/bundle.js"></script>
+<script>
+  const log = (s) => { document.getElementById("log").textContent += s + "\n"; };
+  localStorage.setItem("greeting", "hello");
+  localStorage.setItem("count", "3");
+  sessionStorage.setItem("temp", "yes");
+  document.cookie = "session=abc123; path=/";
+  document.cookie = "theme=dark; path=/";
+
+  console.log("plain string", 42, true, null, undefined);
+  console.info("object", { a: 1, b: [1, 2, { c: "three" }], fn() {} });
+  console.warn("%s has %d items", "cart", 3, { extra: true });
+  console.error(new Error("boom from console.error"));
+  console.debug(document.body, new Map([["k", 1]]), new Set([1, 2]));
+  console.group("A group");
+  console.log("inside group");
+  console.groupEnd();
+  console.log("repeated"); console.log("repeated"); console.log("repeated");
+  console.table([{ name: "Ada", age: 36 }, { name: "Linus", age: 54, os: "linux" }]);
+
+  fetch("/api/data.json", { headers: { "X-Test": "1" } })
+    .then(r => r.json()).then(j => log("fetch ok " + JSON.stringify(j)));
+  fetch("/api/post", { method: "POST", body: JSON.stringify({ hello: "world" }),
+                       headers: { "Content-Type": "application/json" } })
+    .then(r => r.text()).then(t => log("post ok " + t));
+  fetch("/missing").then(r => log("missing status " + r.status));
+
+  const xhr = new XMLHttpRequest();
+  xhr.open("GET", "/api/data.json?xhr=1");
+  xhr.setRequestHeader("X-XHR", "yes");
+  xhr.onload = () => log("xhr ok " + xhr.status);
+  xhr.send();
+
+  const socket = new WebSocket("ws://" + location.host + "/ws");
+  socket.onopen = () => socket.send("hello ws");
+  socket.onmessage = (e) => { log("ws " + e.data); window.__socket = socket; };
+
+  // For the event-listener, DOM-breakpoint and fetch-breakpoint checks.
+  window.__clicks = 0;
+  function onActionClick() { document.getElementById("action").setAttribute("data-clicks", String(++window.__clicks)); }
+  document.getElementById("action").addEventListener("click", onActionClick);
+  document.getElementById("action").addEventListener("mouseenter", function hoverIn() {}, { passive: true });
+  window.addEventListener("resize", function onResize() {});
+  window.__fetchLater = () => fetch("/api/data.json?later=1").then((r) => r.status);
+
+  // Tamper attempt: an isolated world cannot be reached from here.
+  log("isolated bridge visible from page: " + !!(window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.inspector));
+  log("page bridge visible from page: " + !!(window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.inspectorPage));
+  log("agent globals visible from page: " + (typeof __sbAgent !== "undefined"));
+
+  setTimeout(() => {
+    for (let i = 0; i < 5; i++) {
+      const p = document.createElement("p");
+      p.className = "generated";
+      p.textContent = "generated " + i;
+      document.body.appendChild(p);
+    }
+    document.body.setAttribute("data-mutated", "yes");
+    Promise.reject(new Error("unhandled rejection sample"));
+    setTimeout(() => { undefinedFunctionCall(); }, 50);
+    document.getElementById("status").textContent = "done";
+  }, 200);
+</script>
