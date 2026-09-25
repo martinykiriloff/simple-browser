@@ -5,13 +5,14 @@ import AppKit
 /// the app delegate.
 @MainActor
 enum MainMenu {
-    static func install() {
+    static func install(profilesMenuDelegate: NSMenuDelegate) {
         let mainMenu = NSMenu()
         mainMenu.addItem(appMenuItem())
         mainMenu.addItem(fileMenuItem())
         mainMenu.addItem(editMenuItem())
         mainMenu.addItem(viewMenuItem())
         mainMenu.addItem(historyMenuItem())
+        mainMenu.addItem(profilesMenuItem(delegate: profilesMenuDelegate))
         mainMenu.addItem(developMenuItem())
         mainMenu.addItem(windowMenuItem())
         NSApp.mainMenu = mainMenu
@@ -91,6 +92,13 @@ enum MainMenu {
         let home = menu.addItem(withTitle: "Home",
                                 action: #selector(BrowserWindowController.goHome(_:)), keyEquivalent: "h")
         home.keyEquivalentModifierMask = [.command, .shift]
+        return wrap(menu)
+    }
+
+    /// Filled each time it opens, by the delegate: see `ProfilesMenuFiller`.
+    private static func profilesMenuItem(delegate: NSMenuDelegate) -> NSMenuItem {
+        let menu = NSMenu(title: "Profiles")
+        menu.delegate = delegate
         return wrap(menu)
     }
 

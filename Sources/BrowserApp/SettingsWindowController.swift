@@ -12,6 +12,9 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate, N
 
     /// Supplies the frontmost page's URL for "Set to Current Page".
     var currentPageURL: (() -> URL?)?
+    /// Runs before the window shows and whenever it becomes key, so the
+    /// Passwords pane can follow the profile of the browser window in front.
+    var willShow: (() -> Void)?
 
     private let homepageField = NSTextField()
     private let resolvedLabel = NSTextField(labelWithString: "")
@@ -62,6 +65,7 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate, N
     required init?(coder: NSCoder) { fatalError("not supported") }
 
     override func showWindow(_ sender: Any?) {
+        willShow?()
         refresh()
         super.showWindow(sender)
         window?.makeKeyAndOrderFront(sender)
@@ -190,6 +194,7 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate, N
     }
 
     func windowDidBecomeKey(_ notification: Notification) {
+        willShow?()
         updateResolved()   // the frontmost page may have changed
     }
 }

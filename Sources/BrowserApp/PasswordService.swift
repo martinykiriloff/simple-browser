@@ -47,12 +47,21 @@ final class PasswordService {
     /// The real thing: an encrypted file in Application Support, its key in
     /// the login Keychain.
     static func forProfile(_ profile: Profile) -> PasswordService {
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        let file = support.appendingPathComponent("SimpleBrowser/Profiles/\(profile.id)/Passwords.sbvault")
-        return PasswordService(store: VaultCredentialStore(
-            fileURL: file,
+        PasswordService(store: VaultCredentialStore(
+            fileURL: directory(of: profile).appendingPathComponent("Passwords.sbvault"),
             keyProvider: KeychainVaultKeyProvider(account: profile.id.description)
         ))
+    }
+
+    /// For a deleted profile: the vault file and the Keychain key that opens it.
+    static func deleteVault(of profile: Profile) {
+        try? FileManager.default.removeItem(at: directory(of: profile))
+        KeychainVaultKeyProvider(account: profile.id.description).deleteKey()
+    }
+
+    private static func directory(of profile: Profile) -> URL {
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        return support.appendingPathComponent("SimpleBrowser/Profiles/\(profile.id)")
     }
 
     /// For the self-test: a vault and its key in a scratch directory, so a test

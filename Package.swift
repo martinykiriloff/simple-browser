@@ -45,6 +45,12 @@ let package = Package(
             dependencies: ["PasswordKit"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
+        // `swift run BrowserKitChecks`: the profile roster's rules, same arrangement.
+        .executableTarget(
+            name: "BrowserKitChecks",
+            dependencies: ["BrowserKit"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
         .testTarget(name: "BlockKitTests", dependencies: ["BlockKit"]),
     ]
 )

@@ -10,7 +10,18 @@ import PasswordKit
 @MainActor
 final class PasswordsSettingsPane: NSViewController, NSTableViewDataSource, NSTableViewDelegate, NSSearchFieldDelegate {
 
-    private let service: PasswordService
+    /// The vault of the profile whose window is in front. Swapped rather than
+    /// fixed: Settings is one window for the app, and showing one profile's
+    /// passwords while another's window is in front would be a leak.
+    var service: PasswordService {
+        didSet {
+            guard service !== oldValue else { return }
+            revealed = [:]
+            if isViewLoaded { reload() }
+        }
+    }
+    /// Says whose passwords these are. Empty with a single profile.
+    let profileLabel = NSTextField(labelWithString: "")
     let offerCheckbox = NSButton(checkboxWithTitle: "Offer to save passwords", target: nil, action: nil)
     let autofillCheckbox = NSButton(checkboxWithTitle: "Fill sign-in forms automatically", target: nil, action: nil)
     let searchField = NSSearchField()
@@ -110,7 +121,10 @@ final class PasswordsSettingsPane: NSViewController, NSTableViewDataSource, NSTa
         header.orientation = .horizontal
         header.spacing = 10
 
-        let stack = NSStackView(views: [offerCheckbox, autofillCheckbox, autofillHelp, header, scroll, buttons])
+        profileLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize, weight: .semibold)
+        profileLabel.textColor = .secondaryLabelColor
+
+        let stack = NSStackView(views: [profileLabel, offerCheckbox, autofillCheckbox, autofillHelp, header, scroll, buttons])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 8

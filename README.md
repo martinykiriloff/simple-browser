@@ -6,7 +6,7 @@ A native macOS browser. Swift above the engine, WebKit below it.
 
 Early. `BlockKit`, `BrowserKit` and `InspectKit` are pure-Foundation packages
 with no WebKit or AppKit dependency — they build and test anywhere a Swift
-toolchain exists. `BrowserApp` is a single-window, single-profile shell with
+toolchain exists. `BrowserApp` is a one-tab-per-window shell with profiles and
 working dev tools; tabs, hibernation, blocking and the proxy are not wired yet.
 
 The partitioning algorithm in `BlockKit` has been verified against an oracle —
@@ -42,6 +42,31 @@ It uses a scratch settings suite, so your own homepage is never touched. The
 app takes focus for about half a minute, and the screen has to be unlocked:
 macOS will not make a window key behind the lock screen, which the test
 reports as an environment problem rather than a failure.
+
+## Profiles
+
+Like Chrome's and Safari's: each profile is a separate identity with its own
+cookies, sessions, local storage, IndexedDB, cache and saved passwords. Signing
+in to a site in one profile does not sign you in, or out, in another.
+
+The **Profiles** menu (and the profile button at the right of every toolbar)
+lists them: pick one to open a new window browsing as it (⌥⇧⌘1–9). ⌘N opens a
+window in the profile of the window in front. **New Profile…**, **Rename…** and
+**Delete…** act on that profile; deleting one closes its windows and removes
+its website data, its password vault and the vault's Keychain key. The last
+profile cannot be deleted. Settings → Passwords shows the vault of the profile
+whose window is in front.
+
+A window belongs to exactly one profile, for its whole life (see
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)). The rules for names, colours and
+removal live in `BrowserKit/ProfileRoster.swift`:
+
+```sh
+swift run BrowserKitChecks
+```
+
+The profile that existed before profiles were added is carried over as
+"Default" with its data store, so nobody is signed out by the upgrade.
 
 ## Developer Tools
 

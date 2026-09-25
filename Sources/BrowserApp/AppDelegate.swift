@@ -5,26 +5,45 @@ import InspectKit
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var controllers: [BrowserWindowController] = []
-    private lazy var profile: Profile = ProfileStore.defaultProfile()
+    let profiles = ProfileStore()
+    /// The app's Profiles menu follows whichever browser window is in front.
+    private(set) lazy var profilesMenuFiller = ProfilesMenuFiller(store: profiles) { [weak self] in
+        self?.currentProfile ?? Profile(name: "Default")
+    }
     /// One recorder for the app: every window's events land on one timeline,
     /// tagged by tab, which is what makes cross-tab correlation possible later.
     private let recorder = InspectorRecorder()
     private var dumpTimer: Timer?
     private lazy var launch = LaunchOptions.parse(CommandLine.arguments)
-    /// The profile's saved passwords. A self-test run gets a scratch vault
-    /// with its own key, so it can never touch, or prompt for, the real one.
-    private(set) lazy var passwords: PasswordService = {
-        if launch.passwordsSelfTestOutput != nil {
-            let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("SimpleBrowser-passwords-selftest-\(UUID().uuidString)")
-            return PasswordService.scratch(in: scratch)
-        }
-        return PasswordService.forProfile(profile)
-    }()
+    /// Each profile's saved passwords, opened on first use. Never shared: a
+    /// profile's sign-ins are as private to it as its cookies.
+    private var passwordServices: [ProfileID: PasswordService] = [:]
+    /// A self-test run gets a scratch vault with its own key, so it can never
+    /// touch, or prompt for, the real one.
+    private lazy var scratchPasswords: PasswordService? = launch.passwordsSelfTestOutput == nil ? nil
+        : PasswordService.scratch(in: FileManager.default.temporaryDirectory
+            .appendingPathComponent("SimpleBrowser-passwords-selftest-\(UUID().uuidString)"))
+
+    func passwords(for profile: Profile) -> PasswordService {
+        if let scratchPasswords { return scratchPasswords }
+        if let service = passwordServices[profile.id] { return service }
+        let service = PasswordService.forProfile(profile)
+        passwordServices[profile.id] = service
+        return service
+    }
+
+    /// The frontmost window's profile's passwords.
+    var passwords: PasswordService { passwords(for: currentProfile) }
+
     private(set) lazy var settingsWindow: SettingsWindowController = {
         let controller = SettingsWindowController(passwords: passwords)
         controller.currentPageURL = { [weak self] in self?.frontmostBrowser?.currentURL }
+        controller.willShow = { [weak self] in self?.syncSettingsProfile() }
         return controller
     }()
+
+    /// The profile of the browser window in front, or the one used last.
+    var currentProfile: Profile { frontmostBrowser?.profile ?? profiles.lastUsed }
 
     /// The browser window the user was last in (Settings itself may be key).
     private var frontmostBrowser: BrowserWindowController? {
@@ -33,7 +52,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        MainMenu.install()
+        MainMenu.install(profilesMenuDelegate: profilesMenuFiller)
+        NotificationCenter.default.addObserver(forName: ProfileStore.didChange, object: profiles, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.profilesDidChange() }
+        }
         if let url = launch.url {
             let controller = makeWindow()
             controller.showWindow(nil)
@@ -125,7 +147,86 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func newWindow(_ sender: Any?) {
-        let controller = makeWindow()
+        openWindow(in: currentProfile)
+    }
+
+    // MARK: - Profiles
+
+    /// Profiles menu → a profile: a new window browsing as it.
+    @objc func openProfileWindow(_ sender: Any?) {
+        guard let id = (sender as? NSMenuItem)?.representedObject as? ProfileID,
+              let profile = profiles.profile(id) else { return }
+        openWindow(in: profile)
+    }
+
+    @objc func newProfile(_ sender: Any?) {
+        guard let name = askForName(title: "New Profile",
+                                    message: "A profile has its own cookies, sign-ins, storage, cache and saved passwords. Nothing is shared with your other profiles.",
+                                    initial: "", confirm: "Create") else { return }
+        openWindow(in: profiles.add(name: name))
+    }
+
+    @objc func renameProfile(_ sender: Any?) {
+        let id = (sender as? NSMenuItem)?.representedObject as? ProfileID ?? currentProfile.id
+        guard let profile = profiles.profile(id),
+              let name = askForName(title: "Rename Profile", message: "", initial: profile.name, confirm: "Rename") else { return }
+        profiles.rename(id, to: name)
+    }
+
+    @objc func deleteProfile(_ sender: Any?) {
+        let id = (sender as? NSMenuItem)?.representedObject as? ProfileID ?? currentProfile.id
+        guard profiles.profiles.count > 1, let profile = profiles.profile(id) else { return }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Delete the profile “\(profile.name)”?"
+        alert.informativeText = "Its windows close, and its cookies, website data and saved passwords are deleted from this Mac. This cannot be undone."
+        alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Cancel")
+        alert.buttons.first?.hasDestructiveAction = true
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        // WebKit will not remove a data store a web view is still using.
+        for controller in controllers where controller.profile.id == id { controller.close() }
+        passwordServices[id] = nil
+        Task { @MainActor in
+            await profiles.remove(id)
+            if controllers.isEmpty { newWindow(nil) }
+        }
+    }
+
+    private func askForName(title: String, message: String, initial: String, confirm: String) -> String? {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+        field.stringValue = initial
+        field.placeholderString = "Name (optional)"
+        alert.accessoryView = field
+        alert.addButton(withTitle: confirm)
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+        return field.stringValue
+    }
+
+    private func profilesDidChange() {
+        for controller in controllers {
+            if let updated = profiles.profile(controller.profile.id) { controller.profile = updated }
+        }
+        syncSettingsProfile()
+    }
+
+    /// Settings shows the passwords of the profile whose window is in front.
+    private func syncSettingsProfile() {
+        let profile = currentProfile
+        let pane = settingsWindow.passwordsPane
+        pane.service = passwords(for: profile)
+        pane.profileLabel.stringValue = "Passwords saved in the profile “\(profile.name)”"
+        pane.profileLabel.isHidden = profiles.profiles.count == 1
+    }
+
+    private func openWindow(in profile: Profile) {
+        let controller = makeWindow(profile: profile)
         controller.showWindowAndFocusAddress()
         // Loaded rather than sent Home: Home hands the keyboard to the page,
         // and a new window should leave it in the address bar, so typing a
@@ -134,11 +235,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @discardableResult
-    private func makeWindow() -> BrowserWindowController {
-        let controller = BrowserWindowController(profile: profile, recorder: recorder, passwords: passwords)
+    private func makeWindow(profile: Profile? = nil) -> BrowserWindowController {
+        let profile = profile ?? currentProfile
+        profiles.markUsed(profile.id)
+        let controller = BrowserWindowController(profile: profile, recorder: recorder, passwords: passwords(for: profile))
+        controller.profilesMenuFiller = ProfilesMenuFiller(store: profiles) { [weak controller] in
+            controller?.profile ?? profile
+        }
         controllers.append(controller)
         controller.onClose = { [weak self, weak controller] in
             self?.controllers.removeAll { $0 === controller }
+        }
+        controller.onBecomeKey = { [weak self, weak controller] in
+            guard let self, let controller else { return }
+            self.profiles.markUsed(controller.profile.id)
         }
         return controller
     }

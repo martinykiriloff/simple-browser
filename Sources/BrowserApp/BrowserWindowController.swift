@@ -14,8 +14,20 @@ final class BrowserWindowController: NSWindowController,
                                      WKNavigationDelegate,
                                      WKUIDelegate {
 
-    let profile: Profile
+    /// Which identity this window browses as. Fixed for the window's life:
+    /// its web view's data store was chosen from it. Replaced only by a
+    /// rename, which keeps the data store.
+    var profile: Profile {
+        didSet {
+            precondition(profile.dataStoreIdentifier == oldValue.dataStoreIdentifier, "a window cannot change profile")
+            syncProfileItem()
+        }
+    }
     var onClose: (() -> Void)?
+    var onBecomeKey: (() -> Void)?
+    /// Fills the menu under the profile button. Set by the app delegate.
+    var profilesMenuFiller: ProfilesMenuFiller?
+    private let profileButton = NSButton()
 
     private let webView: BrowserWebView
     private let addressField = NSTextField()
@@ -116,6 +128,7 @@ final class BrowserWindowController: NSWindowController,
         }
 
         configureAddressField()
+        configureProfileButton()
 
         let toolbar = NSToolbar(identifier: "BrowserToolbar")
         toolbar.delegate = self
@@ -521,7 +534,35 @@ final class BrowserWindowController: NSWindowController,
         window?.toolbar?.validateVisibleItems()
     }
 
+    // MARK: - Profile
+
+    private func configureProfileButton() {
+        profileButton.bezelStyle = .toolbar
+        profileButton.imagePosition = .imageLeading
+        profileButton.target = self
+        profileButton.action = #selector(showProfilesMenu(_:))
+        profileButton.setContentHuggingPriority(.required, for: .horizontal)
+        syncProfileItem()
+    }
+
+    private func syncProfileItem() {
+        profileButton.title = profile.name
+        profileButton.image = ProfileBadge.image(for: profile)
+        profileButton.toolTip = "Browsing as “\(profile.name)”. Click to switch profile or add one."
+        profileButton.setAccessibilityLabel("Profile: \(profile.name)")
+    }
+
+    @objc func showProfilesMenu(_ sender: Any?) {
+        let menu = NSMenu(title: "Profiles")
+        menu.delegate = profilesMenuFiller
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: profileButton.bounds.height + 4), in: profileButton)
+    }
+
     // MARK: - NSWindowDelegate
+
+    func windowDidBecomeKey(_ notification: Notification) {
+        if (notification.object as? NSWindow) === window { onBecomeKey?() }
+    }
 
     func windowWillClose(_ notification: Notification) {
         if let closing = notification.object as? NSWindow, closing === devToolsWindow {
@@ -558,7 +599,7 @@ final class BrowserWindowController: NSWindowController,
     // MARK: - NSToolbarDelegate
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.back, .forward, .reload, .home, .address, .passwords, .flexibleSpace, .devTools]
+        [.back, .forward, .reload, .home, .address, .passwords, .flexibleSpace, .devTools, .profile]
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
@@ -590,6 +631,12 @@ final class BrowserWindowController: NSWindowController,
             let item = button(identifier, symbol: "wrench.and.screwdriver", label: "Developer Tools",
                               action: #selector(toggleDevTools(_:)))
             item.toolTip = "Toggle Developer Tools (⌥⌘I)"
+            return item
+        case .profile:
+            let item = NSToolbarItem(itemIdentifier: identifier)
+            item.view = profileButton
+            item.label = "Profile"
+            item.visibilityPriority = .high
             return item
         case .address:
             let item = NSToolbarItem(itemIdentifier: identifier)
@@ -745,4 +792,5 @@ private extension NSToolbarItem.Identifier {
     static let address  = NSToolbarItem.Identifier("address")
     static let passwords = NSToolbarItem.Identifier("passwords")
     static let devTools = NSToolbarItem.Identifier("devtools")
+    static let profile  = NSToolbarItem.Identifier("profile")
 }

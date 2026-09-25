@@ -833,6 +833,10 @@ final class DevToolsController: NSObject, WKScriptMessageHandler, WKNavigationDe
     private func fetchNatively(_ url: URL, method: String? = nil) async throws -> (String?, String?, Int) {
         var request = URLRequest(url: url)
         request.httpMethod = method == "POST" ? "GET" : (method ?? "GET")
+        // Only this profile's cookies, set below. `URLSession.shared` keeps
+        // one jar for the whole app: left to handle cookies it would add
+        // another profile's and store this response's for the next one.
+        request.httpShouldHandleCookies = false
         if let ua = await userAgent() { request.setValue(ua, forHTTPHeaderField: "User-Agent") }
         if let store = try? cookieStore() {
             let cookies = await store.allCookies().filter { Self.cookie($0, applies: url) }
