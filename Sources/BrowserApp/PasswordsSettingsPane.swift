@@ -32,6 +32,7 @@ final class PasswordsSettingsPane: NSViewController, NSTableViewDataSource, NSTa
     let deleteButton = NSButton(title: "Delete", target: nil, action: nil)
     let showButton = NSButton(title: "Show", target: nil, action: nil)
     let copyButton = NSButton(title: "Copy Password", target: nil, action: nil)
+    let checkupButton = NSButton(title: "Checkup…", target: nil, action: nil)
     private let moreButton = NSPopUpButton(frame: .zero, pullsDown: true)
 
     private var all: [Credential] = []
@@ -93,18 +94,23 @@ final class PasswordsSettingsPane: NSViewController, NSTableViewDataSource, NSTa
         scroll.borderType = .bezelBorder
 
         for (button, action) in [(addButton, #selector(add(_:))), (editButton, #selector(edit(_:))), (deleteButton, #selector(delete(_:))),
-                                 (showButton, #selector(toggleShow(_:))), (copyButton, #selector(copyPassword(_:)))] {
+                                 (showButton, #selector(toggleShow(_:))), (copyButton, #selector(copyPassword(_:))),
+                                 (checkupButton, #selector(checkPasswords(_:)))] {
             button.target = self
             button.action = action
         }
         moreButton.addItem(withTitle: "")
         moreButton.item(at: 0)?.image = NSImage(systemSymbolName: "ellipsis.circle", accessibilityDescription: "More")
         for (title, action) in [("Import Passwords…", #selector(importPasswords(_:))), ("Export Passwords…", #selector(exportPasswords(_:))),
+                                ("Import from Apple Passwords…", #selector(importFromApple(_:))),
+                                ("Export to Apple Passwords…", #selector(exportToApple(_:))),
                                 ("Sites Never Saved…", #selector(showNeverSaved(_:))), ("Delete All Passwords…", #selector(deleteAll(_:)))] {
             moreButton.addItem(withTitle: title)
             moreButton.lastItem?.target = self
             moreButton.lastItem?.action = action
-            if title.hasPrefix("Sites") { moreButton.menu?.insertItem(.separator(), at: moreButton.numberOfItems - 1) }
+            if title.hasPrefix("Sites") || title.hasPrefix("Import from Apple") {
+                moreButton.menu?.insertItem(.separator(), at: moreButton.numberOfItems - 1)
+            }
         }
         (moreButton.cell as? NSPopUpButtonCell)?.arrowPosition = .arrowAtBottom
         moreButton.setAccessibilityLabel("More")
@@ -113,7 +119,12 @@ final class PasswordsSettingsPane: NSViewController, NSTableViewDataSource, NSTa
         countLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         let spacer = NSView()
         spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        let buttons = NSStackView(views: [addButton, editButton, deleteButton, spacer, showButton, copyButton, moreButton])
+        checkupButton.toolTip = "Find leaked, reused and weak passwords"
+        // The spacer gives way first; no button's title may be cut short.
+        for button in [addButton, editButton, deleteButton, checkupButton, showButton, copyButton] {
+            button.setContentCompressionResistancePriority(.required, for: .horizontal)
+        }
+        let buttons = NSStackView(views: [addButton, editButton, deleteButton, spacer, checkupButton, showButton, copyButton, moreButton])
         buttons.orientation = .horizontal
         buttons.spacing = 8
 
@@ -458,6 +469,103 @@ final class PasswordsSettingsPane: NSViewController, NSTableViewDataSource, NSTa
             Task { @MainActor in
                 do { _ = try await self.service.exportCSV(to: url) } catch { self.present(error, title: "The passwords could not be exported") }
             }
+        }
+    }
+
+    // MARK: - Checkup
+
+    private(set) var checkup: PasswordCheckupViewController?
+
+    @objc private func checkPasswords(_ sender: Any?) {
+        let sheet = PasswordCheckupViewController(service: service)
+        sheet.onShowInList = { [weak self] credential in self?.select(credential) }
+        checkup = sheet
+        presentAsSheet(sheet)
+    }
+
+    /// Clears the search so the entry is in the list, then selects it.
+    func select(_ credential: Credential) {
+        searchField.stringValue = ""
+        applyFilter()
+        guard let row = visible.firstIndex(where: { $0.id == credential.id }) else { return }
+        tableView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        tableView.scrollRowToVisible(row)
+        view.window?.makeFirstResponder(tableView)
+    }
+
+    // MARK: - Apple Passwords
+
+    // Apple gives other browsers no way to read or write iCloud Keychain, so
+    // the two meet through the CSV files the Passwords app itself imports
+    // and exports. Each step is explained where it happens, because half of
+    // it takes place in another app.
+
+    @objc private func importFromApple(_ sender: Any?) {
+        guard let window = view.window else { return }
+        let alert = NSAlert()
+        alert.messageText = "Import from Apple Passwords"
+        alert.informativeText = """
+        1. In the Passwords app, choose File → Export All Passwords to File…, and save the file.
+        2. Come back here, click Choose File…, and pick it.
+
+        The exported file is not encrypted. Delete it once the import is done.
+        """
+        alert.addButton(withTitle: "Choose File…")
+        alert.addButton(withTitle: "Open Passwords")
+        alert.addButton(withTitle: "Cancel")
+        alert.beginSheetModal(for: window) { [weak self] response in
+            switch response {
+            case .alertFirstButtonReturn: self?.importPasswords(sender)
+            case .alertSecondButtonReturn: Self.openApplePasswords()
+            default: break
+            }
+        }
+    }
+
+    @objc private func exportToApple(_ sender: Any?) {
+        guard let window = view.window else { return }
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.commaSeparatedText]
+        panel.nameFieldStringValue = "SimpleBrowser Passwords for Apple.csv"
+        panel.message = "Written in the format the Passwords app imports. The file is not encrypted: delete it after importing."
+        panel.beginSheetModal(for: window) { [weak self] response in
+            guard response == .OK, let url = panel.url, let self else { return }
+            Task { @MainActor in await self.exportForApple(to: url) }
+        }
+    }
+
+    func exportForApple(to url: URL) async {
+        do {
+            guard let count = try await service.exportCSV(to: url, format: .apple), let window = view.window else { return }
+            let alert = NSAlert()
+            alert.messageText = count == 1 ? "1 password exported" : "\(count) passwords exported"
+            alert.informativeText = """
+            In the Passwords app, choose File → Import Passwords from File…, and pick “\(url.lastPathComponent)”.
+
+            Then delete the file: it holds every password in the clear.
+            """
+            alert.addButton(withTitle: "Open Passwords")
+            alert.addButton(withTitle: "Show File")
+            alert.addButton(withTitle: "Done")
+            alert.beginSheetModal(for: window) { response in
+                switch response {
+                case .alertFirstButtonReturn: Self.openApplePasswords()
+                case .alertSecondButtonReturn: NSWorkspace.shared.activateFileViewerSelecting([url])
+                default: break
+                }
+            }
+        } catch {
+            present(error, title: "The passwords could not be exported")
+        }
+    }
+
+    /// The Passwords app on macOS 15, or the Passwords pane of System
+    /// Settings where the app does not exist.
+    static func openApplePasswords() {
+        if let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Passwords") {
+            NSWorkspace.shared.openApplication(at: app, configuration: .init())
+        } else if let settings = URL(string: "x-apple.systempreferences:com.apple.Passwords-Settings.extension") {
+            NSWorkspace.shared.open(settings)
         }
     }
 

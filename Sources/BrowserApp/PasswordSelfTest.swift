@@ -295,6 +295,32 @@ enum PasswordSelfTest {
                 check("9. the site received the very password that was saved", server?["grace@example.com"] as? String == offered, server)
             }
 
+            // MARK: 9b. A sign-up that only says so in its button, with the site's rules
+
+            try? await store.deleteAll()
+            await open("/register")
+            await type("#email", "linus@example.com")
+            if await focusField("#password", step: "9b. strong password on a plain sign-up") {
+                check("9b. a lone password field under “Create account” is offered a strong password",
+                      await waitFor { coordinator.suggestions.titles.first == "Use Strong Password" }, coordinator.suggestions.titles)
+                let offered = coordinator.suggestions.rows.first?.item.subtitle ?? ""
+                check("9b. it fits the field's maxlength instead of being cut short", offered.count == 16, offered)
+                check("9b. it has what the site's passwordrules require",
+                      offered.contains(where: \.isUppercase) && offered.contains(where: \.isNumber) && offered.contains { "!#".contains($0) }, offered)
+                coordinator.suggestions.rows.first?.choose()
+                check("9b. the field holds exactly the password offered", await waitFor { await value("#password") == offered }, await value("#password"))
+                check("9b. and that is what is saved", await waitFor { await saved() == ["\(site) linus@example.com": offered] }, await saved())
+                await click("#submit")
+                _ = await waitFor { await path() == "/welcome" }
+                let server = await js("return await (await fetch('/state')).json()") as? [String: Any]
+                check("9b. the site received it whole", server?["linus@example.com"] as? String == offered, server)
+            }
+            await open("/login")
+            if await focusField("#password", step: "9b. a sign-in is still a sign-in") {
+                await pause(0.6)
+                check("9b. a sign-in form is not offered a new password", coordinator.suggestions.titles.first != "Use Strong Password", coordinator.suggestions.titles)
+            }
+
             // MARK: 10. A React-style controlled form
 
             try? await store.deleteAll()
@@ -466,6 +492,89 @@ enum PasswordSelfTest {
                 let inVault = await saved()
                 check("16. the export reads back as exactly what is saved", roundTrip == inVault, roundTrip.keys.sorted())
             } else { check("16. the export parses", false) }
+
+            // MARK: 18. Password Checkup
+
+            // Never the real service: a stub that says one password leaked.
+            final class Requests: @unchecked Sendable { var prefixes: [String] = [] }
+            let requests = Requests()
+            let leaked = "example-secret"
+            app.passwords.breachChecker = PwnedPasswords { request in
+                requests.prefixes.append(request.url!.lastPathComponent)
+                let hash = PwnedPasswords.sha1Hex(leaked)
+                let body = request.url!.lastPathComponent == String(hash.prefix(5)) ? "\(hash.dropFirst(5)):31337\r\n" : "0000000000000000000000000000000000A:0\r\n"
+                return (Data(body.utf8), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            }
+            try? await store.deleteAll()
+            _ = try? await store.save(origin: "https://example.com", username: "ada@example.com", password: leaked)
+            _ = try? await store.save(origin: "https://shop.example", username: "ada", password: "Shared-Pass-2024")
+            _ = try? await store.save(origin: "https://news.example", username: "ada", password: "Shared-Pass-2024")
+            _ = try? await store.save(origin: "https://old.example", username: "ada", password: "qwerty")
+            _ = try? await store.save(origin: "https://fine.example", username: "ada", password: "kpmwTx-r7hqzn-4bVcye")
+            app.passwords.changed()
+            _ = await pane.reload().value
+
+            authenticator.answer = false
+            authenticator.asked = []
+            pane.checkupButton.performClick(nil)
+            check("18. Checkup… opens the checkup", await waitFor { pane.checkup?.isViewLoaded == true })
+            if let checkup = pane.checkup {
+                check("18. it asks who is asking before reading passwords", await waitFor { authenticator.asked == ["check your saved passwords"] }, authenticator.asked)
+                check("18. refused: no report, and nothing sent", await waitFor { checkup.recheckButton.isEnabled } && checkup.report == nil && requests.prefixes.isEmpty)
+                authenticator.answer = true
+                await checkup.run().value
+                let report = checkup.report
+                check("18. confirmed: every password checked", report?.checked == 5, report?.checked as Any)
+                check("18. the leaked one is first", report?.issues.first?.credential.site == "example.com" && report?.compromised == 1,
+                      report?.issues.map { "\($0.credential.site) \($0.kinds)" } as Any)
+                check("18. both sites sharing a password are reused", report?.reused == 2)
+                check("18. qwerty is weak", report?.issues.contains { $0.credential.site == "old.example" && $0.kinds.contains { if case .weak = $0 { return true } else { return false } } } == true)
+                check("18. a generated password has nothing wrong with it", report?.issues.contains { $0.credential.site == "fine.example" } == false)
+                check("18. only 5-character prefixes were sent", !requests.prefixes.isEmpty && requests.prefixes.allSatisfy { $0.count == 5 }, requests.prefixes)
+                check("18. the table lists the four with problems", checkup.tableView.numberOfRows == 4)
+                check("18. the summary counts them", checkup.summaryLabel.stringValue.hasPrefix("Checked 5 passwords: 1 leaked, 2 reused, 2 weak."), checkup.summaryLabel.stringValue)
+                snapshot(checkup.view.window, "18-checkup")
+
+                requests.prefixes = []
+                checkup.leakCheckbox.performClick(nil)
+                check("18. the leak check can be switched off", !BrowserSettings.checkLeakedPasswords)
+                await checkup.run().value
+                check("18. switched off, nothing is sent", requests.prefixes.isEmpty)
+                check("18. …and the report says leaks were not checked", checkup.summaryLabel.stringValue.contains("Leaks were not checked"), checkup.summaryLabel.stringValue)
+                checkup.leakCheckbox.performClick(nil)
+
+                app.passwords.breachChecker = PwnedPasswords { request in
+                    (Data(), HTTPURLResponse(url: request.url!, statusCode: 503, httpVersion: nil, headerFields: nil)!)
+                }
+                await checkup.run().value
+                check("18. offline, the rest of the checkup still reports", checkup.report?.reused == 2)
+                check("18. …and it does not claim nothing leaked", checkup.report?.breachCheckError != nil && checkup.summaryLabel.stringValue.contains("Leaks were not checked"), checkup.summaryLabel.stringValue)
+
+                checkup.tableView.selectRowIndexes([0], byExtendingSelection: false)
+                let first = checkup.report?.issues.first?.credential
+                checkup.showButton.performClick(nil)
+                check("18. Show in List selects that entry in the list", await waitFor {
+                    pane.visible.indices.contains(pane.tableView.selectedRow) && pane.visible[pane.tableView.selectedRow].id == first?.id
+                })
+            }
+            if let sheet = app.settingsWindow.window?.attachedSheet { app.settingsWindow.window?.endSheet(sheet) }
+
+            // MARK: 19. Apple Passwords
+
+            let appleCSV = scratch.appendingPathComponent("for Apple.csv")
+            await pane.exportForApple(to: appleCSV)
+            let appleText = (try? String(contentsOf: appleCSV, encoding: .utf8)) ?? ""
+            check("19. the export uses the Passwords app's columns", appleText.hasPrefix("Title,URL,Username,Password,Notes,OTPAuth\r\n"), appleText.prefix(60))
+            check("19. …one row per sign-in", appleText.split(separator: "\r\n").count == 6)
+            if let sheet = app.settingsWindow.window?.attachedSheet { app.settingsWindow.window?.endSheet(sheet) }
+
+            // What Passwords.app writes: Title,URL,Username,Password,Notes,OTPAuth.
+            try? await store.deleteAll()
+            let fromApple = scratch.appendingPathComponent("Passwords.csv")
+            try? Data("Title,URL,Username,Password,Notes,OTPAuth\r\nexample.com (ada),https://example.com/,ada,from-apple-1,a note,\r\nbank,https://bank.example/login,ada,from-apple-2,,otpauth://totp/x?secret=ABC\r\n".utf8).write(to: fromApple)
+            await pane.importCSV(from: fromApple)
+            check("19. an export from the Passwords app imports", await saved() == ["https://example.com ada": "from-apple-1", "https://bank.example ada": "from-apple-2"], await saved())
+            if let sheet = app.settingsWindow.window?.attachedSheet { app.settingsWindow.window?.endSheet(sheet) }
 
             // MARK: 17. What is on disk
 

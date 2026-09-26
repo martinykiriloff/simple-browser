@@ -73,6 +73,8 @@ final class PasswordCoordinator: NSObject, WKScriptMessageHandler, NSPopoverDele
     private var mainFrame: WKFrameInfo?
     private var mainFrameHasLogin = false
     private var focus: (frame: WKFrameInfo, origin: String, role: String, rect: NSRect?)?
+    /// What the focused new-password field accepts, from its attributes.
+    private var focusRules = PasswordRules()
     private var focusGeneration = 0
     private var usernameHint: (origin: String, username: String, at: Date)?
     private var generated: [String: (password: String, id: UUID)] = [:]
@@ -296,6 +298,11 @@ final class PasswordCoordinator: NSObject, WKScriptMessageHandler, NSPopoverDele
             rect = NSRect(x: x, y: y, width: width, height: height)
         }
         focus = (frame, origin, role, rect)
+        focusRules = role == "new-password"
+            ? PasswordRules.parse(body["rules"] as? String ?? "",
+                                  minLength: (body["minLength"] as? NSNumber)?.intValue,
+                                  maxLength: (body["maxLength"] as? NSNumber)?.intValue)
+            : PasswordRules()
         focusGeneration += 1
         note("focus \(role)")
         showSuggestions(filter: "", fieldIsEmpty: body["empty"] as? Bool ?? true)
@@ -319,7 +326,7 @@ final class PasswordCoordinator: NSObject, WKScriptMessageHandler, NSPopoverDele
             var items: [CredentialSuggestionPanel.Item] = []
             if focus.role == "new-password" {
                 guard fieldIsEmpty else { suggestions.hide(); return }
-                let password = PasswordGenerator.generate()
+                let password = PasswordGenerator.generate(rules: focusRules)
                 items.append(.init(title: "Use Strong Password", subtitle: password, symbol: "key.fill") { [weak self] in
                     self?.useGeneratedPassword(password, frame: focus.frame, origin: focus.origin)
                 })

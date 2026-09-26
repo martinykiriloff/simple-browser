@@ -38,6 +38,8 @@ final class PasswordService {
 
     let store: any CredentialStore
     var authenticator: any PasswordAuthenticator
+    /// Replaced by the self-test, so it never calls the real service.
+    var breachChecker = PwnedPasswords()
 
     init(store: any CredentialStore, authenticator: any PasswordAuthenticator = DeviceOwnerAuthenticator()) {
         self.store = store
@@ -93,6 +95,28 @@ final class PasswordService {
         changed()
     }
 
+    // MARK: - Checkup
+
+    /// Weak, reused and, if `checkLeaks`, leaked passwords. Reads every
+    /// password, so it asks first; nil when the person says no.
+    ///
+    /// A failed leak check still returns the rest, marked as unchecked for
+    /// leaks, rather than failing the whole checkup or claiming none leaked.
+    func checkup(checkLeaks: Bool) async throws -> PasswordAuditReport? {
+        guard await authenticator.authenticate(reason: "check your saved passwords") else { return nil }
+        var entries: [(credential: Credential, password: String)] = []
+        for credential in try await store.all() {
+            entries.append((credential, try await store.password(for: credential.id)))
+        }
+        guard checkLeaks, !entries.isEmpty else { return PasswordAudit.run(entries) }
+        do {
+            let breaches = try await breachChecker.counts(for: entries.map(\.password))
+            return PasswordAudit.run(entries, breaches: breaches)
+        } catch {
+            return PasswordAudit.run(entries, breachCheckError: "The leak check could not reach Have I Been Pwned (\(error.localizedDescription)).")
+        }
+    }
+
     // MARK: - Import and export
 
     struct ImportSummary: Equatable {
@@ -120,14 +144,14 @@ final class PasswordService {
 
     /// Writes every password in the clear, so it asks first. The file is
     /// created readable by the owner only; it is still the user's to delete.
-    func exportCSV(to url: URL) async throws -> Int? {
+    func exportCSV(to url: URL, format: PasswordCSV.Format = .chrome) async throws -> Int? {
         guard await authenticator.authenticate(reason: "export your saved passwords") else { return nil }
         var rows: [PasswordCSV.Row] = []
         for credential in try await store.all().sorted(by: { ($0.site, $0.username) < ($1.site, $1.username) }) {
             rows.append(PasswordCSV.Row(origin: credential.origin, username: credential.username,
                                         password: try await store.password(for: credential.id)))
         }
-        let data = Data(PasswordCSV.export(rows).utf8)
+        let data = Data(PasswordCSV.export(rows, format: format).utf8)
         try? FileManager.default.removeItem(at: url)
         guard FileManager.default.createFile(atPath: url.path, contents: data, attributes: [.posixPermissions: 0o600]) else {
             throw CredentialStoreError.io("could not write \(url.path)")

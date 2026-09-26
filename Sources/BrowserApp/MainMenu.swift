@@ -23,6 +23,7 @@ enum MainMenu {
         menu.addItem(withTitle: "About SimpleBrowser",
                      action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
                      keyEquivalent: "")
+        menu.addItem(withTitle: "Check for Updates…", action: #selector(AppDelegate.checkForUpdates(_:)), keyEquivalent: "")
         menu.addItem(.separator())
         menu.addItem(withTitle: "Settings…", action: #selector(AppDelegate.showSettings(_:)), keyEquivalent: ",")
         menu.addItem(withTitle: "Passwords…", action: #selector(AppDelegate.showPasswords(_:)), keyEquivalent: "")
@@ -76,6 +77,12 @@ enum MainMenu {
         hardReload.keyEquivalentModifierMask = [.command, .option]
         menu.addItem(withTitle: "Stop",
                      action: #selector(BrowserWindowController.stopLoading(_:)), keyEquivalent: ".")
+        menu.addItem(.separator())
+        let translate = menu.addItem(withTitle: "Translate Page",
+                                     action: #selector(BrowserWindowController.translatePageTo(_:)), keyEquivalent: "t")
+        translate.keyEquivalentModifierMask = [.command, .option]
+        menu.addItem(withTitle: "Show Original",
+                     action: #selector(BrowserWindowController.showOriginalPage(_:)), keyEquivalent: "")
         menu.addItem(.separator())
         let fullScreen = menu.addItem(withTitle: "Enter Full Screen",
                                       action: #selector(NSWindow.toggleFullScreen(_:)), keyEquivalent: "f")

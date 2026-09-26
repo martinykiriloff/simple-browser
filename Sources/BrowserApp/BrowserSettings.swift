@@ -57,6 +57,15 @@ enum BrowserSettings {
         set { store.set(newValue, forKey: autofillKey) }
     }
 
+    private static let checkLeaksKey = "settings.passwords.checkLeaks"
+
+    /// Password Checkup also asks Have I Been Pwned about leaks. On unless
+    /// switched off; only a 5-character hash prefix is ever sent.
+    static var checkLeakedPasswords: Bool {
+        get { store.object(forKey: checkLeaksKey) as? Bool ?? true }
+        set { store.set(newValue, forKey: checkLeaksKey) }
+    }
+
     /// Origins the user answered "Never" for. Not secret, so not in the vault.
     static var neverSavePasswordOrigins: [String] {
         get { store.stringArray(forKey: neverSaveKey) ?? [] }
@@ -64,6 +73,34 @@ enum BrowserSettings {
             if newValue.isEmpty { store.removeObject(forKey: neverSaveKey) }
             else { store.set(Array(Set(newValue)).sorted(), forKey: neverSaveKey) }
         }
+    }
+
+    // MARK: Translation
+
+    private static let translateTargetKey = "settings.translate.target"
+    private static let alwaysTranslateKey = "settings.translate.always"
+    private static let recentTargetsKey = "settings.translate.recent"
+
+    /// The language pages are translated into, as a Google code. Nil until
+    /// one is chosen: the person's preferred language is used meanwhile.
+    static var translateTarget: String? {
+        get { store.string(forKey: translateTargetKey) }
+        set { store.set(newValue, forKey: translateTargetKey) }
+    }
+
+    /// Source languages translated as soon as a page in them loads.
+    static var alwaysTranslateLanguages: [String] {
+        get { store.stringArray(forKey: alwaysTranslateKey) ?? [] }
+        set {
+            if newValue.isEmpty { store.removeObject(forKey: alwaysTranslateKey) }
+            else { store.set(Array(Set(newValue)).sorted(), forKey: alwaysTranslateKey) }
+        }
+    }
+
+    /// Targets chosen lately, most recent first, for the top of the list.
+    static var recentTranslateTargets: [String] {
+        get { store.stringArray(forKey: recentTargetsKey) ?? [] }
+        set { store.set(newValue, forKey: recentTargetsKey) }
     }
 
     static var newWindowContent: NewWindowContent {

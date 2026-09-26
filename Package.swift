@@ -16,8 +16,8 @@ let package = Package(
         // needs from the model layer comes through BrowserKit and InspectKit.
         .executableTarget(
             name: "BrowserApp",
-            dependencies: ["BrowserKit", "InspectKit", "PasswordKit"],
-            resources: [.copy("DevToolsUI"), .copy("PasswordAgent")],
+            dependencies: ["BrowserKit", "InspectKit", "PasswordKit", "TranslateKit", "UpdateKit"],
+            resources: [.copy("DevToolsUI"), .copy("PasswordAgent"), .copy("TranslateAgent"), .copy("PageMenuAgent"), .copy("AppIcon")],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         // Pure Foundation. No WebKit, no AppKit. Buildable and testable on any
@@ -43,6 +43,27 @@ let package = Package(
         .executableTarget(
             name: "PasswordKitChecks",
             dependencies: ["PasswordKit"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        // Page translation through Google Translate: languages, batching,
+        // the request and its response. Foundation only.
+        .target(name: "TranslateKit", swiftSettings: [.swiftLanguageMode(.v6)]),
+        .executableTarget(
+            name: "TranslateKitChecks",
+            dependencies: ["TranslateKit"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        // Self-update: versions, GitHub's release answer, Ed25519 signatures.
+        .target(name: "UpdateKit", swiftSettings: [.swiftLanguageMode(.v6)]),
+        .executableTarget(
+            name: "UpdateKitChecks",
+            dependencies: ["UpdateKit"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        // Signs a release DMG in CI: `swift run SignUpdate <file>` with the key in UPDATE_SIGNING_KEY.
+        .executableTarget(
+            name: "SignUpdate",
+            dependencies: ["UpdateKit"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         // `swift run BrowserKitChecks`: the profile roster's rules, same arrangement.

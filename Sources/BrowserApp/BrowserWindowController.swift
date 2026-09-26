@@ -1,6 +1,7 @@
 import AppKit
 import WebKit
 import BrowserKit
+import TranslateKit
 import InspectKit
 
 /// One window, one profile, one live web view. Tabs, groups and hibernation
@@ -53,12 +54,21 @@ final class BrowserWindowController: NSWindowController,
     /// the "Save password?" question.
     let passwordCoordinator: PasswordCoordinator
     private weak var passwordsItem: NSToolbarItem?
+    /// Google Translate for this page, and the toolbar button that offers it.
+    let translator = PageTranslator()
+    private let translateButton = NSButton()
+    let downloads = DownloadController()
+    /// The right-click menu. Set by the app delegate's `openInNewWindow`.
+    let contextMenu: PageContextMenu
+    /// Opens a URL in a new window of this window's profile. Set by the app delegate.
+    var openInNewWindow: ((URL) -> Void)?
 
     init(profile: Profile, recorder: InspectorRecorder, passwords: PasswordService) {
         self.profile = profile
         self.recorder = recorder
         self.bridge = InspectorBridge(recorder: recorder, tab: tab)
         self.passwordCoordinator = PasswordCoordinator(service: passwords)
+        self.contextMenu = PageContextMenu(translator: translator, downloads: downloads)
 
         let configuration = WKWebViewConfiguration()
         // Per-profile isolation at the WebKit level. Never `.default()`.
@@ -69,6 +79,8 @@ final class BrowserWindowController: NSWindowController,
         // Agent scripts and message handlers must exist before the first document.
         bridge.install(into: configuration)
         passwordCoordinator.install(into: configuration)
+        translator.install(into: configuration)
+        contextMenu.install(into: configuration)
         webView = BrowserWebView(frame: .zero, configuration: configuration)
 
         let window = NSWindow(
@@ -111,11 +123,18 @@ final class BrowserWindowController: NSWindowController,
         webView.allowsBackForwardNavigationGestures = true
         // Always shippable per ARCHITECTURE.md: "Debug in Safari" is the escape hatch.
         webView.isInspectable = true
-        webView.onInspectElement = { [weak self] point in
+        webView.contextMenu = contextMenu
+        contextMenu.webView = webView
+        contextMenu.inspect = { [weak self] point in
             guard let self else { return }
             self.showDevTools(panel: "elements")
             self.devTools?.inspectElement(atPagePoint: point)
         }
+        contextMenu.viewSource = { [weak self] in self?.showDevTools(panel: "sources") }
+        contextMenu.openInNewWindow = { [weak self] url in self?.openInNewWindow?(url) }
+        translator.webView = webView
+        translator.onStateChange = { [weak self] in self?.syncTranslateItem() }
+        downloads.webView = webView
         bridge.onAuxiliaryMessage = { [weak self] kind, body, _ in
             self?.devTools?.handleAuxiliary(kind: kind, body: body)
         }
@@ -129,6 +148,7 @@ final class BrowserWindowController: NSWindowController,
 
         configureAddressField()
         configureProfileButton()
+        configureTranslateButton()
 
         let toolbar = NSToolbar(identifier: "BrowserToolbar")
         toolbar.delegate = self
@@ -534,6 +554,65 @@ final class BrowserWindowController: NSWindowController,
         window?.toolbar?.validateVisibleItems()
     }
 
+    // MARK: - Translate
+
+    private func configureTranslateButton() {
+        translateButton.bezelStyle = .toolbar
+        translateButton.image = NSImage(systemSymbolName: "translate", accessibilityDescription: "Translate")
+        translateButton.target = self
+        translateButton.action = #selector(showTranslateMenu(_:))
+        translateButton.setAccessibilityLabel("Translate")
+        syncTranslateItem()
+    }
+
+    /// Tinted when there is something to do: the page is in another
+    /// language, or it is showing a translation.
+    private func syncTranslateItem() {
+        let active = translator.isTranslated || translator.suggestsTranslation
+        var color: NSColor? = active ? .controlAccentColor : nil
+        if case .failed = translator.state { color = .systemOrange }
+        // Coloured through the symbol: a toolbar button's tint does not
+        // reliably reach a template image.
+        let symbol = NSImage(systemSymbolName: "translate", accessibilityDescription: "Translate")
+        translateButton.image = color.map { symbol?.withSymbolConfiguration(.init(paletteColors: [$0])) } ?? symbol
+        translateButton.toolTip = TranslateMenu.statusLine(for: translator) ?? "Translate this page with Google Translate"
+    }
+
+    @objc func showTranslateMenu(_ sender: Any?) {
+        let menu = buildTranslateMenu()
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: translateButton.bounds.height + 4), in: translateButton)
+    }
+
+    private func buildTranslateMenu() -> NSMenu {
+        let menu = NSMenu(title: "Translate")
+        for item in TranslateMenu.items(for: translator, target: self) { menu.addItem(item) }
+        lastTranslateMenuTitles = menu.items.map { $0.isSeparatorItem ? "—" : $0.title }
+        return menu
+    }
+
+    /// Developer aid: builds the menu the button shows, without the modal pop-up.
+    func showTranslateMenuForTest() { _ = buildTranslateMenu() }
+
+    /// Developer aid, for the self-tests.
+    var pageView: BrowserWebView? { webView }
+    /// For the self-test.
+    private(set) var lastTranslateMenuTitles: [String] = []
+
+    /// View → Translate to …, and the Translate menus' language items.
+    @objc func translatePageTo(_ sender: Any?) {
+        let code = (sender as? NSMenuItem)?.representedObject as? String
+        let language = code.flatMap(TranslationLanguage.matching) ?? PageTranslator.target
+        TranslateMenu.noteUsed(language)
+        translator.translate(to: language)
+    }
+
+    @objc func showOriginalPage(_ sender: Any?) { translator.showOriginal() }
+
+    @objc func toggleAlwaysTranslate(_ sender: Any?) {
+        guard let code = (sender as? NSMenuItem)?.representedObject as? String else { return }
+        TranslateActions.toggleAlwaysTranslate(code, translator: translator)
+    }
+
     // MARK: - Profile
 
     private func configureProfileButton() {
@@ -575,6 +654,8 @@ final class BrowserWindowController: NSWindowController,
         devToolsWindow?.close()
         devTools?.tearDown()
         passwordCoordinator.uninstall()
+        translator.uninstall()
+        contextMenu.uninstall()
         bridge.uninstall()
         onClose?()
     }
@@ -590,6 +671,12 @@ final class BrowserWindowController: NSWindowController,
         case #selector(dockDevTools(_:)):
             let current = devTools?.dockSide ?? UserDefaults.standard.string(forKey: "devtools.dockSide") ?? "bottom"
             menuItem.state = (menuItem.representedObject as? String) == current ? .on : .off
+        case #selector(translatePageTo(_:)) where menuItem.representedObject == nil:
+            // View → Translate Page: names the language it will use.
+            menuItem.title = "Translate to \(PageTranslator.target.name)"
+            return !translator.optedOut && webView.url != nil
+        case #selector(showOriginalPage(_:)):
+            return translator.isTranslated
         default:
             break
         }
@@ -599,7 +686,7 @@ final class BrowserWindowController: NSWindowController,
     // MARK: - NSToolbarDelegate
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.back, .forward, .reload, .home, .address, .passwords, .flexibleSpace, .devTools, .profile]
+        [.back, .forward, .reload, .home, .address, .translate, .passwords, .flexibleSpace, .devTools, .profile]
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
@@ -637,6 +724,11 @@ final class BrowserWindowController: NSWindowController,
             item.view = profileButton
             item.label = "Profile"
             item.visibilityPriority = .high
+            return item
+        case .translate:
+            let item = NSToolbarItem(itemIdentifier: identifier)
+            item.view = translateButton
+            item.label = "Translate"
             return item
         case .address:
             let item = NSToolbarItem(itemIdentifier: identifier)
@@ -689,6 +781,7 @@ final class BrowserWindowController: NSWindowController,
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         recordNavigation(.committed)
         passwordCoordinator.didCommitNavigation()
+        translator.didCommitNavigation()
         syncChrome()
     }
 
@@ -724,7 +817,26 @@ final class BrowserWindowController: NSWindowController,
                 bodyUnavailable: true
             )), tab: tab)
         }
+        // A file the page hands over rather than shows goes to Downloads.
+        if navigationResponse.isForMainFrame && !navigationResponse.canShowMIMEType { return .download }
+        if let http = navigationResponse.response as? HTTPURLResponse,
+           (http.value(forHTTPHeaderField: "Content-Disposition") ?? "").lowercased().hasPrefix("attachment") {
+            return .download
+        }
         return .allow
+    }
+
+    func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
+        // `<a download>`.
+        navigationAction.shouldPerformDownload ? .download : .allow
+    }
+
+    func webView(_ webView: WKWebView, navigationResponse: WKNavigationResponse, didBecome download: WKDownload) {
+        downloads.adopt(download)
+    }
+
+    func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {
+        downloads.adopt(download)
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
@@ -793,4 +905,5 @@ private extension NSToolbarItem.Identifier {
     static let passwords = NSToolbarItem.Identifier("passwords")
     static let devTools = NSToolbarItem.Identifier("devtools")
     static let profile  = NSToolbarItem.Identifier("profile")
+    static let translate = NSToolbarItem.Identifier("translate")
 }

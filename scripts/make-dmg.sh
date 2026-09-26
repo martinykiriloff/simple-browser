@@ -104,6 +104,20 @@ if [ "$CODESIGN_IDENTITY" != "-" ]; then
   codesign --sign "$CODESIGN_IDENTITY" --timestamp "$DMG"
 fi
 
+# The in-app updater installs a DMG only if this signature verifies against
+# the public key compiled into the app (Sources/BrowserApp/Updater.swift).
+# The key is the repository secret UPDATE_SIGNING_KEY in CI, or
+# ~/.simplebrowser-update-signing-key for a release made by hand.
+if [ -z "${UPDATE_SIGNING_KEY:-}" ] && [ -f "$HOME/.simplebrowser-update-signing-key" ]; then
+  UPDATE_SIGNING_KEY="$(cat "$HOME/.simplebrowser-update-signing-key")"
+fi
+if [ -n "${UPDATE_SIGNING_KEY:-}" ]; then
+  echo "▸ Signing the update"
+  UPDATE_SIGNING_KEY="$UPDATE_SIGNING_KEY" swift run -c release SignUpdate "$DMG"
+else
+  echo "⚠ UPDATE_SIGNING_KEY not set: this DMG cannot be offered as an in-app update"
+fi
+
 echo
 echo "✔ $DMG"
 du -h "$DMG" | cut -f1

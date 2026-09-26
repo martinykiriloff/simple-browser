@@ -43,6 +43,61 @@ app takes focus for about half a minute, and the screen has to be unlocked:
 macOS will not make a window key behind the lock screen, which the test
 reports as an environment problem rather than a failure.
 
+## The right-click menu
+
+What Safari and Chrome show, for whatever is under the pointer. On a link:
+Open Link, Open Link in New Window, Save Link As…, Copy Link. On an image:
+Open Image in New Window, Save Image As…, Copy Image, Copy Image Address. On
+selected text: Copy, Look Up, Search DuckDuckGo for “…”, Translate “…”,
+Share, Speech. On the page: Back, Forward, Reload, Save Page As…
+(`.webarchive`), Print…, Translate to …, View Page Source (DevTools →
+Sources). Inspect Element is always last and opens our DevTools.
+
+WebKit builds the menu; `PageContextMenu` keeps the items that work as they
+are and replaces the ones that expect a browser around the web view. New
+windows open in the same profile. A page agent in an isolated world reports
+the link, image and selection from the DOM `contextmenu` event, which fires
+before the menu opens. Files a page hands over instead of showing
+(`Content-Disposition: attachment`, `<a download>`, a zip) download to
+~/Downloads under their own name, with the profile's cookies.
+
+## Translation
+
+Google Translate, built in, the way Chrome has it; there is no extension to
+install. The Translate button in the toolbar turns blue when a page is in
+another language than yours, and offers:
+
+- **Translate to** your language (the first of your macOS preferred languages
+  Google supports, or the last one you chose), or any of Google's 130+
+  languages under **Translate To**.
+- **Show Original**, which puts back exactly what was there.
+- **Always Translate *language***, which translates pages in that language as
+  they load.
+
+The same items are in the page's right-click menu, View → Translate Page
+(⌥⌘T) and View → Show Original. Selected text can be translated on its own,
+in a popover, from the right-click menu.
+
+Nothing is sent to Google until you ask for a translation. The page's
+language is found on the Mac, by NaturalLanguage, from its declared `lang`
+and a sample of its text. Requests carry no cookies, so they are not tied to
+your Google account. Pages that say `translate="no"`, `class="notranslate"` or
+`<meta name="google" content="notranslate">` are respected, as are code and
+preformatted text. Content the page adds after translating (infinite
+scrolling, "load more") is translated as it arrives.
+
+Links, buttons and their handlers keep working in a translated page: the
+translation is put back into the page's own elements, not copies of them.
+The service is the one Google's own translate widget uses (no API key); it
+limits heavy use, and when it does the Translate button turns orange and
+says so.
+
+```sh
+swift run TranslateKitChecks          # languages, batching, requests, responses
+swift run TranslateKitChecks --live   # also asks the real Google Translate
+scripts/test-page.sh                  # translation, the right-click menu, downloads (takes focus)
+```
+
 ## Profiles
 
 Like Chrome's and Safari's: each profile is a separate identity with its own
@@ -67,6 +122,50 @@ swift run BrowserKitChecks
 
 The profile that existed before profiles were added is carried over as
 "Default" with its data store, so nobody is signed out by the upgrade.
+
+## Passwords
+
+A built-in password manager, one encrypted vault per profile with its key in
+the login Keychain. It offers to save a sign-in once it has worked, offers to
+update a changed password, fills saved sign-ins, and lists a site's accounts
+under the field. Settings → Passwords (also App menu → Passwords…) searches,
+adds, edits and deletes them. Showing, copying, editing or exporting a
+password asks for Touch ID or the Mac's password first.
+
+**Strong passwords.** A new-password field is offered **Use Strong
+Password**, and the password is saved the moment it is filled. Sign-up forms
+are recognised by `autocomplete=new-password`, a password-and-confirm pair,
+or, for the many that say neither, the field's name or the form's
+"Create account" / "Sign up" / "Register" button. Any sign of a sign-in wins,
+so a sign-in form never loses its autofill. The password follows the site's
+rules: the field's `maxlength` and `minlength`, and the
+[`passwordrules`](https://developer.apple.com/password-rules/) attribute
+(required and allowed characters, max-consecutive). A 16-character limit gets
+16 characters, not a 20-character password the page quietly truncates.
+
+**Checkup.** Settings → Passwords → **Checkup…** lists leaked, reused and weak
+passwords, worst first, with **Change on Site** to go and fix each one. Weak
+means something a person can act on: too short, a common password, one kind
+of character, a keyboard or repeated pattern, or containing the username or
+the site's name. The leak check uses Have I Been Pwned's range API the
+k-anonymous way: only the first 5 hex characters of each password's SHA-1 are
+sent, with padding requested, and matching happens on the Mac. It can be
+switched off in the sheet. If it cannot reach the service, the rest of the
+checkup still reports and says leaks were not checked, never "none leaked".
+
+**Apple Passwords.** Apple gives other browsers no access to iCloud Keychain,
+so the two meet through the CSV files the Passwords app itself reads and
+writes. The ⋯ menu has **Import from Apple Passwords…** (it explains File →
+Export All Passwords to File… in the Passwords app, then imports that file)
+and **Export to Apple Passwords…** (it writes Apple's
+`Title,URL,Username,Password,Notes,OTPAuth` format and opens the Passwords
+app for File → Import Passwords from File…). Import and export also speak
+Chrome's CSV, which Chrome, Edge, Brave and Firefox use.
+
+```sh
+swift run PasswordKitChecks   # vault, origins, rules, generator, checkup, leak check
+scripts/test-passwords.sh     # signs in to a fixture site as a person would (takes focus)
+```
 
 ## Developer Tools
 
@@ -209,6 +308,45 @@ Two builds, one codebase, split at the `DebugBackend` protocol:
 | Response bodies | instrumented mode only | MITM proxy, always |
 | JS debugger | source instrumentation, 3–10× slower | `_WKInspector`, no cost |
 | DOM / CSS cascade | reconstructed via CSSOM | `_WKInspector` |
+
+## Releases and updates
+
+**CI.** `.github/workflows/build.yml` builds every push and pull request on a
+macOS runner, runs the checks and unit tests, and uploads the DMG as a
+workflow artifact. Pushing a version tag publishes a release:
+
+```sh
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+That builds the universal app as version 0.2.0, packages
+`SimpleBrowser-0.2.0.dmg`, signs it for the updater, and creates the GitHub
+Release with the DMG and its `.sig` attached.
+
+**Updating.** The app checks the latest GitHub Release a few seconds after
+launch and then at most once a day (App menu → **Check for Updates…** checks
+now). A newer version is offered with **Install Update**, **Remind Me Later**
+or **Skip This Version**. Installing downloads the DMG and verifies its
+Ed25519 signature against the public key compiled into the app
+(`Updater.publicKey`); a DMG that does not verify is never opened, whoever put
+it on the release page. It then checks the app inside is SimpleBrowser at the
+version offered with an intact code signature, and once the running copy has
+quit, swaps it in (putting the old copy back if that fails) and relaunches.
+A copy run from the build folder has nothing to replace; it offers the release
+page instead.
+
+**The signing key.** The private key is the repository secret
+`UPDATE_SIGNING_KEY`; a tag build fails without it rather than publishing an
+update no one can install. Locally, `scripts/make-dmg.sh` signs with
+`~/.simplebrowser-update-signing-key` when it exists. Losing the private key
+means shipping one release by hand with a new public key; leaking it means
+anyone can sign an update, so rotate it (`swift run SignUpdate --generate-key`)
+and ship the new public key at once.
+
+```sh
+swift run UpdateKitChecks     # versions, release parsing, signatures, when to ask
+scripts/test-update.sh        # 0.0.1 updates itself to 0.0.2 from a local feed; a tampered DMG is refused
+```
 
 ## Licence
 

@@ -26,11 +26,16 @@ public enum PasswordCSV {
         case unrecognisedHeader
     }
 
-    public static func export(_ rows: [Row]) -> String {
-        var lines = ["name,url,username,password,note"]
+    /// Chrome's columns, which every browser imports, or the ones Apple's
+    /// Passwords app writes and reads (`Title,URL,Username,Password,Notes,OTPAuth`).
+    public enum Format: Sendable { case chrome, apple }
+
+    public static func export(_ rows: [Row], format: Format = .chrome) -> String {
+        var lines = [format == .apple ? "Title,URL,Username,Password,Notes,OTPAuth" : "name,url,username,password,note"]
         for row in rows {
-            lines.append([CredentialOrigin.site(of: row.origin), row.origin + "/", row.username, row.password, ""]
-                .map(escape).joined(separator: ","))
+            var fields = [CredentialOrigin.site(of: row.origin), row.origin + "/", row.username, row.password, ""]
+            if format == .apple { fields.append("") }
+            lines.append(fields.map(escape).joined(separator: ","))
         }
         return lines.joined(separator: "\r\n") + "\r\n"
     }

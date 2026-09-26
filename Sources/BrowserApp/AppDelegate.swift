@@ -6,6 +6,7 @@ import InspectKit
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var controllers: [BrowserWindowController] = []
     let profiles = ProfileStore()
+    let updater = Updater()
     /// The app's Profiles menu follows whichever browser window is in front.
     private(set) lazy var profilesMenuFiller = ProfilesMenuFiller(store: profiles) { [weak self] in
         self?.currentProfile ?? Profile(name: "Default")
@@ -71,7 +72,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 PasswordSelfTest.run(app: self, browser: controller, output: out, snapshots: launch.snapshotDirectory)
             }
             if let out = launch.uiSelfTestOutput { UISelfTest.run(browser: controller, output: out) }
-            if let directory = launch.snapshotDirectory, launch.passwordsSelfTestOutput == nil {
+            if let out = launch.pageSelfTestOutput {
+                PageSelfTest.run(app: self, browser: controller, output: out, snapshots: launch.snapshotDirectory)
+            }
+            if let directory = launch.snapshotDirectory, launch.passwordsSelfTestOutput == nil, launch.pageSelfTestOutput == nil {
                 DispatchQueue.main.asyncAfter(deadline: .now() + launch.snapshotDelay) { [weak self] in
                     guard let self else { return }
                     Self.snapshot(controller.window, to: directory + "/browser.png")
@@ -94,6 +98,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             newWindow(nil)
         }
+        startUpdater()
         if let path = launch.dumpRecordingPath {
             startDumping(to: URL(fileURLWithPath: path))
         }
@@ -122,6 +127,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             controller.showWindow(nil)
             controller.load(url)
         }
+    }
+
+    /// Opens a page in the browser window in front, or a new one in the
+    /// current profile: Settings acts for that profile, so its links do too.
+    func openInBrowser(_ url: URL) {
+        let browser = frontmostBrowser ?? makeWindow()
+        browser.showWindow(nil)
+        browser.load(url)
+    }
+
+    // MARK: - Updates
+
+    private func startUpdater() {
+        if let feed = launch.updateFeed {
+            // Only a local feed may stand in for GitHub; the signature check
+            // applies to whatever it serves either way.
+            guard let host = feed.host(), ["127.0.0.1", "localhost", "::1"].contains(host) else { return }
+            updater.feedURL = feed
+        }
+        if let output = launch.updateSelfTestOutput {
+            updater.autoAnswer = .alertFirstButtonReturn
+            let report = { (error: String) in
+                let body = ["installed": false, "error": error] as [String: Any]
+                if let data = try? JSONSerialization.data(withJSONObject: body) { try? data.write(to: URL(fileURLWithPath: output)) }
+                NSApp.terminate(nil)
+            }
+            updater.onFailure = report
+            updater.check(userInitiated: true)
+            // Reached only if nothing was installed and nothing failed either.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 90) { report("no update was installed") }
+            return
+        }
+        // Self-test runs never go looking for real updates.
+        guard launch.passwordsSelfTestOutput == nil, launch.pageSelfTestOutput == nil, launch.uiSelfTestOutput == nil else { return }
+        updater.start()
+    }
+
+    /// App menu → Check for Updates…
+    @objc func checkForUpdates(_ sender: Any?) {
+        updater.check(userInitiated: true)
     }
 
     @objc func showSettings(_ sender: Any?) {
@@ -242,6 +287,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         controller.profilesMenuFiller = ProfilesMenuFiller(store: profiles) { [weak controller] in
             controller?.profile ?? profile
         }
+        // Links opened from a page stay in the page's profile: a link from a
+        // work account's mail opens signed in to work, not to Default.
+        controller.openInNewWindow = { [weak self, weak controller] url in
+            guard let self, let controller else { return }
+            let window = self.makeWindow(profile: controller.profile)
+            window.showWindow(nil)
+            window.load(url)
+        }
         controllers.append(controller)
         controller.onClose = { [weak self, weak controller] in
             self?.controllers.removeAll { $0 === controller }
@@ -314,6 +367,9 @@ struct LaunchOptions {
     var snapshotDelay: Double = 3
     var uiSelfTestOutput: String?
     var passwordsSelfTestOutput: String?
+    var pageSelfTestOutput: String?
+    var updateFeed: URL?
+    var updateSelfTestOutput: String?
     var showPasswords = false
 
     static func parse(_ arguments: [String]) -> LaunchOptions {
@@ -339,6 +395,12 @@ struct LaunchOptions {
                 options.showSettings = true
             case "--passwords-selftest":
                 options.passwordsSelfTestOutput = iterator.next()
+            case "--update-feed":
+                options.updateFeed = iterator.next().flatMap(URL.init(string:))
+            case "--update-selftest":
+                options.updateSelfTestOutput = iterator.next()
+            case "--page-selftest":
+                options.pageSelfTestOutput = iterator.next()
             case "--show-passwords":
                 options.showPasswords = true
             case "--ui-selftest":

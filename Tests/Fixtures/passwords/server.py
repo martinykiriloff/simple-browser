@@ -45,6 +45,16 @@ SIGNUP = page("Create an account", """
   <button id=submit>Create account</button>
 </form>""")
 
+# A sign-up form as most sites write one: nothing says "new-password", only
+# the button's words. It also limits the password, as many banks do.
+REGISTER = page("Register", """
+<form method=post action=/register id=register>
+  <label>Email <input name=email id=email type=email></label>
+  <label>Password <input name=password id=password type=password maxlength=16
+    passwordrules="required: upper; required: digit; required: [!#]; minlength: 12;"></label>
+  <button id=submit>Create account</button>
+</form>""")
+
 CHANGE = page("Change your password", """
 <form method=post action=/change id=change>
   <label>Current password <input name=current id=current type=password autocomplete=current-password></label>
@@ -126,7 +136,7 @@ def two_step_2(username, error=""):
 
 
 INDEX = page("Password manager fixtures", "<ul>" + "".join(
-    f'<li><a href="{p}">{p}</a>' for p in ["/login", "/signup", "/change", "/spa", "/react", "/frames", "/two-step", "/state"]) + "</ul>")
+    f'<li><a href="{p}">{p}</a>' for p in ["/login", "/signup", "/register", "/change", "/spa", "/react", "/frames", "/two-step", "/state"]) + "</ul>")
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -157,7 +167,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = self.path.split("?")[0]
-        pages = {"/": INDEX, "/login": login_form(), "/signup": SIGNUP, "/change": CHANGE, "/spa": SPA,
+        pages = {"/": INDEX, "/login": login_form(), "/signup": SIGNUP, "/register": REGISTER, "/change": CHANGE, "/spa": SPA,
                  "/react": REACT, "/frames": FRAMES, "/two-step": TWO_STEP_1,
                  "/welcome": page("Welcome", "<p id=welcome>You are signed in.</p><p><a href=/login>Sign in again</a></p>")}
         if path in pages:
@@ -185,6 +195,12 @@ class Handler(BaseHTTPRequestHandler):
                 self.redirect("/welcome")
             else:
                 self.send(200, SIGNUP)
+        elif path == "/register":
+            if password:
+                users[form.get("email", "")] = password
+                self.redirect("/welcome")
+            else:
+                self.send(200, REGISTER)
         elif path == "/change":
             owner = next((name for name, saved in users.items() if saved == form.get("current")), None)
             if owner and password and password == form.get("confirm"):

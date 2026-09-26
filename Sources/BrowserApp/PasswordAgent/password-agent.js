@@ -75,6 +75,31 @@
     return all.filter(function (el) { return el instanceof HTMLInputElement && (scope instanceof HTMLFormElement || !el.form); });
   }
 
+  // Most sign-up forms never say `autocomplete=new-password`: one password
+  // field and a "Create account" button is all there is. Read the field's own
+  // name first, then the form's and its submit button's words. Any sign of a
+  // sign-in wins, because a sign-in taken for a sign-up loses autofill, which
+  // is worse than a sign-up taken for a sign-in, which only loses the offer.
+  var SIGNUP_WORDS = /sign.?up|register|registration|create.?(an?.?|your.?)?account|new.?account|join|enrol|get.?started/i;
+  var SIGNIN_WORDS = /sign.?in|log.?in|log.?on|authenticat/i;
+
+  function looksLikeSignup(scope, field) {
+    var hints = [field.getAttribute('name'), field.getAttribute('id'), field.getAttribute('aria-label'), field.getAttribute('placeholder')].join(' ');
+    if (/current|old|existing/i.test(hints)) return false;
+    if (/(^|[^a-z])new|create|choose|register|sign.?up/i.test(hints)) return true;
+    var words = [];
+    if (scope instanceof HTMLFormElement) {
+      // getAttribute: `form.id` is shadowed by a field named "id".
+      words.push(scope.getAttribute('id'), scope.getAttribute('name'), scope.getAttribute('action'), scope.getAttribute('class'));
+    }
+    Array.prototype.forEach.call(scope.querySelectorAll('button, input[type=submit]'), function (button) {
+      if (button instanceof HTMLButtonElement && button.type !== 'submit') return;
+      words.push(button instanceof HTMLInputElement ? button.value : button.textContent);
+    });
+    var text = words.join(' ');
+    return SIGNUP_WORDS.test(text) && !SIGNIN_WORDS.test(text);
+  }
+
   // { kind: 'login' | 'signup' | 'change', username, password, newPasswords: [] }
   function describe(scope) {
     var inputs = inputsIn(scope);
@@ -96,7 +121,7 @@
     var isCurrent = function (el) { return autocompleteTokens(el).indexOf('current-password') !== -1; };
     var form = { scope: scope, username: username, password: null, newPasswords: [] };
     if (passwords.length === 1) {
-      if (isNew(first)) { form.kind = 'signup'; form.newPasswords = [first]; }
+      if (isNew(first) || (!isCurrent(first) && looksLikeSignup(scope, first))) { form.kind = 'signup'; form.newPasswords = [first]; }
       else { form.kind = 'login'; form.password = first; }
     } else if (passwords.length === 2 && !isCurrent(first)) {
       form.kind = 'signup'; form.newPasswords = passwords;          // password + confirm
@@ -223,7 +248,14 @@
     var role = roleOf(el, form);
     if (!role) { if (focused) { focused = null; post({ kind: 'blur' }); } return; }
     focused = { el: el, form: form, role: role };
-    post({ kind: 'focus', role: role, rect: topRect(el), text: role === 'username' ? el.value : '', empty: !el.value });
+    var message = { kind: 'focus', role: role, rect: topRect(el), text: role === 'username' ? el.value : '', empty: !el.value };
+    if (role === 'new-password') {
+      // What the site accepts, so the password offered is one it will take.
+      message.rules = el.getAttribute('passwordrules') || '';
+      message.minLength = el.minLength;
+      message.maxLength = el.maxLength;
+    }
+    post(message);
   }
 
   document.addEventListener('focusin', function (event) { announceFocus(event.target); }, true);

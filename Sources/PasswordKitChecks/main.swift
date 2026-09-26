@@ -188,6 +188,102 @@ do {
     print("✘ vault checks stopped early: \(error)")
 }
 
+// MARK: Password rules
+
+do {
+    let rules = PasswordRules.parse("required: upper; required: digit; required: [-_]; allowed: lower; max-consecutive: 2; minlength: 10; maxlength: 14;")
+    check("rules: three required classes", rules.required.count == 3)
+    check("rules: allowed collects lower", rules.allowed == PasswordRules.lower)
+    check("rules: lengths and max-consecutive", rules.minLength == 10 && rules.maxLength == 14 && rules.maxConsecutive == 2)
+    check("rules: an unknown clause is skipped, the rest kept", PasswordRules.parse("frobnicate: 3; maxlength: 12").maxLength == 12)
+    check("rules: `]` first inside brackets", PasswordRules.characterClass("[]-]") == Set("]-"))
+    check("rules: an unknown class name spoils only its clause", PasswordRules.parse("required: wobbly; required: digit").required == [PasswordRules.digit])
+    check("rules: the field's maxlength narrows, never widens", PasswordRules.parse("maxlength: 30", maxLength: 16).maxLength == 16
+          && PasswordRules.parse("maxlength: 12", maxLength: 16).maxLength == 12)
+    check("rules: HTML's -1 for no limit is ignored", PasswordRules.parse("", minLength: -1, maxLength: -1) == PasswordRules())
+    check("rules: none is unrestricted", PasswordRules().isUnrestricted && !PasswordRules.parse("", maxLength: 16).isUnrestricted)
+
+    var allRespected = true
+    for _ in 0..<300 {
+        let password = PasswordGenerator.generate(rules: rules)
+        let chars = Array(password)
+        let ok = (10...14).contains(chars.count)
+            && chars.contains(where: PasswordRules.upper.contains) && chars.contains(where: PasswordRules.digit.contains)
+            && chars.contains(where: Set("-_").contains)
+            && chars.allSatisfy { PasswordRules.lower.union(PasswordRules.upper).union(PasswordRules.digit).union("-_").contains($0) }
+            && PasswordGenerator.longestRun(chars) <= 2
+        if !ok { allRespected = false; print("  offending: \(password)"); break }
+    }
+    check("generator: 300 passwords all obey the site's rules", allRespected)
+    check("generator: a 16-character field gets 16, not a truncated 20", PasswordGenerator.generate(rules: .parse("", maxLength: 16)).count == 16)
+    check("generator: a 32-character minimum is met", PasswordGenerator.generate(rules: .parse("minlength: 32")).count == 32)
+    check("generator: digits only, when that is all a site allows", PasswordGenerator.generate(rules: .parse("allowed: digit; maxlength: 6")).allSatisfy(\.isNumber))
+    check("generator: no rules keeps the grouped format", PasswordGenerator.generate(rules: PasswordRules()).split(separator: "-").count == 3)
+}
+
+// MARK: Checkup
+
+check("weak: too short", PasswordStrength.weaknesses(of: "aB3$x").contains(.tooShort))
+check("weak: a common password", PasswordStrength.weaknesses(of: "password").contains(.common))
+check("weak: a common password with a number and ! on the end", PasswordStrength.weaknesses(of: "Password123!").contains(.common))
+check("weak: digits only", PasswordStrength.weaknesses(of: "38472910").contains(.singleKind))
+check("weak: a run", PasswordStrength.weaknesses(of: "abcdefgh").contains(.pattern))
+check("weak: a keyboard row", PasswordStrength.weaknesses(of: "asdfghjk").contains(.pattern))
+check("weak: contains the username", PasswordStrength.weaknesses(of: "ada-Lovelace-99", username: "ada@example.com").contains(.containsUsername))
+check("weak: contains the site's name", PasswordStrength.weaknesses(of: "MyExample2024!", origin: "https://mail.example.co.uk").contains(.containsSiteName))
+check("strong: a generated password is not weak", !PasswordStrength.isWeak(PasswordGenerator.generate(), username: "ada", origin: "https://example.com"))
+check("strong: a long passphrase of one kind is not weak", !PasswordStrength.isWeak("correct horse battery staple"))
+
+do {
+    let a = Credential(origin: "https://a.com", username: "ada")
+    let b = Credential(origin: "https://b.com", username: "ada")
+    let c = Credential(origin: "https://c.com", username: "ada")
+    let report = PasswordAudit.run([(a, "Shared-Pass-2024"), (b, "Shared-Pass-2024"), (c, "kpmwTx-r7hqzn-4bVcye")],
+                                   breaches: ["Shared-Pass-2024": 0, "kpmwTx-r7hqzn-4bVcye": 12])
+    check("audit: reuse is reported on both sites, naming the other", report.issues.first { $0.credential.id == a.id }?.kinds == [.reused(["b.com"])])
+    check("audit: a leaked password comes first", report.issues.first?.credential.id == c.id && report.issues.first?.kinds == [.compromised(12)])
+    check("audit: counts", report.compromised == 1 && report.reused == 2 && report.weak == 0 && report.checked == 3)
+    check("audit: without a leak check, it says so", !PasswordAudit.run([(a, "x")]).breachChecked)
+}
+
+do {
+    check("pwned: SHA-1 is upper-case hex", PwnedPasswords.sha1Hex("password") == "5BAA61E4C9B93F3F0682250B6CF8331B7EE68FD8")
+    check("pwned: range lines parse, padding counts 0",
+          PwnedPasswords.parse(range: "1E4C9B93F3F0682250B6CF8331B7EE68FD8:9545824\r\n0018A45C4D1DEF81644B54AB7F969B88D65:0\n") ==
+          ["1E4C9B93F3F0682250B6CF8331B7EE68FD8": 9545824, "0018A45C4D1DEF81644B54AB7F969B88D65": 0])
+
+    final class Log: @unchecked Sendable { var urls: [URL] = []; var padding: [String?] = [] }
+    let log = Log()
+    let checker = PwnedPasswords { request in
+        log.urls.append(request.url!)
+        log.padding.append(request.value(forHTTPHeaderField: "Add-Padding"))
+        let body = "1E4C9B93F3F0682250B6CF8331B7EE68FD8:42\r\nFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF:0"
+        return (Data(body.utf8), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+    }
+    let counts = try await checker.counts(for: ["password", "password", "kpmwTx-r7hqzn-4bVcye"])
+    check("pwned: a match is counted", counts["password"] == 42)
+    check("pwned: a miss is 0", counts["kpmwTx-r7hqzn-4bVcye"] == 0)
+    check("pwned: one request per distinct prefix", log.urls.count == 2)
+    check("pwned: only five characters of the hash leave", log.urls.allSatisfy { $0.lastPathComponent.count == 5 })
+    check("pwned: neither a password nor its full hash appears in a request", !log.urls.contains {
+        $0.absoluteString.contains("kpmwTx") || $0.absoluteString.contains(PwnedPasswords.sha1Hex("password"))
+    })
+    check("pwned: padding is requested", log.padding.allSatisfy { $0 == "true" })
+
+    let failing = PwnedPasswords { request in
+        (Data(), HTTPURLResponse(url: request.url!, statusCode: 503, httpVersion: nil, headerFields: nil)!)
+    }
+    do {
+        _ = try await failing.counts(for: ["x"])
+        check("pwned: a server error is an error, not \"none leaked\"", false)
+    } catch {
+        check("pwned: a server error is an error, not \"none leaked\"", error as? PwnedPasswords.CheckError == .http(503))
+    }
+} catch {
+    failures += 1
+    print("✘ pwned checks stopped early: \(error)")
+}
+
 // MARK: Keychain (opt-in)
 
 if CommandLine.arguments.contains("--keychain") {

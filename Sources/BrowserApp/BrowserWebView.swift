@@ -1,33 +1,27 @@
 import AppKit
 import WebKit
 
-/// The page web view, with an "Inspect Element" context-menu item that opens
-/// our DevTools on the element under the pointer.
+/// The page web view. Its context menu is WebKit's, rewritten by
+/// `PageContextMenu` into the one Safari and Chrome show.
 final class BrowserWebView: WKWebView {
 
-    /// Receives the click location in CSS pixels.
-    var onInspectElement: ((CGPoint) -> Void)?
-    private var contextPoint: CGPoint = .zero
+    /// Set by the window controller.
+    weak var contextMenu: PageContextMenu?
 
     override func willOpenMenu(_ menu: NSMenu, with event: NSEvent) {
         super.willOpenMenu(menu, with: event)
-        contextPoint = convert(event.locationInWindow, from: nil)
-
-        // WebKit adds its own item that opens the WebKit inspector; ours
-        // replaces it.
-        for item in menu.items where item.identifier?.rawValue == "WKMenuItemIdentifierInspectElement" {
-            menu.removeItem(item)
+        let point = convert(event.locationInWindow, from: nil)
+        MainActor.assumeIsolated {
+            contextMenu?.lastPoint = point
+            contextMenu?.rewrite(menu)
         }
-        if let last = menu.items.last, !last.isSeparatorItem { menu.addItem(.separator()) }
-        let item = NSMenuItem(title: "Inspect Element", action: #selector(inspectElement(_:)), keyEquivalent: "")
-        item.target = self
-        menu.addItem(item)
     }
 
-    @objc private func inspectElement(_ sender: Any?) {
-        var point = contextPoint
-        if !isFlipped { point.y = bounds.height - point.y }
+    /// A point in this view's coordinates, in the page's CSS pixels.
+    func cssPoint(_ viewPoint: CGPoint) -> CGPoint {
+        var viewPoint = viewPoint
+        if !isFlipped { viewPoint.y = bounds.height - viewPoint.y }
         let zoom = pageZoom > 0 ? pageZoom : 1
-        onInspectElement?(CGPoint(x: point.x / zoom, y: point.y / zoom))
+        return CGPoint(x: viewPoint.x / zoom, y: viewPoint.y / zoom)
     }
 }
