@@ -30,6 +30,8 @@ final class Updater {
     var autoAnswer: NSApplication.ModalResponse?
     /// Called instead of quitting, for the self-test.
     var onReadyToRelaunch: ((URL) -> Void)?
+    /// Just before quitting to install: the session must come back as it was.
+    var onWillRestart: (() -> Void)?
     /// Called with the message a failure would have shown, for the self-test.
     var onFailure: ((String) -> Void)?
 
@@ -206,6 +208,7 @@ final class Updater {
                 window.status("Restarting SimpleBrowser…")
                 try Self.scheduleSwap(staged: staged, over: installedApp, work: work)
                 if let onReadyToRelaunch { onReadyToRelaunch(staged); return }
+                onWillRestart?()
                 NSApp.terminate(nil)
             } catch {
                 fail("SimpleBrowser could not be updated.", error)

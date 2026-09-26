@@ -50,7 +50,8 @@ final class FeatureSelfTest {
 
     /// One entry per ticket, in the order they were built.
     var sections: [(String, () async -> Void)] {
-        [("tabs", tabs), ("hibernation", hibernation)]
+        [("tabs", tabs), ("hibernation", hibernation), ("session", sessionRoundTrip),
+         ("session-seed", sessionSeed), ("session-verify", sessionVerify)]
     }
 
     // MARK: - Helpers
@@ -118,6 +119,71 @@ final class FeatureSelfTest {
             window.sendEvent(event)
         }
         return true
+    }
+
+    // MARK: - #4 Session restore
+
+    func sessionRoundTrip() async {
+        let browser = first
+        browser.window?.makeKeyAndOrderFront(nil)
+        await open("/second", in: browser)
+        await open("/tabs", in: browser)
+        let middle = app.newTab(beside: browser, url: URL(string: site + "/long"))
+        let last = app.newTab(beside: middle, url: URL(string: site + "/form"))
+        _ = await waitFor { !middle.pageWebView.isLoading && !last.pageWebView.isLoading && last.currentURL?.path == "/form" }
+        middle.window?.makeKeyAndOrderFront(nil)
+        await pause(0.5)
+
+        let snapshot = app.currentSession()
+        let saved = snapshot.windows.first { $0.tabs.contains { $0.url?.path == "/long" } }
+        check("session: the window is recorded with its tabs in order", saved?.tabs.map { $0.url?.path ?? "-" } == ["/tabs", "/long", "/form"],
+              saved?.tabs.map { $0.url?.path ?? "-" } as Any)
+        check("session: …and which one was in front", saved?.selected == 1, saved?.selected as Any)
+        check("session: …and each tab's history", saved?.tabs.first?.state != nil)
+
+        guard let saved else { return }
+        let restored = app.restore(SessionSnapshot(windows: [saved]))
+        guard let front = restored.first else { check("session: restore opened a window", false); return }
+        let tabs = tabs(of: front).compactMap { window in app.browserControllers.first { $0.window === window } }
+        check("session: restored with the same tabs, in order", tabs.map { $0.currentURL?.path ?? "-" } == ["/tabs", "/long", "/form"],
+              tabs.map { $0.currentURL?.path ?? "-" })
+        check("session: the tab that was in front is in front again", front.currentURL?.path == "/long")
+        check("session: …and loads", await waitFor { front.pageWebView.url?.path == "/long" })
+        check("session: the others wait, asleep, until opened", tabs.count == 3 && tabs[0].isHibernated && tabs[2].isHibernated)
+        if tabs.count == 3 {
+            tabs[0].window?.makeKeyAndOrderFront(nil)
+            check("session: opening one wakes it on its page", await waitFor { tabs[0].pageWebView.url?.path == "/tabs" })
+            check("session: …with its history", await waitFor(3) { tabs[0].pageWebView.canGoBack })
+        }
+        for tab in tabs { tab.window?.close() }
+        middle.window?.close()
+        last.window?.close()
+        browser.window?.makeKeyAndOrderFront(nil)
+    }
+
+    /// First half of `scripts/test-session.sh`: open two windows, let the
+    /// session be written, then wait to be killed.
+    func sessionSeed() async {
+        let browser = first
+        await open("/second", in: browser)
+        await open("/tabs", in: browser)
+        let tab = app.newTab(beside: browser, url: URL(string: site + "/long"))
+        _ = await waitFor { !tab.pageWebView.isLoading && tab.currentURL?.path == "/long" }
+        app.newWindow(nil)
+        let other = app.browserControllers.first { $0.window?.tabGroup !== browser.window?.tabGroup && $0 !== browser }
+        if let other { await open("/form", in: other) }
+        await pause(4)   // one save at least
+        check("session-seed: two windows open", app.currentSession().windows.count == 2, app.currentSession().windows.count)
+    }
+
+    /// Second half: after `kill -9`, the relaunch must bring both windows back.
+    func sessionVerify() async {
+        let windows = app.currentSession().windows
+        check("session-verify: both windows are back", windows.count == 2, windows.count)
+        let paths = windows.map { $0.tabs.map { $0.url?.path ?? "-" } }
+        check("session-verify: …with their tabs in order", paths.contains(["/tabs", "/long"]) && paths.contains(["/form"]), paths)
+        check("session-verify: …and a word about the crash",
+              app.browserControllers.contains { $0.lastNotice?.contains("didn’t close properly") == true })
     }
 
     // MARK: - #3 Hibernation

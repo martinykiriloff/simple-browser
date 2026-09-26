@@ -75,6 +75,17 @@ enum BrowserSettings {
         }
     }
 
+    // MARK: Startup
+
+    private static let startupKey = "settings.startup"
+
+    /// What a launch opens: the last session (the default) or a new window.
+    /// After a crash or an update, the last session regardless.
+    static var startup: StartupChoice {
+        get { store.string(forKey: startupKey).flatMap(StartupChoice.init) ?? .lastSession }
+        set { store.set(newValue.rawValue, forKey: startupKey) }
+    }
+
     // MARK: Memory saver
 
     private static let memorySaverKey = "settings.memorySaver"

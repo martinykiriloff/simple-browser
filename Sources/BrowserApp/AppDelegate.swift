@@ -8,6 +8,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var controllers: [BrowserWindowController] = []
     let profiles = ProfileStore()
     let updater = Updater()
+    private(set) lazy var session = SessionController(directory: launch.sessionDirectory.map { URL(fileURLWithPath: $0) })
+    private var closedWindows: [SessionSnapshot.Window] = []
     private(set) lazy var memorySaver = MemorySaver { [weak self] in self?.controllers ?? [] }
     /// The app's Profiles menu follows whichever browser window is in front.
     private(set) lazy var profilesMenuFiller = ProfilesMenuFiller(store: profiles) { [weak self] in
@@ -59,10 +61,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NotificationCenter.default.addObserver(forName: ProfileStore.didChange, object: profiles, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.profilesDidChange() }
         }
+        // A run driven by a URL or a self-test never reads or writes the
+        // person's session.
+        session.isEnabled = launch.url == nil || launch.sessionDirectory != nil
+        session.begin()
+        session.startSaving { [weak self] in self?.currentSession() ?? SessionSnapshot(windows: []) }
+        updater.onWillRestart = { [weak self] in self?.session.markRestartForUpdate() }
         if let url = launch.url {
-            let controller = makeWindow()
-            controller.showWindow(nil)
-            controller.load(url)
+            let controller: BrowserWindowController
+            if launch.sessionDirectory != nil, session.shouldRestore(choice: BrowserSettings.startup), let previous = session.previous,
+               let front = restore(previous, announceCrash: session.uncleanExit && !session.restartForUpdate).last {
+                // Developer aid: a session test relaunching into its own session.
+                controller = front
+            } else {
+                controller = makeWindow()
+                controller.showWindow(nil)
+                controller.load(url)
+            }
             if launch.showRecorder { controller.showRecorder(nil) }
             if launch.goHome {
                 // Developer aid: the same action the Home button performs.
@@ -102,6 +117,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     }
                 }
             }
+        } else if session.isEnabled, session.shouldRestore(choice: BrowserSettings.startup), let previous = session.previous {
+            restore(previous, announceCrash: session.uncleanExit && !session.restartForUpdate)
         } else {
             newWindow(nil)
         }
@@ -113,10 +130,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate()
     }
 
-    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        FileHandle.standardError.write(Data(("TERMINATE-PROBE\n" + Thread.callStackSymbols.prefix(25).joined(separator: "\n") + "\n").utf8))
-        return .terminateNow
-    }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         true
@@ -266,11 +279,121 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var browserControllers: [BrowserWindowController] { controllers }
 
     @objc func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
-        menuItem.action == #selector(reopenClosedTab(_:)) ? canReopenClosedTab : true
+        switch menuItem.action {
+        case #selector(reopenClosedTab(_:)): return canReopenClosedTab
+        case #selector(reopenLastClosedWindow(_:)): return !closedWindows.isEmpty
+        case #selector(reopenLastSession(_:)): return !restoredPrevious && !(session.previous?.isEmpty ?? true)
+        default: return true
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        // Before the windows close, or the session saved would be empty.
+        session.end(currentSession())
         terminating = true
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        session.end(currentSession())
+        terminating = true
+        return .terminateNow
+    }
+
+    // MARK: - Session
+
+    /// Every window and its tabs, in tab-bar order.
+    func currentSession() -> SessionSnapshot {
+        var seen: Set<ObjectIdentifier> = []
+        var windows: [SessionSnapshot.Window] = []
+        let ordered = NSApp.orderedWindows.compactMap { window in controllers.first { $0.window === window } }
+        for controller in ordered + controllers {
+            guard let window = controller.window else { continue }
+            let key = window.tabGroup.map(ObjectIdentifier.init) ?? ObjectIdentifier(window)
+            guard !seen.contains(key) else { continue }
+            seen.insert(key)
+            windows.append(windowSnapshot(of: controller))
+        }
+        return SessionSnapshot(windows: windows)
+    }
+
+    private func windowSnapshot(of controller: BrowserWindowController) -> SessionSnapshot.Window {
+        let window = controller.window
+        let tabWindows = window?.tabbedWindows ?? [window].compactMap { $0 }
+        let tabs = tabWindows.compactMap { tabWindow in controllers.first { $0.window === tabWindow } }
+        let selectedWindow = window?.tabGroup?.selectedWindow ?? window
+        let frame = window?.frame ?? .zero
+        return SessionSnapshot.Window(
+            profileID: controller.profile.id,
+            frame: CodableRect(x: frame.minX, y: frame.minY, width: frame.width, height: frame.height),
+            tabs: tabs.map(\.sessionTab),
+            selected: tabs.firstIndex { $0.window === selectedWindow } ?? 0)
+    }
+
+    /// Brings windows back as they were: same profile, same frame, same tabs
+    /// in the same order. Only each window's front tab loads; the rest wake
+    /// when opened.
+    @discardableResult
+    func restore(_ snapshot: SessionSnapshot, announceCrash: Bool = false) -> [BrowserWindowController] {
+        let windows = snapshot.restorable(profiles: Set(profiles.profiles.map(\.id)))
+        guard !windows.isEmpty else {
+            newWindow(nil)
+            return []
+        }
+        var fronts: [BrowserWindowController] = []
+        for saved in windows {
+            guard let profile = profiles.profile(saved.profileID) else { continue }
+            var created: [BrowserWindowController] = []
+            for (index, tab) in saved.tabs.enumerated() {
+                let controller: BrowserWindowController
+                if let previous = created.last {
+                    controller = makeWindow(profile: profile)
+                    // After the previous tab, not the first: "above the first"
+                    // each time would put them back in reverse.
+                    if let window = previous.window, let tabWindow = controller.window {
+                        tabWindow.tabbingMode = .automatic
+                        window.addTabbedWindow(tabWindow, ordered: .above)
+                    }
+                } else {
+                    controller = makeWindow(profile: profile)
+                    controller.window?.setFrame(NSRect(x: saved.frame.x, y: saved.frame.y, width: saved.frame.width, height: saved.frame.height),
+                                                display: false)
+                    controller.showWindow(nil)
+                }
+                if index == saved.selected {
+                    if let state = tab.state { controller.interactionState = state } else if let url = tab.url { controller.load(url) }
+                } else {
+                    controller.restoreAsleep(url: tab.url, title: tab.title, state: tab.state)
+                }
+                created.append(controller)
+            }
+            if created.indices.contains(saved.selected) {
+                created[saved.selected].window?.makeKeyAndOrderFront(nil)
+                fronts.append(created[saved.selected])
+            }
+        }
+        if announceCrash, let front = fronts.last {
+            front.showNotice("SimpleBrowser didn’t close properly. Your tabs are back.")
+        }
+        return fronts
+    }
+
+    /// History → Reopen Last Closed Window.
+    @objc func reopenLastClosedWindow(_ sender: Any?) {
+        guard let window = closedWindows.popLast() else { return }
+        restore(SessionSnapshot(windows: [window]))
+    }
+
+    /// History → Reopen All Windows from Last Session, when the launch did not.
+    @objc func reopenLastSession(_ sender: Any?) {
+        guard let previous = session.previous else { return }
+        restore(previous)
+        restoredPrevious = true
+    }
+    private var restoredPrevious = false
+
+    private func rememberClosedWindow(_ controller: BrowserWindowController) {
+        closedWindows.append(windowSnapshot(of: controller))
+        if closedWindows.count > 10 { closedWindows.removeFirst() }
     }
 
     // MARK: - Profiles
@@ -384,8 +507,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self, let controller else { return nil }
             return self.newTab(beside: controller, configuration: configuration).pageWebView
         }
+        controller.onWindowClosing = { [weak self] controller in self?.rememberClosedWindow(controller) }
         controller.onTabClosed = { [weak self, weak controller] url, state, _ in
             guard let self, let controller, !self.terminating, url != nil || state != nil else { return }
+            // The last tab of a window closing is the window closing.
+            if (controller.window?.tabbedWindows?.count ?? 1) <= 1 { self.rememberClosedWindow(controller) }
             self.closedTabs.append(ClosedTab(profileID: controller.profile.id, url: url, state: state))
             if self.closedTabs.count > 25 { self.closedTabs.removeFirst() }
         }
@@ -463,6 +589,7 @@ struct LaunchOptions {
     var passwordsSelfTestOutput: String?
     var pageSelfTestOutput: String?
     var featureSelfTestOutput: String?
+    var sessionDirectory: String?
     var featureSections: [String] = []
     var updateFeed: URL?
     var updateSelfTestOutput: String?
@@ -497,6 +624,8 @@ struct LaunchOptions {
                 options.updateSelfTestOutput = iterator.next()
             case "--feature-selftest":
                 options.featureSelfTestOutput = iterator.next()
+            case "--session-dir":
+                options.sessionDirectory = iterator.next()
             case "--only":
                 options.featureSections = (iterator.next() ?? "").split(separator: ",").map(String.init)
             case "--page-selftest":

@@ -107,6 +107,11 @@ enum MainMenu {
         let home = menu.addItem(withTitle: "Home",
                                 action: #selector(BrowserWindowController.goHome(_:)), keyEquivalent: "h")
         home.keyEquivalentModifierMask = [.command, .shift]
+        menu.addItem(.separator())
+        menu.addItem(withTitle: "Reopen Last Closed Window",
+                     action: #selector(AppDelegate.reopenLastClosedWindow(_:)), keyEquivalent: "")
+        menu.addItem(withTitle: "Reopen All Windows from Last Session",
+                     action: #selector(AppDelegate.reopenLastSession(_:)), keyEquivalent: "")
         return wrap(menu)
     }
 

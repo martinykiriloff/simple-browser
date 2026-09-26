@@ -244,6 +244,26 @@ final class BrowserWindowController: NSWindowController,
         guard let window else { return }
         window.tabbingMode = .automatic
         if window.tabGroup?.isTabBarVisible == false { window.toggleTabBar(nil) }
+        observeSelection()
+    }
+
+    private var selectionObservation: NSKeyValueObservation?
+    private weak var observedGroup: NSWindowTabGroup?
+
+    /// Wakes the tab the moment its group selects it: the one signal that is
+    /// exact whether the app is in front or not. Re-attached when the tab
+    /// moves to another window's group.
+    private func observeSelection() {
+        guard let group = window?.tabGroup, group !== observedGroup else { return }
+        observedGroup = group
+        selectionObservation = group.observe(\.selectedWindow, options: [.new]) { [weak self] group, _ in
+            let selected = group.selectedWindow
+            DispatchQueue.main.async {
+                guard let self, selected === self.window else { return }
+                self.lastActive = Date()
+                self.wake()
+            }
+        }
     }
 
     /// The tab bar's "+", and File → New Tab (⌘T) through the responder chain.
@@ -266,8 +286,12 @@ final class BrowserWindowController: NSWindowController,
         tabs[(index + step + tabs.count) % tabs.count].makeKeyAndOrderFront(nil)
     }
 
+    /// Called before ⇧⌘W closes the window, with every tab, for Reopen Last Closed Window.
+    var onWindowClosing: ((BrowserWindowController) -> Void)?
+
     /// File → Close Window (⇧⌘W): every tab of this window.
     @objc func closeWindowAndTabs(_ sender: Any?) {
+        onWindowClosing?(self)
         for tab in window?.tabbedWindows ?? [window].compactMap({ $0 }) { tab.performClose(sender) }
     }
 
@@ -395,6 +419,58 @@ final class BrowserWindowController: NSWindowController,
         snapshotView.removeFromSuperview()
         snapshotView.image = nil
     }
+
+    /// A tab brought back from the last session, asleep: nothing loads until
+    /// it is shown, so a launch with fifty tabs is as quick as with one.
+    func restoreAsleep(url: URL?, title: String, state: Data?) {
+        isHibernated = true
+        hibernatedState = state
+        hibernatedURL = url
+        hibernatedTitle = title
+        window?.title = title.isEmpty ? (url?.host() ?? "New Tab") : title
+        window?.tab.attributedTitle = NSAttributedString(string: window?.title ?? "", attributes: [
+            .foregroundColor: NSColor.tertiaryLabelColor,
+            .font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize),
+        ])
+        addressField.stringValue = url?.absoluteString ?? ""
+    }
+
+    /// This tab, as the session file keeps it.
+    var sessionTab: SessionSnapshot.Tab {
+        SessionSnapshot.Tab(url: currentURL, title: isHibernated ? hibernatedTitle : (window?.title ?? ""),
+                            state: interactionState as? Data)
+    }
+
+    /// A short message over the top of the page that goes away by itself.
+    func showNotice(_ text: String, seconds: Double = 8) {
+        let label = NSTextField(labelWithString: text)
+        label.font = .systemFont(ofSize: NSFont.systemFontSize, weight: .medium)
+        label.textColor = .labelColor
+        let box = NSVisualEffectView()
+        box.material = .popover
+        box.state = .active
+        box.wantsLayer = true
+        box.layer?.cornerRadius = 10
+        box.translatesAutoresizingMaskIntoConstraints = false
+        label.translatesAutoresizingMaskIntoConstraints = false
+        box.addSubview(label)
+        pageContainer.addSubview(box, positioned: .above, relativeTo: nil)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: box.leadingAnchor, constant: 16),
+            label.trailingAnchor.constraint(equalTo: box.trailingAnchor, constant: -16),
+            label.topAnchor.constraint(equalTo: box.topAnchor, constant: 10),
+            label.bottomAnchor.constraint(equalTo: box.bottomAnchor, constant: -10),
+            box.centerXAnchor.constraint(equalTo: pageContainer.centerXAnchor),
+            box.topAnchor.constraint(equalTo: pageContainer.topAnchor, constant: 12),
+        ])
+        lastNotice = text
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak box] in
+            NSAnimationContext.runAnimationGroup({ _ in box?.animator().alphaValue = 0 }, completionHandler: { box?.removeFromSuperview() })
+        }
+    }
+
+    /// For the self-test.
+    private(set) var lastNotice: String?
 
     /// Back/forward list, scroll position and form state, for Reopen Closed Tab.
     var interactionState: Any? {
@@ -881,6 +957,7 @@ final class BrowserWindowController: NSWindowController,
 
     func windowDidBecomeKey(_ notification: Notification) {
         guard (notification.object as? NSWindow) === window else { return }
+        observeSelection()
         lastActive = Date()
         wake()
         onBecomeKey?()
@@ -889,7 +966,9 @@ final class BrowserWindowController: NSWindowController,
     /// A tab shown by any means (selected, merged, its window brought
     /// forward, even with the app in the background) wakes.
     func windowDidChangeOcclusionState(_ notification: Notification) {
-        guard (notification.object as? NSWindow) === window, window?.occlusionState.contains(.visible) == true else { return }
+        guard (notification.object as? NSWindow) === window else { return }
+        observeSelection()
+        guard window?.occlusionState.contains(.visible) == true else { return }
         lastActive = Date()
         wake()
     }

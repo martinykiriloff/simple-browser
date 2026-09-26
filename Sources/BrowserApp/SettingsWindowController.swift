@@ -21,6 +21,7 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate, N
     private let useCurrentButton = NSButton(title: "Set to Current Page", target: nil, action: nil)
     private let resetButton = NSButton(title: "Reset to Default", target: nil, action: nil)
     private let newWindowPopUp = NSPopUpButton(frame: .zero, pullsDown: false)
+    let startupPopUp = NSPopUpButton(frame: .zero, pullsDown: false)
     let memorySaverCheckbox = NSButton(checkboxWithTitle: "Put inactive tabs to sleep to save memory", target: nil, action: nil)
     let keepActiveField = NSTextField()
 
@@ -111,6 +112,13 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate, N
         newWindowPopUp.action = #selector(newWindowContentChanged(_:))
         newWindowPopUp.setAccessibilityLabel("New windows open with")
 
+        let startupTitle = NSTextField(labelWithString: "SimpleBrowser opens with:")
+        startupTitle.alignment = .right
+        startupPopUp.addItems(withTitles: ["All windows from last time", "A new window"])
+        startupPopUp.target = self
+        startupPopUp.action = #selector(startupChanged(_:))
+        startupPopUp.setAccessibilityLabel("SimpleBrowser opens with")
+
         let memoryTitle = NSTextField(labelWithString: "Memory Saver:")
         memoryTitle.alignment = .right
         memorySaverCheckbox.target = self
@@ -125,6 +133,7 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate, N
         memoryHelp.textColor = .secondaryLabelColor
 
         let grid = NSGridView(views: [
+            [startupTitle, startupPopUp],
             [title, homepageField],
             [NSGridCell.emptyContentView, resolvedLabel],
             [NSGridCell.emptyContentView, buttons],
@@ -138,13 +147,15 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate, N
         grid.columnSpacing = 10
         grid.column(at: 0).xPlacement = .trailing
         grid.column(at: 1).xPlacement = .fill
-        grid.row(at: 0).yPlacement = .center
-        grid.row(at: 2).topPadding = 2
+        grid.cell(for: startupPopUp)?.xPlacement = .leading
+        grid.row(at: 1).topPadding = 12
+        grid.row(at: 1).yPlacement = .center
+        grid.row(at: 3).topPadding = 2
         grid.cell(for: buttons)?.xPlacement = .leading
-        grid.row(at: 4).topPadding = 10
-        grid.row(at: 4).yPlacement = .center
+        grid.row(at: 5).topPadding = 10
+        grid.row(at: 5).yPlacement = .center
         grid.cell(for: newWindowPopUp)?.xPlacement = .leading
-        grid.row(at: 5).topPadding = 12
+        grid.row(at: 6).topPadding = 12
         grid.cell(for: memorySaverCheckbox)?.xPlacement = .leading
         grid.translatesAutoresizingMaskIntoConstraints = false
 
@@ -164,12 +175,17 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate, N
 
     // MARK: - State
 
+    @objc private func startupChanged(_ sender: Any?) {
+        BrowserSettings.startup = startupPopUp.indexOfSelectedItem == 1 ? .newWindow : .lastSession
+    }
+
     @objc private func memorySaverChanged(_ sender: Any?) {
         BrowserSettings.memorySaver = memorySaverCheckbox.state == .on
         keepActiveField.isEnabled = BrowserSettings.memorySaver
     }
 
     private func refresh() {
+        startupPopUp.selectItem(at: BrowserSettings.startup == .newWindow ? 1 : 0)
         memorySaverCheckbox.state = BrowserSettings.memorySaver ? .on : .off
         keepActiveField.stringValue = BrowserSettings.keepActiveSites.joined(separator: ", ")
         keepActiveField.isEnabled = BrowserSettings.memorySaver

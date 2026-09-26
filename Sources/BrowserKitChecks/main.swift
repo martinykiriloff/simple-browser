@@ -93,5 +93,32 @@ do {
     check("pinned tabs never sleep", EvictionPolicy(liveBudget: 1).tabsToHibernate(live: pinned, protected: [pinned[0].id], pressure: .critical, now: now).isEmpty)
 }
 
+// MARK: Session
+
+do {
+    let work = ProfileID(), gone = ProfileID()
+    let page = SessionSnapshot.Tab(url: URL(string: "https://example.com/a"), title: "A", state: Data([1, 2, 3]))
+    let blank = SessionSnapshot.Tab(url: nil, title: "New Tab", state: nil)
+    let session = SessionSnapshot(windows: [
+        .init(profileID: work, frame: .init(x: 10, y: 20, width: 800, height: 600), tabs: [blank, page, page], selected: 9),
+        .init(profileID: gone, frame: .init(x: 0, y: 0, width: 1, height: 1), tabs: [page], selected: 0),
+        .init(profileID: work, frame: .init(x: 0, y: 0, width: 1, height: 1), tabs: [blank], selected: 0),
+    ])
+    let data = try JSONEncoder().encode(session)
+    check("a session round-trips through JSON", try JSONDecoder().decode(SessionSnapshot.self, from: data) == session)
+    let windows = session.restorable(profiles: [work])
+    check("a deleted profile's windows are not restored", windows.count == 1, windows.count)
+    check("empty tabs are dropped, the rest keep their order", windows.first?.tabs == [page, page])
+    check("a selection past the end is clamped", windows.first?.selected == 1)
+    check("a session of blank tabs is empty", SessionSnapshot(windows: [.init(profileID: work, frame: .init(x: 0, y: 0, width: 1, height: 1), tabs: [blank], selected: 0)]).isEmpty)
+    check("restore when asked", StartupChoice.shouldRestore(choice: .lastSession, uncleanExit: false, restartForUpdate: false, hasSession: true))
+    check("a new window when asked", !StartupChoice.shouldRestore(choice: .newWindow, uncleanExit: false, restartForUpdate: false, hasSession: true))
+    check("always restore after a crash", StartupChoice.shouldRestore(choice: .newWindow, uncleanExit: true, restartForUpdate: false, hasSession: true))
+    check("always restore after an update", StartupChoice.shouldRestore(choice: .newWindow, uncleanExit: false, restartForUpdate: true, hasSession: true))
+    check("nothing to restore, nothing restored", !StartupChoice.shouldRestore(choice: .lastSession, uncleanExit: true, restartForUpdate: true, hasSession: false))
+} catch {
+    check("session checks", false, error)
+}
+
 print(failures == 0 ? "✔ \(passed) checks passed" : "\(failures) of \(passed + failures) checks failed")
 exit(failures == 0 ? 0 : 1)
