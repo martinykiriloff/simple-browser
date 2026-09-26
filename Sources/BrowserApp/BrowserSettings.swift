@@ -75,6 +75,29 @@ enum BrowserSettings {
         }
     }
 
+    // MARK: Memory saver
+
+    private static let memorySaverKey = "settings.memorySaver"
+    private static let keepActiveKey = "settings.memorySaver.keepActive"
+
+    /// Inactive tabs go to sleep. On unless switched off; critical memory
+    /// pressure still puts tabs to sleep, as macOS would otherwise kill them.
+    static var memorySaver: Bool {
+        get { store.object(forKey: memorySaverKey) as? Bool ?? true }
+        set { store.set(newValue, forKey: memorySaverKey) }
+    }
+
+    /// Hosts whose tabs never sleep ("Always keep these sites active").
+    static var keepActiveSites: [String] {
+        get { store.stringArray(forKey: keepActiveKey) ?? [] }
+        set { store.set(Array(Set(newValue.map { $0.lowercased() })).sorted(), forKey: keepActiveKey) }
+    }
+
+    static func keepsTabsActive(for url: URL?) -> Bool {
+        guard let host = url?.host()?.lowercased() else { return false }
+        return keepActiveSites.contains { host == $0 || host.hasSuffix("." + $0) }
+    }
+
     // MARK: Translation
 
     private static let translateTargetKey = "settings.translate.target"

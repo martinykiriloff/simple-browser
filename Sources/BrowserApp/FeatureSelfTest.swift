@@ -50,7 +50,7 @@ final class FeatureSelfTest {
 
     /// One entry per ticket, in the order they were built.
     var sections: [(String, () async -> Void)] {
-        [("tabs", tabs)]
+        [("tabs", tabs), ("hibernation", hibernation)]
     }
 
     // MARK: - Helpers
@@ -118,6 +118,65 @@ final class FeatureSelfTest {
             window.sendEvent(event)
         }
         return true
+    }
+
+    // MARK: - #3 Hibernation
+
+    func hibernation() async {
+        let browser = first
+        browser.window?.makeKeyAndOrderFront(nil)
+        await open("/tabs", in: browser)
+
+        let reader = app.newTab(beside: browser, url: URL(string: site + "/second"))
+        _ = await waitFor { reader.currentURL?.path == "/second" && !reader.pageWebView.isLoading }
+        await pause(0.3)
+        await open("/long", in: reader)
+        check("hibernation: (setup) the tab has history before it sleeps", reader.pageWebView.canGoBack)
+        _ = await js("window.scrollTo(0, 1500)", in: reader)
+        await pause(0.3)
+        let form = app.newTab(beside: browser, url: URL(string: site + "/form"))
+        _ = await waitFor { form.currentURL?.path == "/form" && !form.pageWebView.isLoading }
+        await pause(0.3)
+        _ = await js("document.getElementById('field').value = 'half written'", in: form)
+        browser.window?.makeKeyAndOrderFront(nil)
+        _ = await waitFor { self.front === browser }
+
+        let saver = app.memorySaver
+        let budget = saver.policy
+        saver.policy = EvictionPolicy(liveBudget: 1)
+        await saver.run(pressure: .warning).value
+        saver.policy = budget
+
+        check("hibernation: a background tab over the budget sleeps", reader.isHibernated)
+        check("hibernation: …its page is unloaded", reader.pageWebView.url?.scheme != "http")
+        check("hibernation: …but it still says what it will wake to", reader.currentURL?.path == "/long")
+        check("hibernation: …and its tab is dimmed", reader.window?.tab.attributedTitle != nil)
+        check("hibernation: the tab in front never sleeps", !browser.isHibernated)
+        check("hibernation: a tab with a half-filled form never sleeps", !form.isHibernated)
+
+        reader.window?.makeKeyAndOrderFront(nil)
+        check("hibernation: opening a sleeping tab wakes it", await waitFor { !reader.isHibernated })
+        check("hibernation: …on its page", await waitFor { reader.pageWebView.url?.path == "/long" && !reader.pageWebView.isLoading },
+              reader.pageWebView.url as Any)
+        let scrolled = await waitFor { ((await self.js("return window.scrollY", in: reader) as? NSNumber)?.doubleValue ?? 0) > 1000 }
+        check("hibernation: …scrolled where it was", scrolled, await js("return window.scrollY", in: reader) as Any)
+        let back = await waitFor(3) { reader.pageWebView.canGoBack }
+        check("hibernation: …with its history", back,
+              "back=\(reader.pageWebView.backForwardList.backList.map { $0.url.path }) current=\(reader.pageWebView.backForwardList.currentItem?.url.path ?? "-")")
+        check("hibernation: …and its tab no longer dimmed", reader.window?.tab.attributedTitle == nil)
+
+        BrowserSettings.memorySaver = false
+        browser.window?.makeKeyAndOrderFront(nil)
+        _ = await waitFor { self.front === browser }
+        saver.policy = EvictionPolicy(liveBudget: 1)
+        await saver.run(pressure: .warning).value
+        check("hibernation: switched off, nothing sleeps", !reader.isHibernated)
+        saver.policy = budget
+        BrowserSettings.memorySaver = true
+        _ = await js("document.getElementById('field').value = ''", in: form)
+        reader.window?.close()
+        form.window?.close()
+        browser.window?.makeKeyAndOrderFront(nil)
     }
 
     // MARK: - #2 Tabs

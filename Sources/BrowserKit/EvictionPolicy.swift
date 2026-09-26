@@ -43,4 +43,31 @@ public struct EvictionPolicy: Sendable {
         return Array(evictable.prefix(min(overBudget, live.count - protectedCount)))
             .map(\.id)
     }
+
+    /// Chrome's Memory Saver, for a browser with several windows: every tab
+    /// on screen is protected, not just one. Tabs over the budget go first,
+    /// least recently used first; then, at normal pressure, any tab left
+    /// unused for longer than `inactivityLimit`.
+    ///
+    /// - Parameters:
+    ///   - protected: tabs that must stay live: on screen, playing media,
+    ///     using the camera, holding an unsent form, being inspected.
+    public func tabsToHibernate(
+        live: [TabState],
+        protected: Set<TabID>,
+        pressure: Pressure,
+        now: Date = .now,
+        inactivityLimit: TimeInterval? = 30 * 60
+    ) -> [TabID] {
+        let budget = max(protected.count, Int(Double(liveBudget) * pressure.budgetMultiplier))
+        let evictable = live
+            .filter { !protected.contains($0.id) && !$0.isPinned }
+            .sorted { $0.lastActive < $1.lastActive }
+        var chosen = Array(evictable.prefix(max(0, live.count - budget)))
+        if let inactivityLimit {
+            let idle = evictable.dropFirst(chosen.count).filter { now.timeIntervalSince($0.lastActive) > inactivityLimit }
+            chosen += idle
+        }
+        return chosen.map(\.id)
+    }
 }

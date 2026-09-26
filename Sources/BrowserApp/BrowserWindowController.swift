@@ -34,7 +34,12 @@ final class BrowserWindowController: NSWindowController,
     var profilesMenuFiller: ProfilesMenuFiller?
     private let profileButton = NSButton()
 
-    private let webView: BrowserWebView
+    /// Replaced when the tab sleeps: a sleeping tab holds a fresh web view
+    /// that has loaded nothing, so the page's web process can go.
+    private var webView: BrowserWebView
+    /// Every web view this tab makes comes from it: same data store, same
+    /// agents and message handlers.
+    private let configuration: WKWebViewConfiguration
     private let addressField = NSTextField()
     private let splitView = NSSplitView()
     private let pageContainer = NSView()
@@ -44,7 +49,7 @@ final class BrowserWindowController: NSWindowController,
     private(set) var emulation: [String: Any]?
 
     // Dev tools. The recorder starts with the tab, not with the panel.
-    private let tab = TabID()
+    let tab = TabID()
     private let recorder: InspectorRecorder
     private let bridge: InspectorBridge
     private(set) var devTools: DevToolsController?
@@ -106,6 +111,7 @@ final class BrowserWindowController: NSWindowController,
         translator.install(into: configuration)
         contextMenu.install(into: configuration)
         webView = BrowserWebView(frame: .zero, configuration: configuration)
+        self.configuration = configuration
 
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1280, height: 800),
@@ -265,9 +271,134 @@ final class BrowserWindowController: NSWindowController,
         for tab in window?.tabbedWindows ?? [window].compactMap({ $0 }) { tab.performClose(sender) }
     }
 
+    // MARK: - Hibernation
+
+    /// When this tab was last in front, for the memory saver.
+    private(set) var lastActive = Date()
+    private(set) var isHibernated = false
+    private var hibernatedState: Any?
+    private var hibernatedURL: URL?
+    private var hibernatedTitle = ""
+    private let snapshotView = NSImageView()
+
+    /// Whether this tab must stay live: on screen, making sound, using the
+    /// camera or microphone, holding a form someone is filling in, or being
+    /// inspected. Asked of the page, because only it knows.
+    func mustStayLive() async -> Bool {
+        if window?.isVisible == true && window?.tabGroup?.selectedWindow === window { return true }
+        if window?.tabGroup == nil && window?.isVisible == true { return true }
+        if isDevToolsVisible { return true }
+        if webView.cameraCaptureState != .none || webView.microphoneCaptureState != .none { return true }
+        if webView.url == nil || webView.isLoading { return true }
+        let busy = try? await webView.callAsyncJavaScript("""
+            const playing = Array.from(document.querySelectorAll('video, audio')).some(m => !m.paused && !m.muted);
+            const editing = Array.from(document.querySelectorAll('input, textarea')).some(f =>
+                !['hidden', 'submit', 'button', 'checkbox', 'radio'].includes(f.type) && f.value !== f.defaultValue);
+            return playing || editing;
+            """, arguments: [:], in: nil, contentWorld: .defaultClient) as? Bool
+        return busy ?? true
+    }
+
+    /// Frees the page: keeps its history, scroll position and form state and a
+    /// picture of it, then unloads it so its web process can go.
+    func hibernate() async {
+        guard !isHibernated, let url = webView.url else { return }
+        let state = webView.interactionState
+        let image = try? await webView.takeSnapshot(configuration: nil)
+        guard !isHibernated, webView.url == url else { return }   // navigated meanwhile
+        isHibernated = true
+        hibernatedState = state
+        hibernatedURL = url
+        hibernatedTitle = window?.title ?? ""
+        if let image { showSnapshot(image) }
+        replaceWebView()
+        window?.tab.attributedTitle = NSAttributedString(string: hibernatedTitle, attributes: [
+            .foregroundColor: NSColor.tertiaryLabelColor,
+            .font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize),
+        ])
+        window?.tab.toolTip = "\(hibernatedTitle)\nSleeping to save memory. It wakes when you open it."
+    }
+
+    /// Back as it was, with the picture shown until the page has drawn.
+    func wake() {
+        guard isHibernated else { return }
+        isHibernated = false
+        window?.tab.attributedTitle = nil
+        window?.tab.toolTip = nil
+        if let state = hibernatedState { webView.interactionState = state } else if let url = hibernatedURL { webView.load(URLRequest(url: url)) }
+        hibernatedState = nil
+        hibernatedURL = nil
+        // Should the page never finish, the picture must not stay forever.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in self?.hideSnapshot() }
+    }
+
+    /// Swaps in a web view that has loaded nothing, and lets the old one go
+    /// with its page and web process. Everything that talks to the page is
+    /// pointed at the new one.
+    private func replaceWebView() {
+        let old = webView
+        let fresh = BrowserWebView(frame: .zero, configuration: configuration)
+        fresh.navigationDelegate = self
+        fresh.uiDelegate = self
+        fresh.allowsBackForwardNavigationGestures = true
+        fresh.isInspectable = true
+        fresh.customUserAgent = old.customUserAgent
+        fresh.pageZoom = old.pageZoom
+        fresh.contextMenu = contextMenu
+        fresh.translatesAutoresizingMaskIntoConstraints = false
+
+        old.stopLoading()
+        old.navigationDelegate = nil
+        old.uiDelegate = nil
+        NSLayoutConstraint.deactivate(fillConstraints + deviceConstraints)
+        deviceConstraints = []
+        pageContainer.replaceSubview(old, with: fresh)
+        webView = fresh
+        fillConstraints = [
+            fresh.leadingAnchor.constraint(equalTo: pageContainer.leadingAnchor),
+            fresh.trailingAnchor.constraint(equalTo: pageContainer.trailingAnchor),
+            fresh.topAnchor.constraint(equalTo: pageContainer.topAnchor),
+            fresh.bottomAnchor.constraint(equalTo: pageContainer.bottomAnchor),
+        ]
+        NSLayoutConstraint.activate(fillConstraints)
+
+        contextMenu.webView = fresh
+        translator.webView = fresh
+        downloads.webView = fresh
+        passwordCoordinator.webView = fresh
+        // The inspector and recording panel were bound to the old page.
+        madeProtocolBridge = nil
+        devTools?.tearDown()
+        devTools = nil
+        recorderPanel?.close()
+        recorderPanel = nil
+        emulation = nil
+    }
+
+    private func showSnapshot(_ image: NSImage) {
+        snapshotView.image = image
+        snapshotView.imageScaling = .scaleAxesIndependently
+        snapshotView.translatesAutoresizingMaskIntoConstraints = false
+        if snapshotView.superview == nil {
+            pageContainer.addSubview(snapshotView, positioned: .above, relativeTo: webView)
+            NSLayoutConstraint.activate([
+                snapshotView.leadingAnchor.constraint(equalTo: pageContainer.leadingAnchor),
+                snapshotView.trailingAnchor.constraint(equalTo: pageContainer.trailingAnchor),
+                snapshotView.topAnchor.constraint(equalTo: pageContainer.topAnchor),
+                snapshotView.bottomAnchor.constraint(equalTo: pageContainer.bottomAnchor),
+            ])
+        }
+    }
+
+    private func hideSnapshot() {
+        guard !isHibernated else { return }
+        snapshotView.removeFromSuperview()
+        snapshotView.image = nil
+    }
+
     /// Back/forward list, scroll position and form state, for Reopen Closed Tab.
     var interactionState: Any? {
-        get { webView.interactionState }
+        get { isHibernated ? hibernatedState : webView.interactionState }
         set { webView.interactionState = newValue }
     }
 
@@ -277,6 +408,12 @@ final class BrowserWindowController: NSWindowController,
     }
 
     func load(_ url: URL) {
+        if isHibernated {
+            isHibernated = false
+            hibernatedState = nil
+            window?.tab.attributedTitle = nil
+            hideSnapshot()
+        }
         webView.load(URLRequest(url: url))
     }
 
@@ -346,7 +483,7 @@ final class BrowserWindowController: NSWindowController,
     }
 
     /// The page currently showing, for "Set to Current Page" in Settings.
-    var currentURL: URL? { webView.url }
+    var currentURL: URL? { isHibernated ? hibernatedURL : webView.url }
 
     @objc func focusAddressBar(_ sender: Any?) {
         window?.makeFirstResponder(addressField)
@@ -498,7 +635,14 @@ final class BrowserWindowController: NSWindowController,
 
     // MARK: - Inspector protocol
 
-    private(set) lazy var protocolBridge = InspectorProtocolBridge(page: webView)
+    private var madeProtocolBridge: InspectorProtocolBridge?
+    /// Made on first use, for the web view the tab has then.
+    var protocolBridge: InspectorProtocolBridge {
+        if let madeProtocolBridge { return madeProtocolBridge }
+        let bridge = InspectorProtocolBridge(page: webView)
+        madeProtocolBridge = bridge
+        return bridge
+    }
 
     /// Developer aid: exercises the protocol bridge and reports what it found.
     func protocolProbe() async -> [String: Any] {
@@ -637,6 +781,8 @@ final class BrowserWindowController: NSWindowController,
     }
 
     private func syncChrome() {
+        // A sleeping tab shows the page it will wake to, not the blank one.
+        if isHibernated { return }
         if !isEditingAddress {
             addressField.stringValue = webView.url?.absoluteString ?? ""
         }
@@ -734,7 +880,22 @@ final class BrowserWindowController: NSWindowController,
     // MARK: - NSWindowDelegate
 
     func windowDidBecomeKey(_ notification: Notification) {
-        if (notification.object as? NSWindow) === window { onBecomeKey?() }
+        guard (notification.object as? NSWindow) === window else { return }
+        lastActive = Date()
+        wake()
+        onBecomeKey?()
+    }
+
+    /// A tab shown by any means (selected, merged, its window brought
+    /// forward, even with the app in the background) wakes.
+    func windowDidChangeOcclusionState(_ notification: Notification) {
+        guard (notification.object as? NSWindow) === window, window?.occlusionState.contains(.visible) == true else { return }
+        lastActive = Date()
+        wake()
+    }
+
+    func windowDidResignKey(_ notification: Notification) {
+        if (notification.object as? NSWindow) === window { lastActive = Date() }
     }
 
     func windowWillClose(_ notification: Notification) {
@@ -742,7 +903,7 @@ final class BrowserWindowController: NSWindowController,
             hideDevTools()
             return
         }
-        onTabClosed?(webView.url, webView.interactionState as? Data, window?.title ?? "")
+        onTabClosed?(currentURL, interactionState as? Data, isHibernated ? hibernatedTitle : window?.title ?? "")
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
         keyMonitor = nil
         recorderPanel?.close()
@@ -881,6 +1042,7 @@ final class BrowserWindowController: NSWindowController,
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        if !isHibernated { hideSnapshot() }
         recordNavigation(.finished)
         passwordCoordinator.didFinishNavigation()
         syncChrome()

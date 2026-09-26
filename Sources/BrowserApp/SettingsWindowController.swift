@@ -21,6 +21,8 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate, N
     private let useCurrentButton = NSButton(title: "Set to Current Page", target: nil, action: nil)
     private let resetButton = NSButton(title: "Reset to Default", target: nil, action: nil)
     private let newWindowPopUp = NSPopUpButton(frame: .zero, pullsDown: false)
+    let memorySaverCheckbox = NSButton(checkboxWithTitle: "Put inactive tabs to sleep to save memory", target: nil, action: nil)
+    let keepActiveField = NSTextField()
 
     enum Pane: Int { case general, passwords }
 
@@ -109,12 +111,28 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate, N
         newWindowPopUp.action = #selector(newWindowContentChanged(_:))
         newWindowPopUp.setAccessibilityLabel("New windows open with")
 
+        let memoryTitle = NSTextField(labelWithString: "Memory Saver:")
+        memoryTitle.alignment = .right
+        memorySaverCheckbox.target = self
+        memorySaverCheckbox.action = #selector(memorySaverChanged(_:))
+        keepActiveField.placeholderString = "Always keep these sites active, e.g. music.example.com, mail.example.com"
+        keepActiveField.delegate = self
+        keepActiveField.setAccessibilityLabel("Always keep these sites active")
+        let memoryHelp = NSTextField(wrappingLabelWithString:
+            "Tabs you have not used for a while, or more than a dozen in the background, sleep and wake as they were when you open them. "
+            + "Tabs playing sound, using the camera or holding a half-filled form never sleep.")
+        memoryHelp.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        memoryHelp.textColor = .secondaryLabelColor
+
         let grid = NSGridView(views: [
             [title, homepageField],
             [NSGridCell.emptyContentView, resolvedLabel],
             [NSGridCell.emptyContentView, buttons],
             [NSGridCell.emptyContentView, help],
             [newWindowTitle, newWindowPopUp],
+            [memoryTitle, memorySaverCheckbox],
+            [NSGridCell.emptyContentView, keepActiveField],
+            [NSGridCell.emptyContentView, memoryHelp],
         ])
         grid.rowSpacing = 8
         grid.columnSpacing = 10
@@ -126,6 +144,8 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate, N
         grid.row(at: 4).topPadding = 10
         grid.row(at: 4).yPlacement = .center
         grid.cell(for: newWindowPopUp)?.xPlacement = .leading
+        grid.row(at: 5).topPadding = 12
+        grid.cell(for: memorySaverCheckbox)?.xPlacement = .leading
         grid.translatesAutoresizingMaskIntoConstraints = false
 
         let root = NSView()
@@ -144,7 +164,15 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate, N
 
     // MARK: - State
 
+    @objc private func memorySaverChanged(_ sender: Any?) {
+        BrowserSettings.memorySaver = memorySaverCheckbox.state == .on
+        keepActiveField.isEnabled = BrowserSettings.memorySaver
+    }
+
     private func refresh() {
+        memorySaverCheckbox.state = BrowserSettings.memorySaver ? .on : .off
+        keepActiveField.stringValue = BrowserSettings.keepActiveSites.joined(separator: ", ")
+        keepActiveField.isEnabled = BrowserSettings.memorySaver
         homepageField.stringValue = BrowserSettings.homepage
         let contents = BrowserSettings.NewWindowContent.allCases
         newWindowPopUp.selectItem(at: contents.firstIndex(of: BrowserSettings.newWindowContent) ?? 0)
@@ -170,6 +198,16 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate, N
     // MARK: - Actions
 
     func controlTextDidChange(_ notification: Notification) {
+        if (notification.object as? NSTextField) === keepActiveField {
+            // Hosts, however they were typed: "https://Music.example.com/x" is music.example.com.
+            BrowserSettings.keepActiveSites = keepActiveField.stringValue
+                .split(whereSeparator: { $0 == "," || $0 == " " || $0 == "\n" })
+                .compactMap { entry in
+                    let text = String(entry)
+                    return (URL(string: text.contains("://") ? text : "https://" + text)?.host()).flatMap { $0.isEmpty ? nil : $0 }
+                }
+            return
+        }
         BrowserSettings.homepage = homepageField.stringValue
         updateResolved()
     }

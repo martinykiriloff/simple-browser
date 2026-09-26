@@ -8,6 +8,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var controllers: [BrowserWindowController] = []
     let profiles = ProfileStore()
     let updater = Updater()
+    private(set) lazy var memorySaver = MemorySaver { [weak self] in self?.controllers ?? [] }
     /// The app's Profiles menu follows whichever browser window is in front.
     private(set) lazy var profilesMenuFiller = ProfilesMenuFiller(store: profiles) { [weak self] in
         self?.currentProfile ?? Profile(name: "Default")
@@ -105,6 +106,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             newWindow(nil)
         }
         startUpdater()
+        memorySaver.start()
         if let path = launch.dumpRecordingPath {
             startDumping(to: URL(fileURLWithPath: path))
         }

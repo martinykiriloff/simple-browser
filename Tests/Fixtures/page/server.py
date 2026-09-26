@@ -90,6 +90,11 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.split("?")[0]
         if path == "/":
             self.send(200, ARTICLE)
+        elif path == "/long":
+            rows = "".join(f"<p style='height:40px'>Paragraph {i}</p>" for i in range(200))
+            self.send(200, f"<!doctype html><title>Long page</title><body>{rows}</body>")
+        elif path == "/form":
+            self.send(200, "<!doctype html><title>A form</title><input id=field><p>Half-filled forms must not sleep.</p>")
         elif path == "/tabs":
             self.send(200, TABS)
         elif path == "/popup":

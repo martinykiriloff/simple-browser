@@ -71,5 +71,27 @@ do {
     check("the roster round-trips through JSON", false, error)
 }
 
+// MARK: Eviction
+
+do {
+    let now = Date()
+    func tab(_ minutesAgo: Double, pinned: Bool = false) -> TabState {
+        TabState(isPinned: pinned, lastActive: now.addingTimeInterval(-minutesAgo * 60))
+    }
+    let tabs = (0..<6).map { tab(Double($0)) }          // tabs[0] used most recently
+    let policy = EvictionPolicy(liveBudget: 4)
+    let shown: Set<TabID> = [tabs[0].id, tabs[5].id]
+    let chosen = policy.tabsToHibernate(live: tabs, protected: shown, pressure: .normal, now: now, inactivityLimit: nil)
+    check("over budget: the least recently used go first", chosen == [tabs[4].id, tabs[3].id], chosen.count)
+    check("tabs on screen are never chosen, however old", !chosen.contains(tabs[5].id))
+    let critical = policy.tabsToHibernate(live: tabs, protected: shown, pressure: .critical, now: now, inactivityLimit: nil)
+    check("critical pressure keeps only what is on screen", Set(critical) == Set(tabs.map(\.id)).subtracting(shown), critical.count)
+    let idle = [tab(0), tab(45), tab(10)]
+    let byTime = EvictionPolicy(liveBudget: 10).tabsToHibernate(live: idle, protected: [idle[0].id], pressure: .normal, now: now)
+    check("under budget, a tab idle past the limit still sleeps", byTime == [idle[1].id], byTime.count)
+    let pinned = [tab(0), tab(90, pinned: true)]
+    check("pinned tabs never sleep", EvictionPolicy(liveBudget: 1).tabsToHibernate(live: pinned, protected: [pinned[0].id], pressure: .critical, now: now).isEmpty)
+}
+
 print(failures == 0 ? "✔ \(passed) checks passed" : "\(failures) of \(passed + failures) checks failed")
 exit(failures == 0 ? 0 : 1)
