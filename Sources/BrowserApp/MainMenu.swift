@@ -5,13 +5,14 @@ import AppKit
 /// the app delegate.
 @MainActor
 enum MainMenu {
-    static func install(profilesMenuDelegate: NSMenuDelegate, historyMenuDelegate: NSMenuDelegate) {
+    static func install(profilesMenuDelegate: NSMenuDelegate, historyMenuDelegate: NSMenuDelegate, bookmarksMenuDelegate: NSMenuDelegate) {
         let mainMenu = NSMenu()
         mainMenu.addItem(appMenuItem())
         mainMenu.addItem(fileMenuItem())
         mainMenu.addItem(editMenuItem())
         mainMenu.addItem(viewMenuItem())
         mainMenu.addItem(historyMenuItem(delegate: historyMenuDelegate))
+        mainMenu.addItem(bookmarksMenuItem(delegate: bookmarksMenuDelegate))
         mainMenu.addItem(profilesMenuItem(delegate: profilesMenuDelegate))
         mainMenu.addItem(developMenuItem())
         mainMenu.addItem(windowMenuItem())
@@ -116,6 +117,22 @@ enum MainMenu {
         menu.addItem(.separator())
         menu.addItem(withTitle: "Show All History", action: #selector(AppDelegate.showHistory(_:)), keyEquivalent: "y")
         menu.addItem(withTitle: "Clear History…", action: #selector(AppDelegate.clearHistoryAction(_:)), keyEquivalent: "")
+        return wrap(menu)
+    }
+
+    /// Add, show and the bookmarks themselves, filled when it opens.
+    private static func bookmarksMenuItem(delegate: NSMenuDelegate) -> NSMenuItem {
+        let menu = NSMenu(title: "Bookmarks")
+        menu.delegate = delegate
+        menu.addItem(withTitle: "Add Bookmark…", action: #selector(BrowserWindowController.addBookmark(_:)), keyEquivalent: "d")
+        let reading = menu.addItem(withTitle: "Add to Reading List",
+                                   action: #selector(BrowserWindowController.addToReadingList(_:)), keyEquivalent: "d")
+        reading.keyEquivalentModifierMask = [.command, .shift]
+        let show = menu.addItem(withTitle: "Show Bookmarks", action: #selector(AppDelegate.showBookmarks(_:)), keyEquivalent: "b")
+        show.keyEquivalentModifierMask = [.command, .option]
+        let bar = menu.addItem(withTitle: "Hide Favorites Bar",
+                               action: #selector(BrowserWindowController.toggleFavoritesBar(_:)), keyEquivalent: "b")
+        bar.keyEquivalentModifierMask = [.command, .shift]
         return wrap(menu)
     }
 

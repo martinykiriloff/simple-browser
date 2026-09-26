@@ -31,6 +31,7 @@ final class FeatureSelfTest {
             UserDefaults.standard.removePersistentDomain(forName: suite)
             if let scratch = UserDefaults(suiteName: suite) { BrowserSettings.store = scratch }
             BrowserSettings.newWindowContent = .empty
+            BrowserSettings.showFavoritesBar = true
             await test.pause(1)
             // "session-seed" and "session-verify" belong to scripts/test-session.sh,
             // either side of a SIGKILL: they run only when named.
@@ -52,7 +53,7 @@ final class FeatureSelfTest {
 
     /// One entry per ticket, in the order they were built.
     var sections: [(String, () async -> Void)] {
-        [("tabs", tabs), ("hibernation", hibernation), ("session", sessionRoundTrip), ("history", history),
+        [("tabs", tabs), ("hibernation", hibernation), ("session", sessionRoundTrip), ("history", history), ("bookmarks", bookmarks),
          ("session-seed", sessionSeed), ("session-verify", sessionVerify)]
     }
 
@@ -121,6 +122,86 @@ final class FeatureSelfTest {
             window.sendEvent(event)
         }
         return true
+    }
+
+    // MARK: - #7 Bookmarks, favorites bar, start page, reading list
+
+    func bookmarks() async {
+        let browser = first
+        browser.window?.makeKeyAndOrderFront(nil)
+        guard let store = app.bookmarks(for: browser.profile) else { check("bookmarks: the profile has bookmarks", false); return }
+
+        BrowserSettings.newWindowContent = .startPage
+        let fresh = app.newTab(beside: browser)
+        check("bookmarks: a new tab opens the start page", await waitFor { StartPageSchemeHandler.isStartPage(fresh.pageWebView.url) && !fresh.pageWebView.isLoading })
+        check("bookmarks: …with the address bar empty, ready to type", fresh.addressText.isEmpty, fresh.addressText)
+        check("bookmarks: …titled Start Page", (await js("return document.title", in: fresh) as? String) == "Start Page")
+        fresh.window?.close()
+        BrowserSettings.newWindowContent = .empty
+        browser.window?.makeKeyAndOrderFront(nil)
+
+        await open("/second", in: browser)
+        browser.addBookmark(nil)
+        let popover = await waitFor { browser.lastBookmarkPopover?.isViewLoaded == true }
+        check("bookmarks: ⌘D opens the bookmark popover", popover)
+        if let editor = browser.lastBookmarkPopover {
+            check("bookmarks: …named after the page", editor.titleField.stringValue == "Second", editor.titleField.stringValue)
+            check("bookmarks: …in Favorites", editor.folderPopUp.titleOfSelectedItem == "Favorites")
+            editor.done(nil)
+        }
+        check("bookmarks: Return saves it", (try? store.bookmark(for: URL(string: site + "/second")!)) != nil)
+        check("bookmarks: …the favorites bar shows it", await waitFor { browser.favoritesBar.titles == ["Second"] }, browser.favoritesBar.titles)
+        check("bookmarks: …the star fills in", browser.isStarFilled)
+
+        await open("/tabs", in: browser)
+        check("bookmarks: the star is empty on a page that is not bookmarked", !browser.isStarFilled)
+        await open("/tabs", in: browser)   // a second visit makes it frequent
+        browser.load(StartPageSchemeHandler.url)
+        _ = await waitFor { StartPageSchemeHandler.isStartPage(browser.pageWebView.url) && !browser.pageWebView.isLoading }
+        let tiles = await js("return Array.from(document.querySelectorAll('.tile .label')).map(e => e.textContent)", in: browser) as? [String] ?? []
+        check("bookmarks: the start page shows favorites", tiles.contains("Second"), tiles)
+        check("bookmarks: …and frequently visited sites", tiles.contains("Tabs"), tiles)
+
+        // Reading list, with its offline copy.
+        await open("/long", in: browser)
+        browser.addToReadingList(nil)
+        check("bookmarks: Add to Reading List (⇧⌘D) saves it", await waitFor { ((try? store.readingList()) ?? []).contains { $0.url.path == "/long" } })
+        let item = try? store.readingList().first { $0.url.path == "/long" }
+        let archive = item.map { app.readingListArchive(for: browser.profile, $0) }
+        check("bookmarks: …with a copy to read offline", await waitFor(5) { archive.map { FileManager.default.fileExists(atPath: $0.path) } ?? false })
+
+        // Offline: a reading-list page whose server cannot be reached opens from its copy.
+        // An ordinary port nothing listens on (WebKit refuses the low "restricted" ones outright).
+        let deadURL = URL(string: "http://127.0.0.1:59431/article")!
+        if let archive, let deadID = try? store.addToReadingList(url: deadURL, title: "Offline article"),
+           let deadItem = try? store.readingList().first(where: { $0.id == deadID }) {
+            let copy = app.readingListArchive(for: browser.profile, deadItem)
+            try? FileManager.default.createDirectory(at: copy.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? FileManager.default.removeItem(at: copy)
+            try? FileManager.default.copyItem(at: archive, to: copy)
+            browser.load(deadURL)
+            check("bookmarks: offline, a reading-list page opens from its saved copy",
+                  await waitFor(10) { browser.pageWebView.url?.isFileURL == true }, browser.pageWebView.url as Any)
+            check("bookmarks: …and says so", browser.lastNotice?.contains("offline") == true, browser.lastNotice as Any)
+        }
+
+        // The Bookmarks menu, the manager and hiding the bar.
+        let menu = NSApp.mainMenu?.items.first { $0.submenu?.title == "Bookmarks" }?.submenu ?? NSMenu()
+        app.bookmarksMenuFiller.menuNeedsUpdate(menu)
+        let favoritesMenu = menu.items.first { $0.title == "Favorites" }?.submenu?.items.map(\.title) ?? []
+        check("bookmarks: the Bookmarks menu lists favorites", favoritesMenu == ["Second"], favoritesMenu)
+        app.showBookmarks(nil)
+        let manager = NSApp.windows.first { $0.title.hasPrefix("Bookmarks —") }?.windowController as? BookmarksWindowController
+        check("bookmarks: Show Bookmarks (⌥⌘B) opens the manager", manager != nil)
+        check("bookmarks: …with Favorites open", (manager?.outline.numberOfRows ?? 0) >= 3, manager?.outline.numberOfRows as Any)
+        snapshot(manager?.window, "bookmarks")
+        manager?.window?.close()
+
+        browser.toggleFavoritesBar(nil)
+        check("bookmarks: ⇧⌘B hides the favorites bar", await waitFor { browser.window?.titlebarAccessoryViewControllers.contains(browser.favoritesBar) == false })
+        browser.toggleFavoritesBar(nil)
+        check("bookmarks: …and shows it again", await waitFor { browser.window?.titlebarAccessoryViewControllers.contains(browser.favoritesBar) == true })
+        snapshot(browser.window, "favorites-bar")
     }
 
     // MARK: - #6 History

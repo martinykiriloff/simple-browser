@@ -1,6 +1,7 @@
 import AppKit
 import WebKit
 import BrowserKit
+import DataKit
 import TranslateKit
 import InspectKit
 
@@ -88,11 +89,20 @@ final class BrowserWindowController: NSWindowController,
     private var pageObservations: [NSKeyValueObservation] = []
     private let backButton = NavigationButton()
     private let forwardButton = NavigationButton()
+    // Bookmarks, set by the app delegate.
+    /// The profile's bookmarks and reading list.
+    var bookmarks: (() -> BookmarkStore?)?
+    /// After a change here, so every window's star, bar and menu follow.
+    var onBookmarksChanged: (() -> Void)?
+    /// Where the reading list keeps its offline copy of a page.
+    var readingListArchive: ((BookmarkStore.ReadingItem) -> URL)?
+    private let starButton = NSButton()
+    let favoritesBar = FavoritesBarController()
     /// Called as the tab closes, with what "Reopen Closed Tab" needs.
     var onTabClosed: ((URL?, Data?, String) -> Void)?
 
     init(profile: Profile, recorder: InspectorRecorder, passwords: PasswordService,
-         configuration popupConfiguration: WKWebViewConfiguration? = nil) {
+         configuration popupConfiguration: WKWebViewConfiguration? = nil, startPage: StartPageSchemeHandler? = nil) {
         self.profile = profile
         self.recorder = recorder
         self.bridge = InspectorBridge(recorder: recorder, tab: tab)
@@ -112,6 +122,7 @@ final class BrowserWindowController: NSWindowController,
             // Per-profile isolation at the WebKit level. Never `.default()`.
             configuration.websiteDataStore = WKWebsiteDataStore(forIdentifier: profile.dataStoreIdentifier)
         }
+        if let startPage { StartPageSchemeHandler.install(startPage, into: configuration) }
         // Keeps the `_inspector` object alive for the WebKit-inspector menu item.
         WebInspectorSPI.enableDeveloperExtras(on: configuration)
         WebInspectorSPI.keepDebuggableWhenHidden(configuration)
@@ -192,6 +203,7 @@ final class BrowserWindowController: NSWindowController,
 
         configureAddressField()
         configureNavigationButtons()
+        configureStarButton()
         observePage()
         configureProfileButton()
         configureTranslateButton()
@@ -843,6 +855,78 @@ final class BrowserWindowController: NSWindowController,
         }
     }
 
+    // MARK: - Bookmarks
+
+    private func configureStarButton() {
+        starButton.bezelStyle = .toolbar
+        starButton.target = self
+        starButton.action = #selector(addBookmark(_:))
+        starButton.setAccessibilityLabel("Bookmark this page")
+        syncStar()
+    }
+
+    /// Filled when this page is bookmarked.
+    func syncStar() {
+        let bookmarked = webView.url.flatMap { try? bookmarks?()?.bookmark(for: $0) } != nil
+        starButton.image = NSImage(systemSymbolName: bookmarked ? "star.fill" : "star", accessibilityDescription: "Bookmark")?
+            .withSymbolConfiguration(.init(paletteColors: [bookmarked ? .systemYellow : .labelColor]))
+        starButton.toolTip = bookmarked ? "Edit bookmark (⌘D)" : "Bookmark this page (⌘D)"
+        starButton.isEnabled = !(StartPageSchemeHandler.isStartPage(webView.url) || webView.url == nil)
+    }
+
+    /// Bookmarks → Add Bookmark… (⌘D), and the star.
+    @objc func addBookmark(_ sender: Any?) {
+        guard let url = currentURL, !StartPageSchemeHandler.isStartPage(url), let store = bookmarks?() else { return }
+        let controller = AddBookmarkController(store: store, url: url, title: window?.title ?? "") { [weak self] in
+            self?.onBookmarksChanged?()
+        }
+        lastBookmarkPopover = controller
+        let popover = NSPopover()
+        popover.contentViewController = controller
+        popover.behavior = .transient
+        if starButton.window != nil {
+            popover.show(relativeTo: starButton.bounds, of: starButton, preferredEdge: .maxY)
+        } else if let content = window?.contentView {
+            popover.show(relativeTo: NSRect(x: content.bounds.midX, y: content.bounds.maxY - 4, width: 1, height: 1), of: content, preferredEdge: .minY)
+        }
+    }
+    /// For the self-test.
+    private(set) weak var lastBookmarkPopover: AddBookmarkController?
+
+    /// Bookmarks → Add to Reading List (⇧⌘D): saved with an offline copy.
+    @objc func addToReadingList(_ sender: Any?) {
+        guard let url = webView.url, url.scheme?.hasPrefix("http") == true, let store = bookmarks?() else { return }
+        guard let id = try? store.addToReadingList(url: url, title: webView.title ?? ""),
+              let item = try? store.readingList().first(where: { $0.id == id }), let file = readingListArchive?(item) else { return }
+        onBookmarksChanged?()
+        webView.createWebArchiveData { result in
+            if case .success(let data) = result {
+                try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try? data.write(to: file, options: .atomic)
+            }
+        }
+        showNotice("Added to your Reading List, with a copy to read offline.", seconds: 3)
+    }
+
+    /// View → Show Favorites Bar (⇧⌘B): every window follows.
+    @objc func toggleFavoritesBar(_ sender: Any?) {
+        BrowserSettings.showFavoritesBar.toggle()
+        NotificationCenter.default.post(name: .bookmarksDidChange, object: nil)
+    }
+
+    /// Shows or hides the bar to match the setting, with current favorites.
+    func syncFavoritesBar() {
+        guard let window else { return }
+        let attached = window.titlebarAccessoryViewControllers.contains(favoritesBar)
+        if BrowserSettings.showFavoritesBar && !attached {
+            window.addTitlebarAccessoryViewController(favoritesBar)
+        } else if !BrowserSettings.showFavoritesBar, let index = window.titlebarAccessoryViewControllers.firstIndex(of: favoritesBar) {
+            window.removeTitlebarAccessoryViewController(at: index)
+        }
+        favoritesBar.reload()
+        syncStar()
+    }
+
     // MARK: - History
 
     private var lastRecordedURL: URL?
@@ -956,8 +1040,11 @@ final class BrowserWindowController: NSWindowController,
         // A sleeping tab shows the page it will wake to, not the blank one.
         if isHibernated { return }
         syncNavigationButtons()
+        syncStar()
         if !isEditingAddress {
-            addressField.stringValue = webView.url?.absoluteString ?? ""
+            // The start page is the browser's own: the address bar stays
+            // empty and ready for typing, as on a new tab everywhere.
+            addressField.stringValue = StartPageSchemeHandler.isStartPage(webView.url) ? "" : webView.url?.absoluteString ?? ""
         }
         let title = webView.title.flatMap { $0.isEmpty ? nil : $0 }
         let resolved = title ?? webView.url?.host() ?? "SimpleBrowser"
@@ -1008,6 +1095,11 @@ final class BrowserWindowController: NSWindowController,
 
     /// Developer aid, for the self-tests.
     var pageView: BrowserWebView? { webView }
+
+    /// Developer aid: what the address bar shows.
+    var addressText: String { addressField.stringValue }
+    /// Developer aid: whether the star says "bookmarked".
+    var isStarFilled: Bool { starButton.toolTip?.hasPrefix("Edit") == true }
 
     /// Developer aid: types into the address bar and presses Return.
     func enterAddress(_ text: String) {
@@ -1115,6 +1207,10 @@ final class BrowserWindowController: NSWindowController,
             return !translator.optedOut && webView.url != nil
         case #selector(showOriginalPage(_:)):
             return translator.isTranslated
+        case #selector(toggleFavoritesBar(_:)):
+            menuItem.title = BrowserSettings.showFavoritesBar ? "Hide Favorites Bar" : "Show Favorites Bar"
+        case #selector(addBookmark(_:)), #selector(addToReadingList(_:)):
+            return currentURL.map { $0.scheme?.hasPrefix("http") == true } ?? false
         default:
             break
         }
@@ -1124,7 +1220,7 @@ final class BrowserWindowController: NSWindowController,
     // MARK: - NSToolbarDelegate
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.back, .forward, .reload, .home, .address, .translate, .passwords, .flexibleSpace, .devTools, .profile]
+        [.back, .forward, .reload, .home, .address, .star, .translate, .passwords, .flexibleSpace, .devTools, .profile]
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
@@ -1168,6 +1264,11 @@ final class BrowserWindowController: NSWindowController,
             item.view = profileButton
             item.label = "Profile"
             item.visibilityPriority = .high
+            return item
+        case .star:
+            let item = NSToolbarItem(itemIdentifier: identifier)
+            item.view = starButton
+            item.label = "Bookmark"
             return item
         case .translate:
             let item = NSToolbarItem(itemIdentifier: identifier)
@@ -1318,6 +1419,17 @@ final class BrowserWindowController: NSWindowController,
         let failedURL = (nsError.userInfo[NSURLErrorFailingURLErrorKey] as? URL)
         recordNavigation(.failed, url: failedURL ?? webView.url, detail: error.localizedDescription)
 
+        // Offline, a reading-list page opens from its saved copy.
+        let offline = [NSURLErrorNotConnectedToInternet, NSURLErrorNetworkConnectionLost, NSURLErrorCannotFindHost,
+                       NSURLErrorCannotConnectToHost, NSURLErrorTimedOut, NSURLErrorDNSLookupFailed]
+        if nsError.domain == NSURLErrorDomain, offline.contains(nsError.code), let failedURL,
+           let item = try? bookmarks?()?.readingItem(for: failedURL), let file = readingListArchive?(item),
+           FileManager.default.fileExists(atPath: file.path) {
+            webView.loadFileURL(file, allowingReadAccessTo: file.deletingLastPathComponent())
+            showNotice("You’re offline. This is the copy saved in your Reading List.")
+            return
+        }
+
         let failedURLString = failedURL?.absoluteString ?? ""
         let html = """
         <!doctype html><meta charset="utf-8">
@@ -1372,4 +1484,5 @@ private extension NSToolbarItem.Identifier {
     static let devTools = NSToolbarItem.Identifier("devtools")
     static let profile  = NSToolbarItem.Identifier("profile")
     static let translate = NSToolbarItem.Identifier("translate")
+    static let star = NSToolbarItem.Identifier("star")
 }

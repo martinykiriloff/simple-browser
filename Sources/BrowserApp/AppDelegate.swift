@@ -12,6 +12,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private(set) lazy var session = SessionController(directory: launch.sessionDirectory.map { URL(fileURLWithPath: $0) })
     private var closedWindows: [SessionSnapshot.Window] = []
     private var histories: [ProfileID: HistoryStore] = [:]
+    private var bookmarkStores: [ProfileID: BookmarkStore] = [:]
+    private var bookmarkWindows: [ProfileID: BookmarksWindowController] = [:]
+    private var startPages: [ProfileID: StartPageSchemeHandler] = [:]
+    private(set) lazy var bookmarksMenuFiller = BookmarksMenuFiller { [weak self] in
+        guard let self else { return nil }
+        return self.bookmarks(for: self.currentProfile)
+    }
     private var historyWindows: [ProfileID: HistoryWindowController] = [:]
     /// Fills the History menu's recent pages each time it opens.
     private(set) lazy var historyMenuFiller = HistoryMenuFiller { [weak self] in
@@ -65,7 +72,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        MainMenu.install(profilesMenuDelegate: profilesMenuFiller, historyMenuDelegate: historyMenuFiller)
+        MainMenu.install(profilesMenuDelegate: profilesMenuFiller, historyMenuDelegate: historyMenuFiller,
+                         bookmarksMenuDelegate: bookmarksMenuFiller)
+        NotificationCenter.default.addObserver(forName: .bookmarksDidChange, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                for controller in self.controllers { controller.syncFavoritesBar() }
+                for window in self.bookmarkWindows.values { window.reload() }
+            }
+        }
         NotificationCenter.default.addObserver(forName: ProfileStore.didChange, object: profiles, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.profilesDidChange() }
         }
@@ -236,6 +251,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let profileID: ProfileID
         let url: URL?
         let state: Data?
+        var title = ""
     }
     /// Most recent last. Tabs of a window closed at quit are not "closed tabs".
     private var closedTabs: [ClosedTab] = []
@@ -262,7 +278,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             tab.load(url)
         } else if configuration == nil {
             if inFront { tab.focusAddressBar(nil) }
-            if BrowserSettings.newWindowContent == .homepage { tab.load(BrowserSettings.homepageURL) }
+            loadNewTabContent(in: tab)
         }
         return tab
     }
@@ -372,6 +388,95 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func openHistoryItem(_ sender: Any?) {
         guard let url = (sender as? NSMenuItem)?.representedObject as? URL else { return }
         if let browser = frontmostBrowser { browser.load(url) } else { newTab(beside: nil, url: url) }
+    }
+
+    // MARK: - Bookmarks
+
+    /// Whether this run keeps its data in memory (self-tests), never in the person's files.
+    private var usesScratchData: Bool {
+        launch.featureSelfTestOutput != nil || launch.pageSelfTestOutput != nil || launch.passwordsSelfTestOutput != nil
+            || launch.uiSelfTestOutput != nil
+    }
+
+    private func profileDirectory(_ profile: Profile) -> URL {
+        let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("SimpleBrowser/Profiles/\(profile.id)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }
+
+    func bookmarks(for profile: Profile) -> BookmarkStore? {
+        if let store = bookmarkStores[profile.id] { return store }
+        let store = usesScratchData ? try? BookmarkStore(path: nil)
+            : try? BookmarkStore(path: profileDirectory(profile).appendingPathComponent("Bookmarks.sqlite").path)
+        bookmarkStores[profile.id] = store
+        return store
+    }
+
+    func readingListArchive(for profile: Profile, _ item: BookmarkStore.ReadingItem) -> URL {
+        let base = usesScratchData ? FileManager.default.temporaryDirectory.appendingPathComponent("SimpleBrowser-selftest-\(profile.id)")
+            : profileDirectory(profile)
+        return base.appendingPathComponent("ReadingList/\(item.id).webarchive")
+    }
+
+    /// The start page, built from this profile's data each time it loads.
+    private func startPage(for profile: Profile) -> StartPageSchemeHandler {
+        if let handler = startPages[profile.id] { return handler }
+        let handler = StartPageSchemeHandler { [weak self] in
+            guard let self else { return .init() }
+            var content = StartPageSchemeHandler.Content()
+            if let store = self.bookmarks(for: profile) {
+                content.favorites = store.favorites.compactMap { node in node.url.map { (node.title, $0) } }
+                content.reading = ((try? store.readingList(includeRead: false)) ?? []).map { ($0.title, $0.url) }
+            }
+            let favoriteURLs = Set(content.favorites.map(\.url))
+            content.frequent = ((try? self.history(for: profile)?.topPages(limit: 16)) ?? [])
+                .filter { !favoriteURLs.contains($0.url) }.prefix(12).map { ($0.title, $0.url) }
+            content.closed = self.closedTabs.reversed().filter { $0.profileID == profile.id }
+                .compactMap { tab in tab.url.map { (tab.title, $0) } }
+            return content
+        }
+        startPages[profile.id] = handler
+        return handler
+    }
+
+    /// What a new tab or window shows: the start page, the homepage, or nothing.
+    func loadNewTabContent(in tab: BrowserWindowController) {
+        switch BrowserSettings.newWindowContent {
+        case .startPage: tab.load(StartPageSchemeHandler.url)
+        case .homepage: tab.load(BrowserSettings.homepageURL)
+        case .empty: break
+        }
+    }
+
+    private func bookmarksChanged() {
+        NotificationCenter.default.post(name: .bookmarksDidChange, object: nil)
+    }
+
+    /// Bookmarks → Show Bookmarks (⌥⌘B), for the profile in front.
+    @objc func showBookmarks(_ sender: Any?) {
+        let profile = currentProfile
+        guard let store = bookmarks(for: profile) else { return }
+        let controller = bookmarkWindows[profile.id] ?? {
+            let controller = BookmarksWindowController(store: store, profile: profile)
+            controller.open = { [weak self] url, newTab in self?.openInProfile(profile, url: url, newTab: newTab) }
+            controller.changed = { [weak self] in self?.bookmarksChanged() }
+            bookmarkWindows[profile.id] = controller
+            return controller
+        }()
+        controller.reload()
+        controller.showWindow(sender)
+    }
+
+    /// A bookmark or reading-list item from a menu: this tab, or with ⌘ a new one.
+    @objc func openBookmarkItem(_ sender: Any?) {
+        guard let url = (sender as? NSMenuItem)?.representedObject as? URL else { return }
+        openInProfile(currentProfile, url: url, newTab: NSEvent.modifierFlags.contains(.command))
+    }
+
+    private func openInProfile(_ profile: Profile, url: URL, newTab: Bool) {
+        let browser = frontmostBrowser?.profile.id == profile.id ? frontmostBrowser : controllers.last { $0.profile.id == profile.id }
+        if newTab || browser == nil { self.newTab(beside: browser, url: url) } else { browser?.load(url); browser?.showWindow(nil) }
     }
 
     // MARK: - Session
@@ -510,6 +615,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for controller in controllers where controller.profile.id == id { controller.close() }
         passwordServices[id] = nil
         histories[id] = nil
+        bookmarkStores[id] = nil
+        startPages[id] = nil
+        bookmarkWindows[id]?.close()
+        bookmarkWindows[id] = nil
         historyWindows[id]?.close()
         historyWindows[id] = nil
         Task { @MainActor in
@@ -555,7 +664,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Loaded rather than sent Home: Home hands the keyboard to the page,
         // and a new window should leave it in the address bar, so typing a
         // destination straight after ⌘N works with a page loading behind it.
-        if BrowserSettings.newWindowContent == .homepage { controller.load(BrowserSettings.homepageURL) }
+        loadNewTabContent(in: controller)
     }
 
     @discardableResult
@@ -563,7 +672,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let profile = profile ?? currentProfile
         profiles.markUsed(profile.id)
         let controller = BrowserWindowController(profile: profile, recorder: recorder, passwords: passwords(for: profile),
-                                                 configuration: configuration)
+                                                 configuration: configuration, startPage: startPage(for: profile))
+        controller.bookmarks = { [weak self] in self?.bookmarks(for: profile) }
+        controller.onBookmarksChanged = { [weak self] in self?.bookmarksChanged() }
+        controller.readingListArchive = { [weak self] item in
+            self?.readingListArchive(for: profile, item) ?? FileManager.default.temporaryDirectory
+        }
+        controller.favoritesBar.items = { [weak self] in self?.bookmarks(for: profile)?.favorites ?? [] }
+        controller.favoritesBar.childrenOf = { [weak self] id in (try? self?.bookmarks(for: profile)?.children(of: id)) ?? [] }
+        controller.favoritesBar.open = { [weak self, weak controller] url, newTab in
+            if newTab { self?.newTab(beside: controller, url: url, inFront: false) } else { controller?.load(url) }
+        }
+        controller.syncFavoritesBar()
         controller.profilesMenuFiller = ProfilesMenuFiller(store: profiles) { [weak controller] in
             controller?.profile ?? profile
         }
@@ -592,11 +712,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         controller.onTitleChange = { [weak self] url, title in
             try? self?.history(for: profile)?.updateTitle(title, for: url)
         }
-        controller.onTabClosed = { [weak self, weak controller] url, state, _ in
+        controller.onTabClosed = { [weak self, weak controller] url, state, title in
             guard let self, let controller, !self.terminating, url != nil || state != nil else { return }
             // The last tab of a window closing is the window closing.
             if (controller.window?.tabbedWindows?.count ?? 1) <= 1 { self.rememberClosedWindow(controller) }
-            self.closedTabs.append(ClosedTab(profileID: controller.profile.id, url: url, state: state))
+            self.closedTabs.append(ClosedTab(profileID: controller.profile.id, url: url, state: state, title: title))
             if self.closedTabs.count > 25 { self.closedTabs.removeFirst() }
         }
         controllers.append(controller)

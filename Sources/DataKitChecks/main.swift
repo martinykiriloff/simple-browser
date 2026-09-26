@@ -76,5 +76,61 @@ do {
     check("history on disk", false, error)
 }
 
+// MARK: Bookmarks
+
+do {
+    let bookmarks = try BookmarkStore(path: nil)
+    check("two fixed folders exist", bookmarks.favoritesID != bookmarks.menuID && bookmarks.favorites.isEmpty)
+    let github = try bookmarks.addBookmark(url: url("https://github.com/"), title: "GitHub", in: bookmarks.favoritesID)
+    let news = try bookmarks.addBookmark(url: url("https://news.example/"), title: "News", in: bookmarks.favoritesID)
+    let first = try bookmarks.addBookmark(url: url("https://first.example/"), title: "First", in: bookmarks.favoritesID, at: 0)
+    check("insertion keeps the order asked for", bookmarks.favorites.map(\.title) == ["First", "GitHub", "News"], bookmarks.favorites.map(\.title))
+
+    let work = try bookmarks.addFolder("Work", in: bookmarks.menuID)
+    try bookmarks.move(news, to: work)
+    check("moving into a folder", try bookmarks.children(of: work).map(\.title) == ["News"])
+    check("…takes it out of the old one", bookmarks.favorites.map(\.title) == ["First", "GitHub"])
+    try bookmarks.move(first, to: bookmarks.favoritesID, at: 2)
+    check("reordering within a folder", bookmarks.favorites.map(\.title) == ["GitHub", "First"], bookmarks.favorites.map(\.title))
+    for i in 0..<60 { try bookmarks.move(github, to: bookmarks.favoritesID, at: i % 2 == 0 ? 0 : 2) }
+    check("positions survive many moves", bookmarks.favorites.count == 2)
+
+    let inner = try bookmarks.addFolder("Inner", in: work)
+    do { try bookmarks.move(work, to: inner); check("a folder cannot go inside itself", false) }
+    catch { check("a folder cannot go inside itself", error as? BookmarkStore.StoreError == .cannotMoveIntoItself) }
+    do { try bookmarks.delete(bookmarks.favoritesID); check("Favorites cannot be deleted", false) }
+    catch { check("Favorites cannot be deleted", error as? BookmarkStore.StoreError == .fixedFolder) }
+    do { try bookmarks.addBookmark(url: url("https://x/"), title: "x", in: github); check("a bookmark is not a folder", false) }
+    catch { check("a bookmark is not a folder", error as? BookmarkStore.StoreError == .notAFolder) }
+
+    check("the star knows a bookmarked page", try bookmarks.bookmark(for: url("https://github.com/"))?.id == github)
+    check("…and one that is not", try bookmarks.bookmark(for: url("https://nothing.example/")) == nil)
+    check("search finds by title", try bookmarks.search("git").map(\.id) == [github])
+    check("search finds by address", try bookmarks.search("news.exa").map(\.id) == [news])
+    let folders = try bookmarks.folders()
+    check("the folder picker lists every folder with its depth", folders.map { "\($0.depth)\($0.node.title)" } == ["0Favorites", "0Bookmarks Menu", "1Work", "2Inner"],
+          folders.map { "\($0.depth)\($0.node.title)" })
+
+    try bookmarks.rename(github, to: "GitHub · Code")
+    check("rename", try bookmarks.node(github)?.title == "GitHub · Code")
+    try bookmarks.delete(work)
+    let gone = try bookmarks.node(news) == nil
+    let innerGone = try bookmarks.node(inner) == nil
+    check("deleting a folder deletes what is in it", gone && innerGone)
+
+    let a = try bookmarks.addToReadingList(url: url("https://long.read/"), title: "Long read")
+    try bookmarks.addToReadingList(url: url("https://other.read/"), title: "Other", at: Date().addingTimeInterval(10))
+    check("the reading list is newest first", try bookmarks.readingList().map(\.title) == ["Other", "Long read"])
+    try bookmarks.markRead(a)
+    check("read items can be hidden", try bookmarks.readingList(includeRead: false).map(\.title) == ["Other"])
+    let again = try bookmarks.addToReadingList(url: url("https://long.read/"), title: "Long read")
+    let unread = try bookmarks.readingList(includeRead: false)
+    check("adding it again brings it back unread, not twice", again == a && unread.count == 2)
+    try bookmarks.removeFromReadingList(a)
+    check("remove from the reading list", try bookmarks.readingList().count == 1)
+} catch {
+    check("bookmark checks", false, error)
+}
+
 print(failures == 0 ? "✔ all \(passed) DataKit checks passed" : "✘ \(failures) of \(passed + failures) checks failed")
 exit(failures == 0 ? 0 : 1)

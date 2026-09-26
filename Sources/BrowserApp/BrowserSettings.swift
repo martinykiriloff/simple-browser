@@ -28,10 +28,11 @@ enum BrowserSettings {
 
     /// What a new window (⌘N, launch, clicking the Dock icon) starts with.
     enum NewWindowContent: String, CaseIterable {
-        case homepage, empty
+        case startPage, homepage, empty
 
         var title: String {
             switch self {
+            case .startPage: return "Start Page"
             case .homepage: return "Homepage"
             case .empty:    return "Empty Page"
             }
@@ -73,6 +74,16 @@ enum BrowserSettings {
             if newValue.isEmpty { store.removeObject(forKey: neverSaveKey) }
             else { store.set(Array(Set(newValue)).sorted(), forKey: neverSaveKey) }
         }
+    }
+
+    // MARK: Bookmarks
+
+    private static let favoritesBarKey = "settings.favoritesBar"
+
+    /// The favorites bar under the toolbar. On unless hidden (⇧⌘B).
+    static var showFavoritesBar: Bool {
+        get { store.object(forKey: favoritesBarKey) as? Bool ?? true }
+        set { store.set(newValue, forKey: favoritesBarKey) }
     }
 
     // MARK: Startup
@@ -138,10 +149,10 @@ enum BrowserSettings {
     }
 
     static var newWindowContent: NewWindowContent {
-        get { store.string(forKey: newWindowKey).flatMap(NewWindowContent.init) ?? .homepage }
+        get { store.string(forKey: newWindowKey).flatMap(NewWindowContent.init) ?? .startPage }
         set {
             // The default is stored as "nothing stored", like an empty homepage.
-            if newValue == .homepage { store.removeObject(forKey: newWindowKey) }
+            if newValue == .startPage { store.removeObject(forKey: newWindowKey) }
             else { store.set(newValue.rawValue, forKey: newWindowKey) }
         }
     }

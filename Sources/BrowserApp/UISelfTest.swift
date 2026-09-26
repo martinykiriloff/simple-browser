@@ -176,10 +176,11 @@ enum UISelfTest {
 
             // 7. "New windows open with" decides what ⌘N starts with.
             if let settings = NSApp.windows.first(where: { $0.title == "Settings" }),
-               let popUp = views(of: NSPopUpButton.self, in: settings).first {
+               let popUp = views(of: NSPopUpButton.self, in: settings).first(where: { $0.itemTitles.contains("Empty Page") }) {
                 report["newWindowChoices"] = popUp.itemTitles
                 var opened: [String: String] = [:]
-                for (choice, expected) in [("Empty Page", nil), ("Homepage", BrowserSettings.homepageURL.absoluteString)] as [(String, String?)] {
+                for (choice, expected) in [("Empty Page", nil), ("Homepage", BrowserSettings.homepageURL.absoluteString),
+                                           ("Start Page", StartPageSchemeHandler.url.absoluteString)] as [(String, String?)] {
                     popUp.selectItem(withTitle: choice)
                     if let action = popUp.action { NSApp.sendAction(action, to: popUp.target, from: popUp) }
                     check("choosing \(choice) is saved", BrowserSettings.newWindowContent.title == choice, BrowserSettings.newWindowContent.rawValue)
