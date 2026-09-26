@@ -34,6 +34,8 @@ final class PageContextMenu: NSObject, WKScriptMessageHandler {
     let downloads: DownloadController
     /// Opens a URL in a new window of this window's profile.
     var openInNewWindow: ((URL) -> Void)?
+    /// Opens a URL in a new tab beside this one, behind it.
+    var openInNewTab: ((URL) -> Void)?
     var inspect: ((CGPoint) -> Void)?
     var viewSource: (() -> Void)?
     /// For the self-test: the titles of the last menu shown, after rewriting.
@@ -125,8 +127,13 @@ final class PageContextMenu: NSObject, WKScriptMessageHandler {
     func rewrite(_ menu: NSMenu) {
         let isPage = find(menu, .reload) != nil || find(menu, .goBack) != nil
 
-        // Links. "Open Link" (same window) and "Copy Link" work as they are.
-        replace(.openLinkInNewWindow, in: menu, title: "Open Link in New Window", action: #selector(openLinkInNewWindow(_:)))
+        // Links. "Open Link" (same tab) and "Copy Link" work as they are.
+        if let newWindow = replace(.openLinkInNewWindow, in: menu, title: "Open Link in New Window", action: #selector(openLinkInNewWindow(_:))),
+           let index = menu.items.firstIndex(of: newWindow) {
+            let tab = NSMenuItem(title: "Open Link in New Tab", action: #selector(openLinkInNewTab(_:)), keyEquivalent: "")
+            tab.target = self
+            menu.insertItem(tab, at: index)
+        }
         replace(.downloadLinkedFile, in: menu, title: "Save Link As…", action: #selector(saveLinkAs(_:)))
 
         // Images.
@@ -213,6 +220,7 @@ final class PageContextMenu: NSObject, WKScriptMessageHandler {
     // MARK: - Actions
 
     @objc func openLinkInNewWindow(_ sender: Any?) { context.link.map { openInNewWindow?($0) } }
+    @objc func openLinkInNewTab(_ sender: Any?) { context.link.map { openInNewTab?($0) } }
     @objc func openImageInNewWindow(_ sender: Any?) { context.image.map { openInNewWindow?($0) } }
     @objc func openMediaInNewWindow(_ sender: Any?) { context.media.map { openInNewWindow?($0) } }
 

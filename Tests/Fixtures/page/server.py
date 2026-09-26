@@ -44,6 +44,25 @@ ARTICLE = """<!doctype html>
 </script>
 </body></html>"""
 
+TABS = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Tabs</title></head><body>
+<p><a id="blank" href="/second" target="_blank">A link that opens a new tab</a></p>
+<p><button id="signin" onclick="window.open('/popup', 'signin', 'width=420,height=520')">Sign in (opens a pop-up)</button></p>
+<p><a id="plain" href="/second">Second page</a></p>
+<p><a id="background" href="/second">Open me with Command</a></p>
+<script>window.addEventListener('message', function (e) { document.title = 'Signed in: ' + e.data; });</script>
+</body></html>"""
+
+POPUP = """<!doctype html>
+<html><head><meta charset="utf-8"><title>Sign in</title></head><body>
+<p>Signing in…</p>
+<script>
+  setTimeout(function () {
+    if (window.opener) { window.opener.postMessage('ada', '*'); }
+    setTimeout(function () { window.close(); }, 300);
+  }, 300);
+</script></body></html>"""
+
 OPTOUT = """<!doctype html>
 <html lang="fr"><head><meta charset="utf-8"><meta name="google" content="notranslate"><title>Non</title></head>
 <body><p>Cette page demande de ne pas être traduite, merci beaucoup de respecter ce choix.</p></body></html>"""
@@ -71,6 +90,12 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.split("?")[0]
         if path == "/":
             self.send(200, ARTICLE)
+        elif path == "/tabs":
+            self.send(200, TABS)
+        elif path == "/popup":
+            self.send(200, POPUP)
+        elif path == "/second":
+            self.send(200, "<!doctype html><title>Second</title><p id=second>The second page</p>")
         elif path == "/optout":
             self.send(200, OPTOUT)
         elif path == "/en":

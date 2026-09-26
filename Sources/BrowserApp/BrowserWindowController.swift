@@ -4,8 +4,12 @@ import BrowserKit
 import TranslateKit
 import InspectKit
 
-/// One window, one profile, one live web view. Tabs, groups and hibernation
-/// come later; this is the smallest shell that makes the package a runnable app.
+/// One tab: a window with one live web view, shown as a tab of its window's
+/// native tab group, as Safari's and Finder's tabs are.
+///
+/// Every tab of a group belongs to the same profile: the group's tabbing
+/// identifier is the profile's, so AppKit will not merge or drop a tab into
+/// another profile's window.
 @MainActor
 final class BrowserWindowController: NSWindowController,
                                      NSWindowDelegate,
@@ -62,17 +66,37 @@ final class BrowserWindowController: NSWindowController,
     let contextMenu: PageContextMenu
     /// Opens a URL in a new window of this window's profile. Set by the app delegate.
     var openInNewWindow: ((URL) -> Void)?
+    /// Opens a URL in a new tab beside this one; `true` brings it to the front.
+    var openInNewTab: ((URL, Bool) -> Void)?
+    /// ⌘T, and the tab bar's "+". Set by the app delegate.
+    var onNewTab: (() -> Void)?
+    /// A page's `window.open` or `target=_blank`: a new tab whose web view is
+    /// created from the configuration WebKit hands over, so `window.opener` works.
+    var onPopup: ((WKWebViewConfiguration, WKNavigationAction) -> WKWebView?)?
+    /// Called as the tab closes, with what "Reopen Closed Tab" needs.
+    var onTabClosed: ((URL?, Data?, String) -> Void)?
 
-    init(profile: Profile, recorder: InspectorRecorder, passwords: PasswordService) {
+    init(profile: Profile, recorder: InspectorRecorder, passwords: PasswordService,
+         configuration popupConfiguration: WKWebViewConfiguration? = nil) {
         self.profile = profile
         self.recorder = recorder
         self.bridge = InspectorBridge(recorder: recorder, tab: tab)
         self.passwordCoordinator = PasswordCoordinator(service: passwords)
         self.contextMenu = PageContextMenu(translator: translator, downloads: downloads)
 
-        let configuration = WKWebViewConfiguration()
-        // Per-profile isolation at the WebKit level. Never `.default()`.
-        configuration.websiteDataStore = WKWebsiteDataStore(forIdentifier: profile.dataStoreIdentifier)
+        let configuration: WKWebViewConfiguration
+        if let popupConfiguration {
+            // WebKit requires the pop-up's web view to be made from the
+            // configuration it hands over, which carries the opener's data
+            // store. Its content controller is the opener's too, and this
+            // tab installs its own agents and handlers, so it gets a fresh one.
+            configuration = popupConfiguration
+            configuration.userContentController = WKUserContentController()
+        } else {
+            configuration = WKWebViewConfiguration()
+            // Per-profile isolation at the WebKit level. Never `.default()`.
+            configuration.websiteDataStore = WKWebsiteDataStore(forIdentifier: profile.dataStoreIdentifier)
+        }
         // Keeps the `_inspector` object alive for the WebKit-inspector menu item.
         WebInspectorSPI.enableDeveloperExtras(on: configuration)
         WebInspectorSPI.keepDebuggableWhenHidden(configuration)
@@ -91,10 +115,13 @@ final class BrowserWindowController: NSWindowController,
         )
         super.init(window: window)
 
-        window.title = "SimpleBrowser"
+        window.title = "New Tab"
         window.titleVisibility = .hidden
         window.toolbarStyle = .unified
+        // Not a tab until it is on screen: ⌘N must open a window even when the
+        // person's macOS setting prefers tabs. `didShow` lets it take tabs.
         window.tabbingMode = .disallowed
+        window.tabbingIdentifier = Self.tabbingIdentifier(for: profile)
         window.minSize = NSSize(width: 480, height: 320)
         window.center()
         window.setFrameAutosaveName("BrowserWindow")
@@ -132,6 +159,7 @@ final class BrowserWindowController: NSWindowController,
         }
         contextMenu.viewSource = { [weak self] in self?.showDevTools(panel: "sources") }
         contextMenu.openInNewWindow = { [weak self] url in self?.openInNewWindow?(url) }
+        contextMenu.openInNewTab = { [weak self] url in self?.openInNewTab?(url, false) }
         translator.webView = webView
         translator.onStateChange = { [weak self] in self?.syncTranslateItem() }
         downloads.webView = webView
@@ -156,11 +184,29 @@ final class BrowserWindowController: NSWindowController,
         toolbar.allowsUserCustomization = false
         window.toolbar = toolbar
 
-        // F12 toggles DevTools, as in Chrome. Menu key equivalents cover the rest.
+        // F12 toggles DevTools, and ⌘1–⌘9 pick a tab, as in Chrome and
+        // Safari. Menu key equivalents cover the rest.
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self, event.window === self.window, event.keyCode == 111 else { return event }
-            self.toggleDevTools(nil)
-            return nil
+            guard let self, event.window === self.window else { return event }
+            if event.keyCode == 111 {
+                self.toggleDevTools(nil)
+                return nil
+            }
+            let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            if modifiers == .command, let digit = event.charactersIgnoringModifiers.flatMap(Int.init), (1...9).contains(digit) {
+                return self.selectTab(number: digit) ? nil : event
+            }
+            // ⇧⌘[ / ⇧⌘] (Safari) and ⌥⌘← / ⌥⌘→ (Chrome): the tab to the left or right.
+            let key = event.charactersIgnoringModifiers ?? ""
+            if modifiers == [.command, .shift], key == "{" || key == "[" || key == "}" || key == "]" {
+                self.stepTab(by: key == "{" || key == "[" ? -1 : 1)
+                return nil
+            }
+            if modifiers.contains([.command, .option]), !self.isEditingAddress, event.keyCode == 123 || event.keyCode == 124 {
+                self.stepTab(by: event.keyCode == 123 ? -1 : 1)
+                return nil
+            }
+            return event
         }
 
         if let error = passwordCoordinator.installError {
@@ -176,6 +222,54 @@ final class BrowserWindowController: NSWindowController,
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("not supported") }
+
+    static func tabbingIdentifier(for profile: Profile) -> String { "SimpleBrowser.profile.\(profile.id)" }
+
+    // MARK: - Tabs
+
+    override func showWindow(_ sender: Any?) {
+        super.showWindow(sender)
+        acceptTabs()
+    }
+
+    /// From now on this window can hold tabs, take dropped ones and merge.
+    /// The tab bar always shows, as in every browser, not only from two tabs.
+    func acceptTabs() {
+        guard let window else { return }
+        window.tabbingMode = .automatic
+        if window.tabGroup?.isTabBarVisible == false { window.toggleTabBar(nil) }
+    }
+
+    /// The tab bar's "+", and File → New Tab (⌘T) through the responder chain.
+    override func newWindowForTab(_ sender: Any?) { onNewTab?() }
+
+    /// ⌘1–⌘8 pick that tab, ⌘9 the last, as in every browser.
+    @discardableResult
+    func selectTab(number: Int) -> Bool {
+        guard let window, let tabs = window.tabbedWindows, !tabs.isEmpty else { return false }
+        let index = number == 9 ? tabs.count - 1 : number - 1
+        guard tabs.indices.contains(index) else { return true }
+        tabs[index].makeKeyAndOrderFront(nil)
+        return true
+    }
+
+    /// The next or previous tab, wrapping round.
+    func stepTab(by step: Int) {
+        guard let window, let tabs = window.tabbedWindows, tabs.count > 1,
+              let index = tabs.firstIndex(of: window) else { return }
+        tabs[(index + step + tabs.count) % tabs.count].makeKeyAndOrderFront(nil)
+    }
+
+    /// File → Close Window (⇧⌘W): every tab of this window.
+    @objc func closeWindowAndTabs(_ sender: Any?) {
+        for tab in window?.tabbedWindows ?? [window].compactMap({ $0 }) { tab.performClose(sender) }
+    }
+
+    /// Back/forward list, scroll position and form state, for Reopen Closed Tab.
+    var interactionState: Any? {
+        get { webView.interactionState }
+        set { webView.interactionState = newValue }
+    }
 
     func showWindowAndFocusAddress() {
         showWindow(nil)
@@ -648,6 +742,7 @@ final class BrowserWindowController: NSWindowController,
             hideDevTools()
             return
         }
+        onTabClosed?(webView.url, webView.interactionState as? Data, window?.title ?? "")
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
         keyMonitor = nil
         recorderPanel?.close()
@@ -828,7 +923,15 @@ final class BrowserWindowController: NSWindowController,
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
         // `<a download>`.
-        navigationAction.shouldPerformDownload ? .download : .allow
+        if navigationAction.shouldPerformDownload { return .download }
+        // ⌘-click or a middle click on a link: a tab behind this one, or in
+        // front with ⇧ as well, as in Safari and Chrome.
+        if navigationAction.navigationType == .linkActivated, let url = navigationAction.request.url,
+           navigationAction.modifierFlags.contains(.command) || navigationAction.buttonNumber == 2 {
+            openInNewTab?(url, navigationAction.modifierFlags.contains(.shift))
+            return .cancel
+        }
+        return .allow
     }
 
     func webView(_ webView: WKWebView, navigationResponse: WKNavigationResponse, didBecome download: WKDownload) {
@@ -882,18 +985,26 @@ final class BrowserWindowController: NSWindowController,
 
     // MARK: - WKUIDelegate
 
-    /// `target="_blank"` and `window.open` land in the same web view for now.
+    /// `target="_blank"` and `window.open`: a new tab, returned to WebKit
+    /// so the page keeps `window.opener` and the pop-up can report back.
     func webView(
         _ webView: WKWebView,
         createWebViewWith configuration: WKWebViewConfiguration,
         for navigationAction: WKNavigationAction,
         windowFeatures: WKWindowFeatures
     ) -> WKWebView? {
-        if navigationAction.targetFrame == nil {
-            webView.load(navigationAction.request)
-        }
+        if let popup = onPopup?(configuration, navigationAction) { return popup }
+        if navigationAction.targetFrame == nil { webView.load(navigationAction.request) }
         return nil
     }
+
+    /// A pop-up calling `window.close()`, as sign-in windows do when finished.
+    func webViewDidClose(_ webView: WKWebView) {
+        window?.performClose(nil)
+    }
+
+    /// For the pop-up path in the app delegate.
+    var pageWebView: WKWebView { webView }
 }
 
 private extension NSToolbarItem.Identifier {

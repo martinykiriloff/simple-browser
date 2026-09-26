@@ -1,4 +1,5 @@
 import AppKit
+import WebKit
 import BrowserKit
 import InspectKit
 
@@ -72,10 +73,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 PasswordSelfTest.run(app: self, browser: controller, output: out, snapshots: launch.snapshotDirectory)
             }
             if let out = launch.uiSelfTestOutput { UISelfTest.run(browser: controller, output: out) }
+            if let out = launch.featureSelfTestOutput {
+                FeatureSelfTest.run(app: self, browser: controller, output: out, snapshots: launch.snapshotDirectory,
+                                    only: Set(launch.featureSections))
+            }
             if let out = launch.pageSelfTestOutput {
                 PageSelfTest.run(app: self, browser: controller, output: out, snapshots: launch.snapshotDirectory)
             }
-            if let directory = launch.snapshotDirectory, launch.passwordsSelfTestOutput == nil, launch.pageSelfTestOutput == nil {
+            if let directory = launch.snapshotDirectory, launch.passwordsSelfTestOutput == nil, launch.pageSelfTestOutput == nil,
+               launch.featureSelfTestOutput == nil {
                 DispatchQueue.main.asyncAfter(deadline: .now() + launch.snapshotDelay) { [weak self] in
                     guard let self else { return }
                     Self.snapshot(controller.window, to: directory + "/browser.png")
@@ -160,7 +166,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         // Self-test runs never go looking for real updates.
-        guard launch.passwordsSelfTestOutput == nil, launch.pageSelfTestOutput == nil, launch.uiSelfTestOutput == nil else { return }
+        guard launch.passwordsSelfTestOutput == nil, launch.pageSelfTestOutput == nil, launch.uiSelfTestOutput == nil,
+              launch.featureSelfTestOutput == nil else { return }
         updater.start()
     }
 
@@ -193,6 +200,75 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func newWindow(_ sender: Any?) {
         openWindow(in: currentProfile)
+    }
+
+    // MARK: - Tabs
+
+    /// ⌘T with no browser window open: a window.
+    @objc func newWindowForTab(_ sender: Any?) {
+        if let browser = frontmostBrowser { browser.newWindowForTab(sender) } else { newWindow(sender) }
+    }
+
+    private struct ClosedTab {
+        let profileID: ProfileID
+        let url: URL?
+        let state: Data?
+    }
+    /// Most recent last. Tabs of a window closed at quit are not "closed tabs".
+    private var closedTabs: [ClosedTab] = []
+    private var terminating = false
+
+    /// A new tab beside `browser`, in its window and profile. With no URL it
+    /// opens what a new window opens, with the keyboard in the address bar.
+    @discardableResult
+    func newTab(beside browser: BrowserWindowController?, url: URL? = nil, inFront: Bool = true,
+                state: Data? = nil, configuration: WKWebViewConfiguration? = nil) -> BrowserWindowController {
+        let profile = browser?.profile ?? currentProfile
+        let tab = makeWindow(profile: profile, configuration: configuration)
+        if let window = browser?.window, let tabWindow = tab.window {
+            tabWindow.tabbingMode = .automatic
+            window.addTabbedWindow(tabWindow, ordered: .above)
+            tab.acceptTabs()
+            if inFront { tabWindow.makeKeyAndOrderFront(nil) } else { window.makeKeyAndOrderFront(nil) }
+        } else {
+            tab.showWindow(nil)
+        }
+        if let state {
+            tab.interactionState = state
+        } else if let url {
+            tab.load(url)
+        } else if configuration == nil {
+            if inFront { tab.focusAddressBar(nil) }
+            if BrowserSettings.newWindowContent == .homepage { tab.load(BrowserSettings.homepageURL) }
+        }
+        return tab
+    }
+
+    /// File → Reopen Closed Tab (⇧⌘T): back where it was, with its history.
+    @objc func reopenClosedTab(_ sender: Any?) {
+        guard let closed = closedTabs.popLast(), let profile = profiles.profile(closed.profileID) else { return }
+        let beside = frontmostBrowser?.profile.id == profile.id ? frontmostBrowser
+            : controllers.last { $0.profile.id == profile.id }
+        if let beside {
+            newTab(beside: beside, url: closed.url, state: closed.state)
+        } else {
+            let window = makeWindow(profile: profile)
+            window.showWindow(nil)
+            if let state = closed.state { window.interactionState = state } else if let url = closed.url { window.load(url) }
+        }
+    }
+
+    var canReopenClosedTab: Bool { !closedTabs.isEmpty }
+
+    /// Every open tab, for the self-tests.
+    var browserControllers: [BrowserWindowController] { controllers }
+
+    @objc func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        menuItem.action == #selector(reopenClosedTab(_:)) ? canReopenClosedTab : true
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        terminating = true
     }
 
     // MARK: - Profiles
@@ -280,10 +356,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @discardableResult
-    private func makeWindow(profile: Profile? = nil) -> BrowserWindowController {
+    private func makeWindow(profile: Profile? = nil, configuration: WKWebViewConfiguration? = nil) -> BrowserWindowController {
         let profile = profile ?? currentProfile
         profiles.markUsed(profile.id)
-        let controller = BrowserWindowController(profile: profile, recorder: recorder, passwords: passwords(for: profile))
+        let controller = BrowserWindowController(profile: profile, recorder: recorder, passwords: passwords(for: profile),
+                                                 configuration: configuration)
         controller.profilesMenuFiller = ProfilesMenuFiller(store: profiles) { [weak controller] in
             controller?.profile ?? profile
         }
@@ -294,6 +371,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let window = self.makeWindow(profile: controller.profile)
             window.showWindow(nil)
             window.load(url)
+        }
+        controller.openInNewTab = { [weak self, weak controller] url, inFront in
+            self?.newTab(beside: controller, url: url, inFront: inFront)
+        }
+        controller.onNewTab = { [weak self, weak controller] in
+            self?.newTab(beside: controller)
+        }
+        controller.onPopup = { [weak self, weak controller] configuration, _ in
+            guard let self, let controller else { return nil }
+            return self.newTab(beside: controller, configuration: configuration).pageWebView
+        }
+        controller.onTabClosed = { [weak self, weak controller] url, state, _ in
+            guard let self, let controller, !self.terminating, url != nil || state != nil else { return }
+            self.closedTabs.append(ClosedTab(profileID: controller.profile.id, url: url, state: state))
+            if self.closedTabs.count > 25 { self.closedTabs.removeFirst() }
         }
         controllers.append(controller)
         controller.onClose = { [weak self, weak controller] in
@@ -368,6 +460,8 @@ struct LaunchOptions {
     var uiSelfTestOutput: String?
     var passwordsSelfTestOutput: String?
     var pageSelfTestOutput: String?
+    var featureSelfTestOutput: String?
+    var featureSections: [String] = []
     var updateFeed: URL?
     var updateSelfTestOutput: String?
     var showPasswords = false
@@ -399,6 +493,10 @@ struct LaunchOptions {
                 options.updateFeed = iterator.next().flatMap(URL.init(string:))
             case "--update-selftest":
                 options.updateSelfTestOutput = iterator.next()
+            case "--feature-selftest":
+                options.featureSelfTestOutput = iterator.next()
+            case "--only":
+                options.featureSections = (iterator.next() ?? "").split(separator: ",").map(String.init)
             case "--page-selftest":
                 options.pageSelfTestOutput = iterator.next()
             case "--show-passwords":

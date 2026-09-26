@@ -46,11 +46,19 @@ enum MainMenu {
         let menu = NSMenu(title: "File")
         menu.addItem(withTitle: "New Window",
                      action: #selector(AppDelegate.newWindow(_:)), keyEquivalent: "n")
+        menu.addItem(withTitle: "New Tab",
+                     action: #selector(NSResponder.newWindowForTab(_:)), keyEquivalent: "t")
         menu.addItem(withTitle: "Open Location…",
                      action: #selector(BrowserWindowController.focusAddressBar(_:)), keyEquivalent: "l")
         menu.addItem(.separator())
-        menu.addItem(withTitle: "Close Window",
+        menu.addItem(withTitle: "Close Tab",
                      action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        let closeWindow = menu.addItem(withTitle: "Close Window",
+                                       action: #selector(BrowserWindowController.closeWindowAndTabs(_:)), keyEquivalent: "w")
+        closeWindow.keyEquivalentModifierMask = [.command, .shift]
+        let reopen = menu.addItem(withTitle: "Reopen Closed Tab",
+                                  action: #selector(AppDelegate.reopenClosedTab(_:)), keyEquivalent: "t")
+        reopen.keyEquivalentModifierMask = [.command, .shift]
         return wrap(menu)
     }
 
