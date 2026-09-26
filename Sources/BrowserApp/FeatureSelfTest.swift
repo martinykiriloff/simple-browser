@@ -32,7 +32,9 @@ final class FeatureSelfTest {
             if let scratch = UserDefaults(suiteName: suite) { BrowserSettings.store = scratch }
             BrowserSettings.newWindowContent = .empty
             await test.pause(1)
-            for (name, section) in test.sections where only.isEmpty || only.contains(name) {
+            // "session-seed" and "session-verify" belong to scripts/test-session.sh,
+            // either side of a SIGKILL: they run only when named.
+            for (name, section) in test.sections where only.isEmpty ? !name.hasPrefix("session-") : only.contains(name) {
                 await section()
             }
             UserDefaults.standard.removePersistentDomain(forName: suite)
@@ -50,7 +52,7 @@ final class FeatureSelfTest {
 
     /// One entry per ticket, in the order they were built.
     var sections: [(String, () async -> Void)] {
-        [("tabs", tabs), ("hibernation", hibernation), ("session", sessionRoundTrip),
+        [("tabs", tabs), ("hibernation", hibernation), ("session", sessionRoundTrip), ("history", history),
          ("session-seed", sessionSeed), ("session-verify", sessionVerify)]
     }
 
@@ -119,6 +121,62 @@ final class FeatureSelfTest {
             window.sendEvent(event)
         }
         return true
+    }
+
+    // MARK: - #6 History
+
+    func history() async {
+        let browser = first
+        browser.window?.makeKeyAndOrderFront(nil)
+        guard let store = app.history(for: browser.profile) else { check("history: the profile has a history", false); return }
+        try? store.deleteVisits(since: .distantPast)
+
+        await open("/second", in: browser)
+        browser.enterAddress(site + "/tabs")
+        _ = await waitFor { browser.currentURL?.path == "/tabs" && !browser.pageWebView.isLoading }
+        await pause(0.5)
+        let visits = (try? store.visits()) ?? []
+        check("history: visited pages are recorded, newest first", visits.map { $0.url.path } .prefix(2) == ["/tabs", "/second"], visits.map { $0.url.path })
+        check("history: …with their titles", visits.first?.title == "Tabs", visits.first?.title as Any)
+        check("history: a typed address counts as typed", (try? store.page(for: URL(string: site + "/tabs")!))??.typedCount == 1)
+
+        await open("/spa", in: browser)
+        _ = await js("document.getElementById('route').click()", in: browser)
+        check("history: a single-page app's new address is recorded too",
+              await waitFor { ((try? store.visits()) ?? []).contains { $0.url.path == "/spa/settings" } })
+        check("history: …with its new title",
+              await waitFor { (try? store.page(for: URL(string: self.site + "/spa/settings")!))??.title == "App settings" })
+
+        let back = browser.historyMenu(back: true).items.map(\.title)
+        check("history: holding Back lists this tab's pages, nearest first", back.first == "Single page app" && back.contains("Second"), back)
+
+        let historyMenu = NSApp.mainMenu?.items.first { $0.submenu?.title == "History" }?.submenu ?? NSMenu()
+        app.historyMenuFiller.menuNeedsUpdate(historyMenu)
+        let menuTitles = historyMenu.items.filter { $0.tag == HistoryMenuFiller.tag }.map(\.title)
+        check("history: the History menu lists recent pages", menuTitles.contains("Tabs"), menuTitles)
+
+        app.showHistory(nil)
+        let window = NSApp.windows.first { $0.title.hasPrefix("History —") }
+        let controller = window?.windowController as? HistoryWindowController
+        check("history: Show All History (⌘Y) opens the history window", controller != nil)
+        if let controller {
+            check("history: …grouped under Today", controller.outline.numberOfRows > 1)
+            controller.searchField.stringValue = "second"
+            controller.reload()
+            check("history: …searchable", controller.outline.numberOfRows == 2, controller.outline.numberOfRows)
+            controller.searchField.stringValue = ""
+            controller.reload()
+            snapshot(window, "history")
+            window?.close()
+        }
+
+        // Clearing the last hour takes the cookies set in it too.
+        _ = await js("document.cookie = 'visited=yes; max-age=3600'", in: browser)
+        check("history: (setup) a cookie is set", (await js("return document.cookie", in: browser) as? String)?.contains("visited=yes") == true)
+        await app.clearHistory(of: browser.profile, since: Date().addingTimeInterval(-3600))
+        check("history: Clear History (last hour) removes the visits", (try? store.visits())?.isEmpty == true)
+        await open("/second", in: browser)
+        check("history: …and the cookies set in that hour", (await js("return document.cookie", in: browser) as? String)?.contains("visited=yes") != true)
     }
 
     // MARK: - #4 Session restore

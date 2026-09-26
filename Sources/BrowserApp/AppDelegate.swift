@@ -1,6 +1,7 @@
 import AppKit
 import WebKit
 import BrowserKit
+import DataKit
 import InspectKit
 
 @MainActor
@@ -10,6 +11,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let updater = Updater()
     private(set) lazy var session = SessionController(directory: launch.sessionDirectory.map { URL(fileURLWithPath: $0) })
     private var closedWindows: [SessionSnapshot.Window] = []
+    private var histories: [ProfileID: HistoryStore] = [:]
+    private var historyWindows: [ProfileID: HistoryWindowController] = [:]
+    /// Fills the History menu's recent pages each time it opens.
+    private(set) lazy var historyMenuFiller = HistoryMenuFiller { [weak self] in
+        guard let self else { return [] }
+        return (try? self.history(for: self.currentProfile)?.visits(limit: 15)) ?? []
+    }
     private(set) lazy var memorySaver = MemorySaver { [weak self] in self?.controllers ?? [] }
     /// The app's Profiles menu follows whichever browser window is in front.
     private(set) lazy var profilesMenuFiller = ProfilesMenuFiller(store: profiles) { [weak self] in
@@ -57,7 +65,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        MainMenu.install(profilesMenuDelegate: profilesMenuFiller)
+        MainMenu.install(profilesMenuDelegate: profilesMenuFiller, historyMenuDelegate: historyMenuFiller)
         NotificationCenter.default.addObserver(forName: ProfileStore.didChange, object: profiles, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.profilesDidChange() }
         }
@@ -299,6 +307,73 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return .terminateNow
     }
 
+    // MARK: - History
+
+    /// The profile's history, opened on first use, in the profile's folder,
+    /// so deleting the profile deletes its history. Nil for a run that must
+    /// not write the person's data (self-tests keep theirs in memory).
+    func history(for profile: Profile) -> HistoryStore? {
+        if let store = histories[profile.id] { return store }
+        let store: HistoryStore?
+        if launch.featureSelfTestOutput != nil || launch.pageSelfTestOutput != nil || launch.passwordsSelfTestOutput != nil
+            || launch.uiSelfTestOutput != nil {
+            store = try? HistoryStore(path: nil)
+        } else {
+            let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("SimpleBrowser/Profiles/\(profile.id)", isDirectory: true)
+            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            store = try? HistoryStore(path: directory.appendingPathComponent("History.sqlite").path)
+            // A year, as Safari keeps by default.
+            try? store?.prune(olderThan: Date().addingTimeInterval(-365 * 86_400))
+        }
+        histories[profile.id] = store
+        return store
+    }
+
+    /// History → Show All History (⌘Y), for the profile in front.
+    @objc func showHistory(_ sender: Any?) {
+        let profile = currentProfile
+        guard let store = history(for: profile) else { return }
+        let controller = historyWindows[profile.id] ?? {
+            let controller = HistoryWindowController(store: store, profile: profile)
+            controller.open = { [weak self] url, newTab in
+                guard let self else { return }
+                let browser = self.controllers.last { $0.profile.id == profile.id && $0.window?.tabGroup?.selectedWindow === $0.window }
+                    ?? self.controllers.last { $0.profile.id == profile.id }
+                if newTab || browser == nil { self.newTab(beside: browser, url: url) } else { browser?.load(url); browser?.showWindow(nil) }
+            }
+            controller.clear = { [weak self] since in await self?.clearHistory(of: profile, since: since) }
+            historyWindows[profile.id] = controller
+            return controller
+        }()
+        controller.reload()
+        controller.showWindow(sender)
+    }
+
+    /// History → Clear History…, for the profile in front.
+    @objc func clearHistoryAction(_ sender: Any?) {
+        let profile = currentProfile
+        guard let window = frontmostBrowser?.window ?? NSApp.keyWindow else { return }
+        ClearHistorySheet.ask(in: window) { [weak self] since in
+            Task { @MainActor in await self?.clearHistory(of: profile, since: since) }
+        }
+    }
+
+    /// History, and the cookies, caches and storage sites wrote in the same
+    /// period, as Safari clears them.
+    func clearHistory(of profile: Profile, since: Date) async {
+        try? history(for: profile)?.deleteVisits(since: since)
+        let store = WKWebsiteDataStore(forIdentifier: profile.dataStoreIdentifier)
+        await store.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: since)
+        historyWindows[profile.id]?.reload()
+    }
+
+    /// History menu → a recent page: it opens in the tab in front.
+    @objc func openHistoryItem(_ sender: Any?) {
+        guard let url = (sender as? NSMenuItem)?.representedObject as? URL else { return }
+        if let browser = frontmostBrowser { browser.load(url) } else { newTab(beside: nil, url: url) }
+    }
+
     // MARK: - Session
 
     /// Every window and its tabs, in tab-bar order.
@@ -434,6 +509,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // WebKit will not remove a data store a web view is still using.
         for controller in controllers where controller.profile.id == id { controller.close() }
         passwordServices[id] = nil
+        histories[id] = nil
+        historyWindows[id]?.close()
+        historyWindows[id] = nil
         Task { @MainActor in
             await profiles.remove(id)
             if controllers.isEmpty { newWindow(nil) }
@@ -508,6 +586,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return self.newTab(beside: controller, configuration: configuration).pageWebView
         }
         controller.onWindowClosing = { [weak self] controller in self?.rememberClosedWindow(controller) }
+        controller.onVisit = { [weak self] url, title, typed in
+            try? self?.history(for: profile)?.recordVisit(url, title: title, typed: typed)
+        }
+        controller.onTitleChange = { [weak self] url, title in
+            try? self?.history(for: profile)?.updateTitle(title, for: url)
+        }
         controller.onTabClosed = { [weak self, weak controller] url, state, _ in
             guard let self, let controller, !self.terminating, url != nil || state != nil else { return }
             // The last tab of a window closing is the window closing.

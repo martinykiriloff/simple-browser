@@ -5,13 +5,13 @@ import AppKit
 /// the app delegate.
 @MainActor
 enum MainMenu {
-    static func install(profilesMenuDelegate: NSMenuDelegate) {
+    static func install(profilesMenuDelegate: NSMenuDelegate, historyMenuDelegate: NSMenuDelegate) {
         let mainMenu = NSMenu()
         mainMenu.addItem(appMenuItem())
         mainMenu.addItem(fileMenuItem())
         mainMenu.addItem(editMenuItem())
         mainMenu.addItem(viewMenuItem())
-        mainMenu.addItem(historyMenuItem())
+        mainMenu.addItem(historyMenuItem(delegate: historyMenuDelegate))
         mainMenu.addItem(profilesMenuItem(delegate: profilesMenuDelegate))
         mainMenu.addItem(developMenuItem())
         mainMenu.addItem(windowMenuItem())
@@ -98,8 +98,9 @@ enum MainMenu {
         return wrap(menu)
     }
 
-    private static func historyMenuItem() -> NSMenuItem {
+    private static func historyMenuItem(delegate: NSMenuDelegate) -> NSMenuItem {
         let menu = NSMenu(title: "History")
+        menu.delegate = delegate
         menu.addItem(withTitle: "Back",
                      action: #selector(BrowserWindowController.goBack(_:)), keyEquivalent: "[")
         menu.addItem(withTitle: "Forward",
@@ -112,6 +113,9 @@ enum MainMenu {
                      action: #selector(AppDelegate.reopenLastClosedWindow(_:)), keyEquivalent: "")
         menu.addItem(withTitle: "Reopen All Windows from Last Session",
                      action: #selector(AppDelegate.reopenLastSession(_:)), keyEquivalent: "")
+        menu.addItem(.separator())
+        menu.addItem(withTitle: "Show All History", action: #selector(AppDelegate.showHistory(_:)), keyEquivalent: "y")
+        menu.addItem(withTitle: "Clear History…", action: #selector(AppDelegate.clearHistoryAction(_:)), keyEquivalent: "")
         return wrap(menu)
     }
 

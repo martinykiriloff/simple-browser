@@ -101,6 +101,9 @@ class Handler(BaseHTTPRequestHandler):
             self.send(200, POPUP)
         elif path == "/second":
             self.send(200, "<!doctype html><title>Second</title><p id=second>The second page</p>")
+        elif path == "/spa":
+            self.send(200, """<!doctype html><title>Single page app</title>
+<button id=route onclick="history.pushState({}, '', '/spa/settings'); document.title = 'App settings'">Settings</button>""")
         elif path == "/optout":
             self.send(200, OPTOUT)
         elif path == "/en":

@@ -78,6 +78,16 @@ final class BrowserWindowController: NSWindowController,
     /// A page's `window.open` or `target=_blank`: a new tab whose web view is
     /// created from the configuration WebKit hands over, so `window.opener` works.
     var onPopup: ((WKWebViewConfiguration, WKNavigationAction) -> WKWebView?)?
+    /// A page finished loading, or a single-page site moved to a new address:
+    /// the URL, its title, and whether the person typed it.
+    var onVisit: ((URL, String, Bool) -> Void)?
+    /// A page's title arrived or changed after it loaded.
+    var onTitleChange: ((URL, String) -> Void)?
+    /// Set by a navigation from the address bar, for the visit it causes.
+    private var typedNavigation = false
+    private var pageObservations: [NSKeyValueObservation] = []
+    private let backButton = NavigationButton()
+    private let forwardButton = NavigationButton()
     /// Called as the tab closes, with what "Reopen Closed Tab" needs.
     var onTabClosed: ((URL?, Data?, String) -> Void)?
 
@@ -181,6 +191,8 @@ final class BrowserWindowController: NSWindowController,
         }
 
         configureAddressField()
+        configureNavigationButtons()
+        observePage()
         configureProfileButton()
         configureTranslateButton()
 
@@ -387,6 +399,7 @@ final class BrowserWindowController: NSWindowController,
         NSLayoutConstraint.activate(fillConstraints)
 
         contextMenu.webView = fresh
+        observePage()
         translator.webView = fresh
         downloads.webView = fresh
         passwordCoordinator.webView = fresh
@@ -497,6 +510,7 @@ final class BrowserWindowController: NSWindowController,
 
     @objc func navigate(_ sender: Any?) {
         guard let url = AddressResolver.resolve(addressField.stringValue) else { return }
+        typedNavigation = true
         load(url)
         window?.makeFirstResponder(webView)
     }
@@ -829,6 +843,88 @@ final class BrowserWindowController: NSWindowController,
         }
     }
 
+    // MARK: - History
+
+    private var lastRecordedURL: URL?
+
+    /// The page's title arriving late, and single-page sites that change the
+    /// address without loading a page (pushState), both reach history.
+    private func observePage() {
+        pageObservations = [
+            webView.observe(\.title, options: [.new]) { [weak self] webView, _ in
+                let url = webView.url, title = webView.title ?? ""
+                DispatchQueue.main.async {
+                    guard let self, !self.isHibernated, let url, !title.isEmpty else { return }
+                    self.onTitleChange?(url, title)
+                    self.syncChrome()
+                }
+            },
+            webView.observe(\.url, options: [.new]) { [weak self] webView, _ in
+                let url = webView.url, loading = webView.isLoading
+                DispatchQueue.main.async {
+                    guard let self, !self.isHibernated, let url, !loading, url != self.lastRecordedURL else { return }
+                    self.lastRecordedURL = url
+                    // Read now, not when the address changed: a single-page
+                    // app sets its title after pushState, and WebKit may
+                    // report the two in either order.
+                    self.onVisit?(url, self.webView.title ?? "", false)
+                    self.syncChrome()
+                }
+            },
+            webView.observe(\.canGoBack, options: [.new]) { [weak self] _, _ in
+                DispatchQueue.main.async { self?.syncNavigationButtons() }
+            },
+            webView.observe(\.canGoForward, options: [.new]) { [weak self] _, _ in
+                DispatchQueue.main.async { self?.syncNavigationButtons() }
+            },
+        ]
+    }
+
+    private func configureNavigationButtons() {
+        for (button, symbol, label, action) in [(backButton, "chevron.left", "Back", #selector(goBack(_:))),
+                                                (forwardButton, "chevron.right", "Forward", #selector(goForward(_:)))] {
+            button.bezelStyle = .toolbar
+            button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)
+            button.target = self
+            button.action = action
+            button.toolTip = label + " (hold for history)"
+            button.setAccessibilityLabel(label)
+        }
+        backButton.historyMenu = { [weak self] in self?.historyMenu(back: true) }
+        forwardButton.historyMenu = { [weak self] in self?.historyMenu(back: false) }
+        syncNavigationButtons()
+    }
+
+    private func syncNavigationButtons() {
+        backButton.isEnabled = webView.canGoBack || (isHibernated && hibernatedState != nil)
+        forwardButton.isEnabled = webView.canGoForward
+    }
+
+    /// The tab's own history in one direction, nearest first.
+    func historyMenu(back: Bool) -> NSMenu {
+        let menu = NSMenu()
+        let list = webView.backForwardList
+        let items = back ? Array(list.backList.reversed()) : list.forwardList
+        for item in items.prefix(25) {
+            let entry = NSMenuItem(title: item.title?.isEmpty == false ? item.title! : item.url.absoluteString,
+                                   action: #selector(goToHistoryItem(_:)), keyEquivalent: "")
+            entry.target = self
+            entry.representedObject = item
+            entry.toolTip = item.url.absoluteString
+            menu.addItem(entry)
+        }
+        if back {
+            menu.addItem(.separator())
+            menu.addItem(withTitle: "Show All History", action: #selector(AppDelegate.showHistory(_:)), keyEquivalent: "")
+        }
+        return menu
+    }
+
+    @objc private func goToHistoryItem(_ sender: NSMenuItem) {
+        guard let item = sender.representedObject as? WKBackForwardListItem else { return }
+        webView.go(to: item)
+    }
+
     // MARK: - Address field
 
     private func configureAddressField() {
@@ -859,6 +955,7 @@ final class BrowserWindowController: NSWindowController,
     private func syncChrome() {
         // A sleeping tab shows the page it will wake to, not the blank one.
         if isHibernated { return }
+        syncNavigationButtons()
         if !isEditingAddress {
             addressField.stringValue = webView.url?.absoluteString ?? ""
         }
@@ -911,6 +1008,12 @@ final class BrowserWindowController: NSWindowController,
 
     /// Developer aid, for the self-tests.
     var pageView: BrowserWebView? { webView }
+
+    /// Developer aid: types into the address bar and presses Return.
+    func enterAddress(_ text: String) {
+        addressField.stringValue = text
+        navigate(nil)
+    }
     /// For the self-test.
     private(set) var lastTranslateMenuTitles: [String] = []
 
@@ -1035,9 +1138,15 @@ final class BrowserWindowController: NSWindowController,
     ) -> NSToolbarItem? {
         switch identifier {
         case .back:
-            return button(identifier, symbol: "chevron.left", label: "Back", action: #selector(goBack(_:)))
+            let item = NSToolbarItem(itemIdentifier: identifier)
+            item.view = backButton
+            item.label = "Back"
+            return item
         case .forward:
-            return button(identifier, symbol: "chevron.right", label: "Forward", action: #selector(goForward(_:)))
+            let item = NSToolbarItem(itemIdentifier: identifier)
+            item.view = forwardButton
+            item.label = "Forward"
+            return item
         case .reload:
             return button(identifier, symbol: "arrow.clockwise", label: "Reload", action: #selector(reload(_:)))
         case .home:
@@ -1122,6 +1231,11 @@ final class BrowserWindowController: NSWindowController,
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         if !isHibernated { hideSnapshot() }
+        if !isHibernated, let url = webView.url {
+            onVisit?(url, webView.title ?? "", typedNavigation)
+            lastRecordedURL = url
+        }
+        typedNavigation = false
         recordNavigation(.finished)
         passwordCoordinator.didFinishNavigation()
         syncChrome()

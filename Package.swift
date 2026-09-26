@@ -16,7 +16,7 @@ let package = Package(
         // needs from the model layer comes through BrowserKit and InspectKit.
         .executableTarget(
             name: "BrowserApp",
-            dependencies: ["BrowserKit", "InspectKit", "PasswordKit", "TranslateKit", "UpdateKit"],
+            dependencies: ["BrowserKit", "InspectKit", "PasswordKit", "TranslateKit", "UpdateKit", "DataKit"],
             resources: [.copy("DevToolsUI"), .copy("PasswordAgent"), .copy("TranslateAgent"), .copy("PageMenuAgent"), .copy("AppIcon")],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
@@ -51,6 +51,14 @@ let package = Package(
         .executableTarget(
             name: "TranslateKitChecks",
             dependencies: ["TranslateKit"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        // The browser's own data on disk: history, bookmarks. SQLite from the
+        // system, so no dependency to fetch.
+        .target(name: "DataKit", swiftSettings: [.swiftLanguageMode(.v6)]),
+        .executableTarget(
+            name: "DataKitChecks",
+            dependencies: ["DataKit"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         // Self-update: versions, GitHub's release answer, Ed25519 signatures.
