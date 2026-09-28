@@ -1,6 +1,7 @@
 import AppKit
 import WebKit
 import BrowserKit
+import BlockKit
 import DataKit
 import InspectKit
 
@@ -56,7 +57,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var passwords: PasswordService { passwords(for: currentProfile) }
 
     private(set) lazy var settingsWindow: SettingsWindowController = {
-        let controller = SettingsWindowController(passwords: passwords)
+        let controller = SettingsWindowController(passwords: passwords, blocker: blocker)
+        controller.privacyPane.currentProfile = { [weak self] in
+            let profile = self?.frontmostBrowser?.profile ?? self?.currentProfile
+            return (profile?.id.description ?? "", profile?.name ?? "")
+        }
         controller.currentPageURL = { [weak self] in self?.frontmostBrowser?.currentURL }
         controller.willShow = { [weak self] in self?.syncSettingsProfile() }
         return controller
@@ -72,6 +77,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Before any window: the rule lists compiled last time are looked
+        // up while the first tab is being made.
+        blocker.start()
         MainMenu.install(profilesMenuDelegate: profilesMenuFiller, historyMenuDelegate: historyMenuFiller,
                          bookmarksMenuDelegate: bookmarksMenuFiller)
         NotificationCenter.default.addObserver(forName: .bookmarksDidChange, object: nil, queue: .main) { [weak self] _ in
@@ -112,6 +120,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 PasswordSelfTest.run(app: self, browser: controller, output: out, snapshots: launch.snapshotDirectory)
             }
             if let out = launch.uiSelfTestOutput { UISelfTest.run(browser: controller, output: out) }
+            if let out = launch.blockingProbeOutput {
+                runBlockingProbe(output: out, lists: launch.blockingProbeLists, sites: launch.blockingProbeSites, browser: controller)
+            }
             if let out = launch.featureSelfTestOutput {
                 FeatureSelfTest.run(app: self, browser: controller, output: out, snapshots: launch.snapshotDirectory,
                                     only: Set(launch.featureSections))
@@ -321,6 +332,85 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         session.end(currentSession())
         terminating = true
         return .terminateNow
+    }
+
+    // MARK: - Content blocking
+
+    /// One for the app: the filter lists are the same for every profile.
+    /// A run driven by a test gets one with no lists and a folder of its
+    /// own, so it never asks the lists' servers for anything.
+    private(set) lazy var blocker: ContentBlocker = {
+        if usesScratchData || launch.devToolsScript != nil || launch.protocolProbeOutput != nil || launch.blockingProbeOutput != nil {
+            let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("SimpleBrowser-blocking-\(UUID().uuidString)", isDirectory: true)
+            return ContentBlocker(directory: scratch, sources: [])
+        }
+        return ContentBlocker.standard()
+    }()
+
+    /// Developer aid (`--blocking-probe <file>`): downloads the real filter
+    /// lists into a scratch folder, converts and compiles them, and writes
+    /// down what that took and what was left out.
+    func runBlockingProbe(output: String, lists: [String], sites: [String], browser: BrowserWindowController) {
+        Task { @MainActor in
+            let suite = "SimpleBrowser.blocking-probe"
+            UserDefaults.standard.removePersistentDomain(forName: suite)
+            if let scratchSettings = UserDefaults(suiteName: suite) { BrowserSettings.store = scratchSettings }
+            let chosen = FilterList.all.filter { lists.isEmpty ? $0.onByDefault : lists.contains($0.id) }
+            // The app's own blocker, which in a probe run has a scratch folder.
+            let probe = blocker
+            let scratch = probe.directory
+            probe.sources = chosen.map { FilterList(id: $0.id, name: $0.name, about: $0.about, url: $0.url, onByDefault: true) }
+            let report = await probe.update(force: true)
+
+            // The same pages with and without, counted by the page itself.
+            var pages: [[String: Any]] = []
+            @MainActor func visit(_ address: String) async -> [String: Any] {
+                guard let url = URL(string: address) else { return [:] }
+                browser.load(url)
+                try? await Task.sleep(for: .seconds(12))
+                let counted = try? await browser.evaluateInPage("return { requests: performance.getEntriesByType('resource').length, hosts: new Set(performance.getEntriesByType('resource').map(e => new URL(e.name).host)).size, frames: document.querySelectorAll('iframe').length }") as? [String: Any]
+                return ["requests": counted?["requests"] ?? -1, "hosts": counted?["hosts"] ?? -1, "frames": counted?["frames"] ?? -1,
+                        "blocked": browser.blocking.blockedCount, "blockedHosts": browser.blocking.blockedHosts.count]
+            }
+            for site in sites {
+                BrowserSettings.contentBlocking = true
+                probe.settingsChanged()
+                let with = await visit(site)
+                BrowserSettings.contentBlocking = false
+                probe.settingsChanged()
+                let without = await visit(site)
+                pages.append(["site": site, "blocking": with, "noBlocking": without])
+            }
+            UserDefaults.standard.removePersistentDomain(forName: suite)
+            var skipped: [String: Int] = [:]
+            let texts = chosen.compactMap { try? String(contentsOf: scratch.appendingPathComponent($0.id + ".txt"), encoding: .utf8) }
+            let built = RuleSetBuilder.build(texts: texts, rejecting: [])
+            for (reason, count) in built.skipped { skipped[reason.rawValue] = count }
+            let result: [String: Any] = [
+                "lists": chosen.map(\.id), "downloaded": report.downloaded, "failed": report.failed,
+                "bytes": probe.state.lists.mapValues(\.bytes), "filters": probe.state.filters,
+                "rules": probe.state.rules, "compiledLists": report.lists, "rejectedByWebKit": report.rejected,
+                "refusedSelectors": probe.state.refusedSelectors ?? -1, "skipped": probe.state.skipped, "skippedByReason": skipped,
+                "seconds": report.seconds, "status": probe.statusLine, "pages": pages,
+            ]
+            if let data = try? JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .sortedKeys]) {
+                try? data.write(to: URL(fileURLWithPath: output), options: .atomic)
+            }
+            try? FileManager.default.removeItem(at: scratch)
+        }
+    }
+
+    /// Developer aid: the addresses the recorder has as blocked, for a tab.
+    func blockedRequestsRecorded(for browser: BrowserWindowController) -> [String] {
+        recorder.events.compactMap { recorded -> String? in
+            guard recorded.tab == browser.tab, case .network(let event) = recorded.event, event.failure == "Blocked by content blocking" else { return nil }
+            return event.url.absoluteString
+        }
+    }
+
+    /// Settings → Privacy, from the shield's popover.
+    @objc func showPrivacySettings(_ sender: Any?) {
+        settingsWindow.show(.privacy, sender: sender)
     }
 
     // MARK: - History
@@ -673,7 +763,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let profile = profile ?? currentProfile
         profiles.markUsed(profile.id)
         let controller = BrowserWindowController(profile: profile, recorder: recorder, passwords: passwords(for: profile),
-                                                 configuration: configuration, startPage: startPage(for: profile))
+                                                 configuration: configuration, startPage: startPage(for: profile), blocker: blocker)
         controller.bookmarks = { [weak self] in self?.bookmarks(for: profile) }
         controller.onBookmarksChanged = { [weak self] in self?.bookmarksChanged() }
         controller.readingListArchive = { [weak self] item in
@@ -814,6 +904,9 @@ struct LaunchOptions {
     var passwordsSelfTestOutput: String?
     var pageSelfTestOutput: String?
     var featureSelfTestOutput: String?
+    var blockingProbeOutput: String?
+    var blockingProbeLists: [String] = []
+    var blockingProbeSites: [String] = []
     var sessionDirectory: String?
     var featureSections: [String] = []
     var updateFeed: URL?
@@ -847,6 +940,12 @@ struct LaunchOptions {
                 options.updateFeed = iterator.next().flatMap(URL.init(string:))
             case "--update-selftest":
                 options.updateSelfTestOutput = iterator.next()
+            case "--blocking-probe":
+                options.blockingProbeOutput = iterator.next()
+            case "--blocking-sites":
+                options.blockingProbeSites = (iterator.next() ?? "").split(separator: ",").map(String.init)
+            case "--blocking-lists":
+                options.blockingProbeLists = (iterator.next() ?? "").split(separator: ",").map(String.init)
             case "--feature-selftest":
                 options.featureSelfTestOutput = iterator.next()
             case "--session-dir":

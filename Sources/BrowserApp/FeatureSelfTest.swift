@@ -55,6 +55,7 @@ final class FeatureSelfTest {
     /// One entry per ticket, in the order they were built.
     var sections: [(String, () async -> Void)] {
         [("tabs", tabs), ("hibernation", hibernation), ("session", sessionRoundTrip), ("history", history), ("bookmarks", bookmarks), ("address-bar", addressBar),
+         ("blocking", blocking),
          ("session-seed", sessionSeed), ("session-verify", sessionVerify)]
     }
 

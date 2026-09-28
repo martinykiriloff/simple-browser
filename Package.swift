@@ -16,7 +16,7 @@ let package = Package(
         // needs from the model layer comes through BrowserKit and InspectKit.
         .executableTarget(
             name: "BrowserApp",
-            dependencies: ["BrowserKit", "InspectKit", "PasswordKit", "TranslateKit", "UpdateKit", "DataKit"],
+            dependencies: ["BrowserKit", "InspectKit", "PasswordKit", "TranslateKit", "UpdateKit", "DataKit", "BlockKit"],
             resources: [.copy("DevToolsUI"), .copy("PasswordAgent"), .copy("TranslateAgent"), .copy("PageMenuAgent"), .copy("AppIcon")],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
@@ -78,6 +78,12 @@ let package = Package(
         .executableTarget(
             name: "BrowserKitChecks",
             dependencies: ["BrowserKit"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        // `swift run BlockKitChecks`: the filter parser, and exceptions across partitions.
+        .executableTarget(
+            name: "BlockKitChecks",
+            dependencies: ["BlockKit"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .testTarget(name: "BlockKitTests", dependencies: ["BlockKit"]),

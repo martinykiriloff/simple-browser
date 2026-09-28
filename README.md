@@ -7,8 +7,8 @@ A native macOS browser. Swift above the engine, WebKit below it.
 Early. `BlockKit`, `BrowserKit` and `InspectKit` are pure-Foundation packages
 with no WebKit or AppKit dependency — they build and test anywhere a Swift
 toolchain exists. `BrowserApp` has tabs that sleep when idle, session
-restore, history, bookmarks, a smart address bar, profiles, a password manager
-and dev tools; content blocking and the proxy are not wired yet. The
+restore, history, bookmarks, a smart address bar, content blocking, profiles,
+a password manager and dev tools; the proxy is not wired yet. The
 [roadmap](https://github.com/martinykiriloff/simple-browser/issues/1) lists
 what is left.
 
@@ -68,6 +68,41 @@ It uses a scratch settings suite, so your own homepage is never touched. The
 app takes focus for about half a minute, and the screen has to be unlocked:
 macOS will not make a window key behind the lock screen, which the test
 reports as an environment problem rather than a failure.
+
+## Content blocking
+
+Ads and trackers are blocked from the first page, with EasyList and
+EasyPrivacy. WebKit does the blocking itself, in its network process, before
+a request is made: no script runs per request, and nothing in the app sees a
+page's traffic.
+
+**The shield** beside the address bar shows how many requests were blocked
+on the page. Clicking it lists where they were going, switches blocking off
+for the site (remembered per profile; the page reloads unblocked), and opens
+*Report a Broken Site…*, which prepares an issue naming the site for you to
+read before anything is sent. Blocked requests appear in DevTools' Network
+panel as `(blocked)`.
+
+**Settings → Privacy** has the main switch, the filter lists (the EasyList
+Cookie List and Fanboy's Annoyances are there to switch on), when they were
+last updated, *Update Now*, and the sites blocking is off for. The lists are
+checked daily with `If-None-Match`, so an unchanged list costs one small
+request, and downloaded without cookies.
+
+Measured with EasyList and EasyPrivacy on 2026-09-28: 132,687 filters become
+215,886 rules in 8 compiled lists; WebKit refused none. 904 filters (0.7%)
+use what WebKit's blocker cannot express (redirects, scriptlets, regular
+expressions, procedural selectors) and are left out rather than
+approximated. Converting takes 2 seconds and compiling about 30, in the
+background; the compiled lists are kept, so a launch only looks them up.
+On three news sites the pages made 9 to 35% fewer requests, to as few as a
+fifth of the hosts.
+
+```sh
+swift run BlockKitChecks                 # the filter parser; exceptions across partitions
+ONLY=blocking scripts/test-features.sh   # against the fixture site's own lists (takes focus)
+.build/debug/SimpleBrowser --blocking-probe /tmp/probe.json about:blank   # the real lists, in a scratch folder
+```
 
 ## The right-click menu
 

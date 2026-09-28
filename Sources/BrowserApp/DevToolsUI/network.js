@@ -204,7 +204,7 @@
       const name = h("div", { class: "name-cell", title: r.url + "\nObserved by: " + r.sources.join(", ") }, h("span", { style: "overflow:hidden;text-overflow:ellipsis" }, fileName(r.url)));
       if (r.sources.length === 1 && r.sources[0] === "pageWorld") name.appendChild(h("span", { class: "src page", title: "Seen only by page-world hooks, which page script could tamper with" }, "page"));
       tr.appendChild(h("td", {}, name));
-      const status = r.statusCode != null ? String(r.statusCode) : (r.failure ? "(failed)" : "");
+      const status = r.statusCode != null ? String(r.statusCode) : (r.failure ? (/^Blocked/.test(r.failure) ? "(blocked)" : "(failed)") : "");
       tr.appendChild(h("td", { title: r.statusCode == null && !r.failure ? "Status not observable for this request type" : "" }, status));
       tr.appendChild(h("td", {}, r.resourceType));
       tr.appendChild(h("td", {}, r.initiator || ""));

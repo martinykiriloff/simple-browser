@@ -44,16 +44,42 @@ seamless.
 Content rules compile to bytecode that runs in WebKit's network process before
 dispatch — no per-request JavaScript. Architecturally faster than Chrome MV3.
 
-Pipeline: fetch ABP lists → resolve `!#include` recursively → evaluate `!#if` for
-`env_safari` / `adguard_ext_safari` → punycode domains → convert to
-`ContentRule` → `canonicalized()` → `partition()` → compile off-main → cache by
-SHA with ETag-driven incremental updates.
+Pipeline, as built (`BlockKit/FilterParser`, `BlockKit/RuleSetBuilder`,
+`BrowserApp/ContentBlocker`): fetch ABP lists with `If-None-Match` → check the
+hiding selectors against WebKit's CSS parser → convert to `ContentRule`, in
+canonical order → lists of 30,000 action rules, each ending with every
+exception → compile → keep, named by a fingerprint of the list files and the
+converter's version, so an unchanged set is looked up, never compiled again.
+Not built: `!#include` and `!#if` (EasyList and EasyPrivacy use neither), and
+punycode conversion (filters with non-ASCII domains are left out).
+
+A filter with no type option becomes two rules: every resource type but
+`document`, and `document` for third-party loads only. WebKit's `document`
+is also the page itself, which ABP's default excludes; without this a filter
+such as `/ads/` makes any site with `/ads/` in its address unreachable.
+
+Measured WebKit behaviour the design depends on:
+
+- **An invalid selector is not a compile error.** WebKit compiles a
+  `css-display-none` rule without parsing its selector. A selector its CSS
+  parser rejects then makes the rule hide nothing, and so does every selector
+  sharing that rule. Hence `SelectorValidator`: each selector is tried with
+  `querySelector` in an empty, offline page before any are put together.
+  Unchecked selectors get a rule each.
+- **Blocked loads are reported twice.** The navigation delegate's private
+  `_webView:contentRuleListWithIdentifier:performedAction:forURL:` fires for
+  the preload scanner's request and again for the parser's. The shield counts
+  addresses, not calls.
+- **Rule lists can be swapped on a live `WKUserContentController`**, and the
+  change holds for the navigation being decided. That is how blocking is
+  switched off per site: by the site of the page a tab is about to show.
 
 The partitioner's two hazards are documented in the README and locked down by
 tests. Read `RulePartitioner`'s doc comment before changing it.
 
 Cosmetic filtering uses `css-display-none`. Scriptlets and procedural filters
-need `WKUserScript` at `.atDocumentStart`. Full uBO parity is not achievable;
+need `WKUserScript` at `.atDocumentStart` and are not built yet; they are
+counted as skipped. Full uBO parity is not achievable;
 `WKWebExtension` (macOS 15.4+) is the escape hatch for coverage.
 
 ## Dev tools

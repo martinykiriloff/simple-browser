@@ -61,6 +61,8 @@ jobs:
       - name: Checks
         run: |
           swift run BrowserKitChecks
+          swift run BlockKitChecks
+          swift run DataKitChecks
           swift run PasswordKitChecks
           swift run TranslateKitChecks
           swift run UpdateKitChecks

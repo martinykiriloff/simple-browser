@@ -15,6 +15,7 @@ cd "$ROOT"
 
 swift build 2>&1 | grep -E "error|Build complete" || true
 "$ROOT/.build/debug/BrowserKitChecks"
+"$ROOT/.build/debug/BlockKitChecks"
 APP="$ROOT/.build/debug/SimpleBrowser"
 REPORT="${REPORT:-$(mktemp -t feature-report).json}"
 

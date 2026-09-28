@@ -116,13 +116,16 @@ final class BrowserWindowController: NSWindowController,
     var readingListArchive: ((BookmarkStore.ReadingItem) -> URL)?
     private let starButton = NSButton()
     private let securityButton = NSButton()
+    /// The shield: what was blocked on this page, and the site's switch.
+    let blocking = BlockingController()
     private(set) var pageSecurity = PageSecurity.none
     let favoritesBar = FavoritesBarController()
     /// Called as the tab closes, with what "Reopen Closed Tab" needs.
     var onTabClosed: ((URL?, Data?, String) -> Void)?
 
     init(profile: Profile, recorder: InspectorRecorder, passwords: PasswordService,
-         configuration popupConfiguration: WKWebViewConfiguration? = nil, startPage: StartPageSchemeHandler? = nil) {
+         configuration popupConfiguration: WKWebViewConfiguration? = nil, startPage: StartPageSchemeHandler? = nil,
+         blocker: ContentBlocker? = nil) {
         self.profile = profile
         self.recorder = recorder
         self.bridge = InspectorBridge(recorder: recorder, tab: tab)
@@ -151,6 +154,11 @@ final class BrowserWindowController: NSWindowController,
         passwordCoordinator.install(into: configuration)
         translator.install(into: configuration)
         contextMenu.install(into: configuration)
+        // The rule lists compiled last time are in place before the first page.
+        blocker?.register(configuration.userContentController)
+        blocking.blocker = blocker
+        blocking.contentController = configuration.userContentController
+        blocking.profileID = profile.id.description
         webView = BrowserWebView(frame: .zero, configuration: configuration)
         self.configuration = configuration
 
@@ -213,6 +221,11 @@ final class BrowserWindowController: NSWindowController,
         bridge.onAuxiliaryMessage = { [weak self] kind, body, _ in
             self?.devTools?.handleAuxiliary(kind: kind, body: body)
         }
+
+        blocking.currentURL = { [weak self] in self?.currentURL }
+        blocking.reload = { [weak self] in self?.reload(nil) }
+        blocking.openInNewTab = { [weak self] url in self?.openInNewTab?(url, true) }
+        blocking.showSettings = { NSApp.sendAction(#selector(AppDelegate.showPrivacySettings(_:)), to: nil, from: nil) }
 
         passwordCoordinator.webView = webView
         passwordCoordinator.anchorItem = { [weak self] in self?.passwordsItem }
@@ -1466,6 +1479,7 @@ final class BrowserWindowController: NSWindowController,
         devToolsWindow?.close()
         devTools?.tearDown()
         passwordCoordinator.uninstall()
+        blocking.tearDown()
         translator.uninstall()
         contextMenu.uninstall()
         bridge.uninstall()
@@ -1507,7 +1521,7 @@ final class BrowserWindowController: NSWindowController,
     // MARK: - NSToolbarDelegate
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.back, .forward, .reload, .home, .address, .star, .translate, .passwords, .flexibleSpace, .devTools, .profile]
+        [.back, .forward, .reload, .home, .address, .shield, .star, .translate, .passwords, .flexibleSpace, .devTools, .profile]
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
@@ -1551,6 +1565,11 @@ final class BrowserWindowController: NSWindowController,
             item.view = profileButton
             item.label = "Profile"
             item.visibilityPriority = .high
+            return item
+        case .shield:
+            let item = NSToolbarItem(itemIdentifier: identifier)
+            item.view = blocking.button
+            item.label = "Content Blocking"
             return item
         case .star:
             let item = NSToolbarItem(itemIdentifier: identifier)
@@ -1612,6 +1631,7 @@ final class BrowserWindowController: NSWindowController,
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         recordNavigation(.committed)
+        blocking.didCommit()
         passwordCoordinator.didCommitNavigation()
         translator.didCommitNavigation()
         syncChrome()
@@ -1667,6 +1687,12 @@ final class BrowserWindowController: NSWindowController,
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
         // `<a download>`.
         if navigationAction.shouldPerformDownload { return .download }
+        // Whether this tab's requests are filtered goes by the site of the
+        // page it shows, decided as that page starts to load.
+        if navigationAction.targetFrame?.isMainFrame == true, let url = navigationAction.request.url {
+            await blocking.blocker?.waitUntilLookedUp()
+            blocking.willNavigate(to: url)
+        }
         // The start page's search box: only the start page may use it, so a
         // web page cannot make the browser search or navigate through it.
         if let text = StartPageSchemeHandler.searchText(from: navigationAction.request.url) {
@@ -1692,6 +1718,20 @@ final class BrowserWindowController: NSWindowController,
             return .cancel
         }
         return .allow
+    }
+
+    /// WebKit tells its navigation delegate what a content rule list did to
+    /// a load. Private API, found by name: where it is missing nothing calls
+    /// this, and the shield shows no count.
+    @objc(_webView:contentRuleListWithIdentifier:performedAction:forURL:)
+    func webView(_ webView: WKWebView, contentRuleListWithIdentifier identifier: String, performedAction action: NSObject, forURL url: URL) {
+        guard webView === self.webView, action.responds(to: NSSelectorFromString("blockedLoad")),
+              action.value(forKey: "blockedLoad") as? Bool == true else { return }
+        blocking.didBlock(url)
+        recorder.record(.network(NetworkEvent(
+            source: .navigationDelegate, url: url, initiator: "blocked",
+            bodyUnavailable: true, failure: "Blocked by content blocking"
+        )), tab: tab)
     }
 
     func webView(_ webView: WKWebView, navigationResponse: WKNavigationResponse, didBecome download: WKDownload) {
@@ -1789,4 +1829,5 @@ private extension NSToolbarItem.Identifier {
     static let profile  = NSToolbarItem.Identifier("profile")
     static let translate = NSToolbarItem.Identifier("translate")
     static let star = NSToolbarItem.Identifier("star")
+    static let shield = NSToolbarItem.Identifier("shield")
 }

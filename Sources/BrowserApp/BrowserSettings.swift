@@ -111,6 +111,37 @@ enum BrowserSettings {
         set { store.set(newValue, forKey: suggestionsKey) }
     }
 
+    // MARK: Content blocking
+
+    private static let blockingKey = "settings.blocking.on"
+    private static let filterListsKey = "settings.blocking.lists"
+    private static let blockingOffKey = "settings.blocking.offSites."
+
+    /// Block ads and trackers. On unless switched off.
+    static var contentBlocking: Bool {
+        get { store.object(forKey: blockingKey) as? Bool ?? true }
+        set { store.set(newValue, forKey: blockingKey) }
+    }
+
+    /// The filter lists chosen, by id; nil until the person chooses, which
+    /// means "the ones that are on by default".
+    static var enabledFilterLists: [String]? {
+        get { store.stringArray(forKey: filterListsKey) }
+        set {
+            if let newValue { store.set(newValue, forKey: filterListsKey) } else { store.removeObject(forKey: filterListsKey) }
+        }
+    }
+
+    /// Sites blocking is switched off for, in one profile.
+    static func blockingOffSites(profile: String) -> [String] {
+        store.stringArray(forKey: blockingOffKey + profile) ?? []
+    }
+
+    static func setBlockingOffSites(_ sites: [String], profile: String) {
+        if sites.isEmpty { store.removeObject(forKey: blockingOffKey + profile) }
+        else { store.set(Array(Set(sites)).sorted(), forKey: blockingOffKey + profile) }
+    }
+
     // MARK: Bookmarks
 
     private static let favoritesBarKey = "settings.favoritesBar"

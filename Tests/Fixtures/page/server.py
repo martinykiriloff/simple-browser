@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Fixture site for the page self-test (translation, context menu, downloads).
+"""Fixture site for the page and feature self-tests (translation, context menu,
+downloads, tabs, history, content blocking).
 
     python3 Tests/Fixtures/page/server.py      # http://127.0.0.1:8767/
 """
@@ -72,9 +73,81 @@ ENGLISH = """<!doctype html>
 <body><p>This page is already written in English, so there is nothing to translate here at all.</p></body></html>"""
 
 
+BLOCKING = """<!doctype html>
+<html><head><meta charset="utf-8"><title>Blocking</title>
+<script>window.loaded = [];</script></head><body>
+<h1>A page with ads</h1>
+<script src="/ads/banner.js"></script>
+<script src="/ads/allowed.js"></script>
+<script src="http://localhost:8767/tracker.js"></script>
+<script src="/app.js"></script>
+<img id="pixel" src="/pixel.gif?track=1" alt="">
+<img id="photo" src="/pixel.png" alt="">
+<div class="ad-banner" id="hidden-ad">Buy now!</div>
+<div class="sponsored" id="sponsored">Sponsored</div>
+<div class="promo" id="promo">A promotion on this site</div>
+<div class="only-on-localhost" id="elsewhere">Hidden on localhost only</div>
+<p id="content">The article itself.</p>
+<iframe id="frame" src="http://localhost:8767/ads/frame.html" width="200" height="60"></iframe>
+</body></html>"""
+
+# What the filter lists contain, by version: /filters/bump moves to the next.
+FILTERS = {
+    "ads": [
+        """[Adblock Plus 2.0]
+! Title: Test ads
+/ads/banner.
+/ads/frame.
+/ads/allowed.
+@@/ads/allowed.js
+##.ad-banner
+##.sponsored:not-a-real-pseudo(1)
+127.0.0.1##.promo
+localhost##.only-on-localhost
+! what WebKit cannot do is left out
+||x.example^$redirect=noop.js
+example.com##+js(nowif)
+""",
+        """[Adblock Plus 2.0]
+! Title: Test ads, a day later
+/ads/banner.
+/ads/frame.
+/ads/allowed.
+@@/ads/allowed.js
+/app.js
+##.ad-banner
+127.0.0.1##.promo
+""",
+    ],
+    "privacy": [
+        """! Title: Test privacy
+||localhost^$third-party
+/pixel.gif?track=
+! padding so this is long enough to be a list
+||tracker-one.example^
+||tracker-two.example^
+"""
+    ],
+}
+filter_version = {"ads": 0, "privacy": 0}
+filter_requests = {"ads": [], "privacy": []}
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
+
+    def filters(self, name):
+        version = min(filter_version[name], len(FILTERS[name]) - 1)
+        etag = f'"{name}-{version}"'
+        sent = self.headers.get("If-None-Match")
+        filter_requests[name].append({"if-none-match": sent, "cookie": self.headers.get("Cookie")})
+        if sent == etag:
+            self.send_response(304)
+            self.send_header("ETag", etag)
+            self.end_headers()
+            return
+        self.send(200, FILTERS[name][version], "text/plain; charset=utf-8", {"ETag": etag})
 
     def send(self, status, body, content_type="text/html; charset=utf-8", headers=None):
         data = body if isinstance(body, bytes) else body.encode()
@@ -110,6 +183,31 @@ class Handler(BaseHTTPRequestHandler):
             self.send(200, ENGLISH)
         elif path == "/recette":
             self.send(200, "<!doctype html><title>Recette</title><p id=recipe>La recette</p>")
+        elif path == "/blocking":
+            self.send(200, BLOCKING)
+        elif path in ("/ads/banner.js", "/ads/allowed.js", "/tracker.js", "/app.js"):
+            name = path.rsplit("/", 1)[1].split(".")[0]
+            self.send(200, f"window.loaded && window.loaded.push('{name}');", "application/javascript")
+        elif path == "/ads/frame.html":
+            self.send(200, "<!doctype html><title>An ad</title><p>An ad in a frame</p>")
+        elif path == "/pixel.gif":
+            self.send(200, PIXEL, "image/png")
+        elif path in ("/filters/ads.txt", "/filters/privacy.txt"):
+            self.filters(path.split("/")[2].split(".")[0])
+        elif path == "/filters/portal.txt":
+            self.send(200, "<!DOCTYPE html><html><body><h1>Welcome to Hotel Wi-Fi</h1><p>Please sign in</p><p>to continue</p><p>browsing</p></body></html>",
+                      "text/plain")
+        elif path == "/filters/bump":
+            filter_version["ads"] += 1
+            self.send(200, "{}", "application/json")
+        elif path == "/filters/reset":
+            for name in filter_version:
+                filter_version[name] = 0
+                filter_requests[name] = []
+            self.send(200, "{}", "application/json")
+        elif path == "/filters/requests":
+            import json
+            self.send(200, json.dumps(filter_requests), "application/json")
         elif path == "/pixel.png":
             self.send(200, PIXEL, "image/png")
         elif path == "/report.zip":
