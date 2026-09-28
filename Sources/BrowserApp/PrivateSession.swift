@@ -1,5 +1,6 @@
 import AppKit
 import WebKit
+import BrowserKit
 
 /// What the private windows of one profile share, and all that remains of
 /// them: a website data store that exists only in memory. When the last
@@ -14,6 +15,8 @@ final class PrivateSession {
     let dataStore = WKWebsiteDataStore.nonPersistent()
     var zoomLevels: [String: Double] = [:]
     var blockingOffSites: [String] = []
+    var permissions = SitePermissions()
+    var certificateExceptions = CertificateExceptions()
     /// Open private tabs.
     var tabs = 0
 }

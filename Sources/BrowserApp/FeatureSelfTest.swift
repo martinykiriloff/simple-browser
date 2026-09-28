@@ -15,6 +15,9 @@ final class FeatureSelfTest {
     let site = "http://127.0.0.1:8767"
     private var failures: [String] = []
     private var environment: [String] = []
+    /// What could not be tested where the run took place, and why. Said,
+    /// not failed: the run is as good as its checks.
+    private var skipped: [String] = []
     private var passed = 0
     private let snapshots: String?
 
@@ -45,6 +48,7 @@ final class FeatureSelfTest {
                 "checksPassed": test.passed,
                 "failures": test.failures,
                 "environment": test.environment,
+                "skipped": test.skipped,
             ]
             if let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]) {
                 try? data.write(to: URL(fileURLWithPath: output), options: .atomic)
@@ -55,7 +59,7 @@ final class FeatureSelfTest {
     /// One entry per ticket, in the order they were built.
     var sections: [(String, () async -> Void)] {
         [("tabs", tabs), ("hibernation", hibernation), ("session", sessionRoundTrip), ("history", history), ("bookmarks", bookmarks), ("address-bar", addressBar),
-         ("blocking", blocking), ("find", find), ("zoom", zoom), ("reader", reader), ("private", privateWindows),
+         ("blocking", blocking), ("find", find), ("zoom", zoom), ("reader", reader), ("private", privateWindows), ("permissions", permissions), ("certificates", certificates),
          ("session-seed", sessionSeed), ("session-verify", sessionVerify)]
     }
 
@@ -64,6 +68,11 @@ final class FeatureSelfTest {
     func check(_ name: String, _ ok: Bool, _ detail: Any? = nil) {
         if ok { passed += 1 } else { failures.append(detail.map { "\(name): \($0)" } ?? name) }
         FileHandle.standardError.write(Data("[selftest] \(ok ? "ok" : "FAIL") \(name)\(ok ? "" : detail.map { ": \($0)" } ?? "")\n".utf8))
+    }
+
+    func skip(_ why: String) {
+        skipped.append(why)
+        FileHandle.standardError.write(Data("[selftest] skipped \(why)\n".utf8))
     }
 
     func pause(_ seconds: Double) async { try? await Task.sleep(for: .seconds(seconds)) }
@@ -583,6 +592,9 @@ final class FeatureSelfTest {
         // closing the last window would quit the app under the test.
         if let tab = app.browserControllers.first(where: { $0 !== browser && $0.currentURL?.path == "/second" }) {
             tab.window?.makeKeyAndOrderFront(nil)
+            // Once the link's page has loaded: a load begun while another is
+            // still under way takes its place in the history, in any browser.
+            _ = await waitFor { !tab.pageWebView.isLoading }
             await open("/tabs", in: tab)
             check("tabs: the tab has history to go back to", tab.pageWebView.canGoBack)
             let remaining = tabs(of: browser).count - 1

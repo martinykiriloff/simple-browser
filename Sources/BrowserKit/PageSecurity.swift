@@ -12,15 +12,21 @@ public enum PageSecurity: Equatable, Sendable {
     case mixed
     /// Plain http: anyone on the network can read and change the page.
     case notSecure
+    /// https, on a certificate that could not be verified and that the
+    /// person chose to go on with.
+    case untrusted
     /// Plain http to this Mac itself, which crosses no network.
     case local
     /// The browser's own pages, files and blanks: nothing to say.
     case none
 
-    public static func of(_ url: URL?, hasOnlySecureContent: Bool) -> PageSecurity {
+    /// - Parameter certificateAccepted: the connection rests on an exception
+    ///   the person made for a certificate that did not verify.
+    public static func of(_ url: URL?, hasOnlySecureContent: Bool, certificateAccepted: Bool = false) -> PageSecurity {
         guard let url, let scheme = url.scheme?.lowercased() else { return .none }
         switch scheme {
         case "https":
+            if certificateAccepted { return .untrusted }
             return hasOnlySecureContent ? .secure : .mixed
         case "http":
             let host = (url.host(percentEncoded: false) ?? "").lowercased()
@@ -35,7 +41,7 @@ public enum PageSecurity: Equatable, Sendable {
     /// Shown beside the address. Only trouble gets words; a lock needs none.
     public var label: String? {
         switch self {
-        case .notSecure, .mixed: return "Not Secure"
+        case .notSecure, .mixed, .untrusted: return "Not Secure"
         case .secure, .local, .none: return nil
         }
     }
@@ -43,7 +49,7 @@ public enum PageSecurity: Equatable, Sendable {
     public var symbol: String? {
         switch self {
         case .secure: return "lock.fill"
-        case .mixed, .notSecure: return "exclamationmark.triangle.fill"
+        case .mixed, .notSecure, .untrusted: return "exclamationmark.triangle.fill"
         case .local: return "desktopcomputer"
         case .none: return nil
         }
@@ -57,6 +63,8 @@ public enum PageSecurity: Equatable, Sendable {
             return "\(site) is encrypted, but this page loaded parts of itself without encryption. Those parts could have been read or changed on the way."
         case .notSecure:
             return "The connection to \(site) is not encrypted. Anyone on the network can read what you type here, passwords and card numbers included, and change what you see."
+        case .untrusted:
+            return "The connection to \(site) is encrypted, but with a certificate that could not be verified, which you chose to go on with. It may not be \(site) you are talking to."
         case .local:
             return "\(site) is on this Mac. The connection does not leave it."
         case .none:

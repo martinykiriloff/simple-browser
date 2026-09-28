@@ -142,6 +142,20 @@ enum BrowserSettings {
         else { store.set(Array(Set(sites)).sorted(), forKey: blockingOffKey + profile) }
     }
 
+    // MARK: Site permissions
+
+    private static let permissionsKey = "settings.permissions."
+
+    /// What each site may do, in one profile.
+    static func sitePermissions(profile: String) -> SitePermissions {
+        store.data(forKey: permissionsKey + profile).flatMap { try? JSONDecoder().decode(SitePermissions.self, from: $0) } ?? SitePermissions()
+    }
+
+    static func setSitePermissions(_ permissions: SitePermissions, profile: String) {
+        if permissions.isEmpty { store.removeObject(forKey: permissionsKey + profile) }
+        else { store.set(try? JSONEncoder().encode(permissions), forKey: permissionsKey + profile) }
+    }
+
     // MARK: Reader
 
     private static let readerKey = "settings.reader.appearance"

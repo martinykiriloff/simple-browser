@@ -216,6 +216,41 @@ swift run BrowserKitChecks
 The profile that existed before profiles were added is carried over as
 "Default" with its data store, so nobody is signed out by the upgrade.
 
+## What sites may do
+
+A site asking for the **camera**, the **microphone** or your **location**
+is asked about in a question hanging from the lock in the address bar:
+*Don't Allow*, *Allow Once* or *Allow*. Allow and Don't Allow are remembered
+for the site, per profile; Allow Once lasts while the tab stays on the site.
+A site is an origin, so `http://` and `https://` of one name are two sites.
+When a frame from elsewhere asks through a page, the question names the page
+you chose to visit and says who is really asking. While the camera or
+microphone is in use a red indicator shows beside the address and in the
+tab; clicking it stops them.
+
+**Pop-up windows** a page opens by itself are held back, with a bar saying
+how many and offering *Open* and *Always Allow on this site*. A window
+opened by your click is never held back. A page may hand over one **file**
+unasked; a second one it starts by itself is asked about.
+
+**The lock** opens the page's information: how the connection is secured
+and by whose certificate, what the site may do (each changeable there),
+what it has stored on this Mac with *Clear…*, and what was blocked.
+**Settings → Websites** lists every site that was allowed or refused
+something.
+
+**Certificates.** A site whose certificate cannot be verified is not shown;
+a page saying so is, with the certificate's details, *Go Back* and *Visit
+this website anyway*. Going on makes an exception for that certificate on
+that site until the app quits (or the private session ends), and the site
+stays marked *Not Secure*. If the site later presents another certificate,
+the warning is back.
+
+Not offered: **notifications**. Measured, a page in an app can be granted
+the permission, and the notification it then shows goes nowhere: WebKit
+hands page notifications to a provider that only its C API can set. Pages
+are given no Notification API, rather than one that does nothing.
+
 ## Private windows
 
 **File → New Private Window** (⇧⌘N) opens a window with a dark toolbar and

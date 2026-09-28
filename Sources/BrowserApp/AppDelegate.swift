@@ -58,6 +58,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private(set) lazy var settingsWindow: SettingsWindowController = {
         let controller = SettingsWindowController(passwords: passwords, blocker: blocker)
+        controller.websitesPane.currentProfile = { [weak self] in
+            let profile = self?.frontmostBrowser?.profile ?? self?.currentProfile
+            return (profile?.id.description ?? "", profile?.name ?? "")
+        }
         controller.privacyPane.currentProfile = { [weak self] in
             let profile = self?.frontmostBrowser?.profile ?? self?.currentProfile
             return (profile?.id.description ?? "", profile?.name ?? "")
@@ -439,6 +443,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard recorded.tab == browser.tab, case .network(let event) = recorded.event, event.failure == "Blocked by content blocking" else { return nil }
             return event.url.absoluteString
         }
+    }
+
+    @objc func showWebsiteSettings(_ sender: Any?) {
+        settingsWindow.show(.websites, sender: sender)
     }
 
     /// Settings → Privacy, from the shield's popover.

@@ -51,6 +51,8 @@ for line in report["failures"]:
     print("✘", line)
 for line in report["environment"]:
     print("⚠", line)
+for line in report.get("skipped", []):
+    print("– not tested here:", line)
 if report["passed"]:
     print(f"✔ all {report['checksPassed']} feature checks passed")
 sys.exit(0 if report["passed"] else 1)

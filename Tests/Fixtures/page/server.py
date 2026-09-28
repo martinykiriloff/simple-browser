@@ -206,6 +206,52 @@ class Handler(BaseHTTPRequestHandler):
             self.send(200, """<!doctype html><title>Sign in</title><form method=post action=/signin>
 <label>Username <input name=username id=username></label><label>Password <input name=password id=password type=password></label>
 <button id=submit>Sign in</button></form>""")
+        elif path == "/media":
+            self.send(200, """<!doctype html><title>Video call</title><button id=start onclick="start({video: true, audio: true})">Join with video</button>
+<script>
+window.media = 'idle';
+async function start(constraints) {
+  window.media = 'asking';
+  try {
+    window.stream = await navigator.mediaDevices.getUserMedia(constraints);
+    window.media = 'granted:' + window.stream.getTracks().map(t => t.kind).sort().join('+');
+  } catch (e) { window.media = 'refused:' + e.name; window.mediaError = e.message; }
+}
+function stop() { window.stream.getTracks().forEach(t => t.stop()); }
+if (location.search.includes('auto')) start({ video: true });
+</script>""")
+        elif path == "/media-frame":
+            self.send(200, """<!doctype html><title>A page with a call widget</title><p>The widget below is from another site.</p>
+<iframe id=widget src="http://localhost:8767/media?auto=1" allow="camera; microphone" width=400 height=100></iframe>""")
+        elif path == "/popups":
+            self.send(200, """<!doctype html><title>Pop-ups</title>
+<button id=open onclick="window.clicked = window.open('/second?clicked=1') ? 'opened' : 'blocked'">Open a window</button>
+<script>
+window.auto = window.open('/second?auto=1') ? 'opened' : 'blocked';
+window.auto2 = window.open('/long?auto=2') ? 'opened' : 'blocked';
+</script>""")
+        elif path == "/downloads":
+            self.send(200, """<!doctype html><title>Many files</title><p>This page hands over three files by itself.</p><script>
+for (const n of [1, 2, 3]) {
+  const frame = document.createElement('iframe');
+  frame.style.display = 'none';
+  frame.src = '/report.zip?n=' + n;
+  document.body.appendChild(frame);
+}
+</script>""")
+        elif path == "/geo":
+            self.send(200, """<!doctype html><title>Where am I</title><script>
+window.geo = 'idle';
+function locate() {
+  window.geo = 'asking';
+  navigator.geolocation.getCurrentPosition(p => { window.geo = 'position'; }, e => { window.geo = 'error:' + e.code; }, { timeout: 4000 });
+}
+</script>""")
+        elif path == "/notify":
+            self.send(200, """<!doctype html><title>Notify</title><script>
+window.notify = typeof Notification === 'undefined' ? 'no API' : 'permission:' + Notification.permission;
+function ask() { window.asked = 'asking'; Notification.requestPermission().then(r => { window.asked = r; }, e => { window.asked = 'error:' + e; }); }
+</script>""")
         elif path == "/article":
             self.send(200, NEWS_ARTICLE)
         elif path == "/webapp":
@@ -254,5 +300,24 @@ class Handler(BaseHTTPRequestHandler):
             self.send(404, "")
 
 
+def serve_https():
+    """The same site over https on 8768, with a certificate it signed itself:
+    a connection no browser should trust without being told to."""
+    import os, ssl, subprocess, tempfile, threading
+    folder = tempfile.mkdtemp(prefix="simplebrowser-fixture-")
+    key, cert = os.path.join(folder, "key.pem"), os.path.join(folder, "cert.pem")
+    made = subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", key, "-out", cert, "-days", "2",
+                           "-subj", "/CN=Fixture Self-Signed/O=SimpleBrowser Tests",
+                           "-addext", "subjectAltName=IP:127.0.0.1,DNS:localhost"], capture_output=True)
+    if made.returncode != 0:
+        return
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(cert, key)
+    server = ThreadingHTTPServer(("127.0.0.1", PORT + 1), Handler)
+    server.socket = context.wrap_socket(server.socket, server_side=True)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+
+
 if __name__ == "__main__":
+    serve_https()
     ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()

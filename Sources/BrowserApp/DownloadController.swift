@@ -40,7 +40,9 @@ final class DownloadController: NSObject, WKDownloadDelegate {
         if asking.remove(ObjectIdentifier(download)) != nil {
             destination = await ask(name)
         } else {
-            destination = Self.unique(downloadsDirectory.appendingPathComponent(name))
+            // Names being written to count as taken: two files of one name
+            // arriving together had both been given it, and one was lost.
+            destination = Self.unique(downloadsDirectory.appendingPathComponent(name), taken: Set(destinations.values.map(\.path)))
         }
         if let destination { destinations[ObjectIdentifier(download)] = destination }
         return destination
@@ -84,15 +86,15 @@ final class DownloadController: NSObject, WKDownloadDelegate {
     }
 
     /// `report.pdf`, then `report (2).pdf`, as Finder names copies.
-    static func unique(_ url: URL) -> URL {
+    static func unique(_ url: URL, taken: Set<String> = []) -> URL {
         let manager = FileManager.default
-        guard manager.fileExists(atPath: url.path) else { return url }
+        guard manager.fileExists(atPath: url.path) || taken.contains(url.path) else { return url }
         let base = url.deletingPathExtension().lastPathComponent
         let ext = url.pathExtension
         let directory = url.deletingLastPathComponent()
         for n in 2... {
             let candidate = directory.appendingPathComponent(ext.isEmpty ? "\(base) (\(n))" : "\(base) (\(n)).\(ext)")
-            if !manager.fileExists(atPath: candidate.path) { return candidate }
+            if !manager.fileExists(atPath: candidate.path), !taken.contains(candidate.path) { return candidate }
         }
         return url
     }

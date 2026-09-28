@@ -46,7 +46,14 @@ final class StartPageSchemeHandler: NSObject, WKURLSchemeHandler {
 
     func webView(_ webView: WKWebView, start task: any WKURLSchemeTask) {
         // Reader pages share the scheme: simplebrowser://reader/<token>.
-        let html = ReaderPage.isReader(task.request.url) ? ReaderStore.shared.html(for: task.request.url) : Self.html(content())
+        let html: String
+        if ReaderPage.isReader(task.request.url) {
+            html = ReaderStore.shared.html(for: task.request.url)
+        } else if WarningPage.isWarning(task.request.url) {
+            html = CertificateStore.shared.html(for: task.request.url)
+        } else {
+            html = Self.html(content())
+        }
         let data = Data(html.utf8)
         let response = URLResponse(url: task.request.url ?? Self.url, mimeType: "text/html", expectedContentLength: data.count, textEncodingName: "utf-8")
         task.didReceive(response)
@@ -56,7 +63,7 @@ final class StartPageSchemeHandler: NSObject, WKURLSchemeHandler {
 
     func webView(_ webView: WKWebView, stop task: any WKURLSchemeTask) {}
 
-    static func isStartPage(_ url: URL?) -> Bool { url?.scheme == scheme && !ReaderPage.isReader(url) }
+    static func isStartPage(_ url: URL?) -> Bool { url?.scheme == scheme && !ReaderPage.isReader(url) && !WarningPage.isWarning(url) }
 
     /// A tab's configuration gets the handler once; a pop-up's configuration,
     /// copied from its opener, already has it.

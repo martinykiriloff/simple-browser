@@ -122,6 +122,13 @@ final class BrowserWindowController: NSWindowController,
     var readingListArchive: ((BookmarkStore.ReadingItem) -> URL)?
     private let starButton = NSButton()
     private let securityButton = NSButton()
+    /// What the site may do, and the questions about it.
+    let permissions = PermissionsController()
+    private weak var captureItem: NSToolbarItem?
+    /// Set by the self-test before it makes a tab: WebKit's pretend camera
+    /// and microphone, so getUserMedia can be tested on a Mac with neither,
+    /// and without the system's own permission.
+    static var usesMockCaptureDevices = false
     /// Reader: the article alone, when the page has one.
     let reader = ReaderController()
     private weak var readerItem: NSToolbarItem?
@@ -172,12 +179,24 @@ final class BrowserWindowController: NSWindowController,
         translator.install(into: configuration)
         contextMenu.install(into: configuration)
         reader.install(into: configuration)
+        // Measured: in this app WebKit leaves `mediaDevicesEnabled` off, and
+        // a page then has no `navigator.mediaDevices` at all, so no site can
+        // even ask for the camera. A browser has to offer it; what a site
+        // gets is decided by `PermissionsController`, and by macOS.
+        WebInspectorSPI.setPreference("mediaDevicesEnabled", true, on: configuration.preferences)
+        // No Notification API for pages: see `SitePermission.offered`.
+        WebInspectorSPI.setPreference("notificationsEnabled", false, on: configuration.preferences)
+        if Self.usesMockCaptureDevices { WebInspectorSPI.setPreference("mockCaptureDevicesEnabled", true, on: configuration.preferences) }
+        // Every window a page opens comes to `createWebViewWith`, where the
+        // ones it opened by itself are held back and can be let through.
+        configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
         // The rule lists compiled last time are in place before the first page.
         blocker?.register(configuration.userContentController)
         blocking.blocker = blocker
         blocking.contentController = configuration.userContentController
         blocking.profileID = profile.id.description
         webView = BrowserWebView(frame: .zero, configuration: configuration)
+        QuietMode.apply(to: webView)
         self.configuration = configuration
 
         let window = NSWindow(
@@ -254,6 +273,19 @@ final class BrowserWindowController: NSWindowController,
 
         finder.container = pageContainer
         finder.webView = webView
+        permissions.webView = webView
+        permissions.container = pageContainer
+        permissions.anchor = { [weak self] in self?.securityButton }
+        permissions.openInNewTab = { [weak self] url in self?.openInNewTab?(url, true) }
+        permissions.onChange = { [weak self] in self?.syncCapture() }
+        let profileID = profile.id.description
+        if let privateSession {
+            permissions.stored = { privateSession.permissions }
+            permissions.store = { privateSession.permissions = $0 }
+        } else {
+            permissions.stored = { BrowserSettings.sitePermissions(profile: profileID) }
+            permissions.store = { BrowserSettings.setSitePermissions($0, profile: profileID) }
+        }
         reader.webView = webView
         reader.onStateChange = { [weak self] in self?.syncReader() }
         zoomButton.bezelStyle = .toolbar
@@ -462,6 +494,7 @@ final class BrowserWindowController: NSWindowController,
     private func replaceWebView() {
         let old = webView
         let fresh = BrowserWebView(frame: .zero, configuration: configuration)
+        QuietMode.apply(to: fresh)
         fresh.navigationDelegate = self
         fresh.uiDelegate = self
         fresh.allowsBackForwardNavigationGestures = true
@@ -488,6 +521,7 @@ final class BrowserWindowController: NSWindowController,
         NSLayoutConstraint.activate(fillConstraints)
 
         contextMenu.webView = fresh
+        permissions.webView = fresh
         finder.webView = fresh
         reader.webView = fresh
         observePage()
@@ -671,7 +705,68 @@ final class BrowserWindowController: NSWindowController,
 
     /// The page showing. In Reader that is the article's own address: what
     /// the address bar says, what a bookmark keeps, what zoom goes by.
-    private var shownURL: URL? { ReaderPage.original(of: webView.url) ?? webView.url }
+    private var shownURL: URL? { ReaderPage.original(of: webView.url) ?? WarningPage.original(of: webView.url) ?? webView.url }
+
+    // MARK: - Certificates
+
+    /// Certificates this profile's windows went on with, or for a private
+    /// window, its private session's.
+    private var certificateExceptions: CertificateExceptions {
+        get { privateSession?.certificateExceptions ?? CertificateStore.shared.exceptions(for: profile.id.description) }
+        set {
+            if let privateSession { privateSession.certificateExceptions = newValue }
+            else { CertificateStore.shared.setExceptions(newValue, for: profile.id.description) }
+        }
+    }
+
+    /// Whether the page showing is a certificate warning.
+    var isShowingCertificateWarning: Bool { WarningPage.isWarning(webView.url) }
+
+    /// A server proving who it is. One whose certificate the person went
+    /// on with is let through for that certificate; everything else is
+    /// WebKit's to judge.
+    func webView(_ webView: WKWebView, respondTo challenge: URLAuthenticationChallenge) async -> (URLSession.AuthChallengeDisposition, URLCredential?) {
+        let space = challenge.protectionSpace
+        guard space.authenticationMethod == NSURLAuthenticationMethodServerTrust, let trust = space.serverTrust else { return (.performDefaultHandling, nil) }
+        let fingerprint = CertificateStore.details(of: trust).fingerprint
+        guard certificateExceptions.allows(host: space.host, port: space.port, fingerprint: fingerprint) else { return (.performDefaultHandling, nil) }
+        return (.useCredential, URLCredential(trust: trust))
+    }
+
+    /// The page shown in place of a site whose certificate did not verify.
+    private func showCertificateWarning(for url: URL, error: NSError) -> Bool {
+        guard CertificateProblem.Kind.isCertificateError(error.code), url.scheme == "https" else { return false }
+        let trust = error.userInfo[NSURLErrorFailingURLPeerTrustErrorKey].map { $0 as! SecTrust }
+        let details = CertificateStore.details(of: trust)
+        let problem = CertificateProblem(url: url, kind: .init(errorCode: error.code), fingerprint: details.fingerprint,
+                                         subject: details.subject, issuer: details.issuer, expires: details.expires)
+        guard let address = WarningPage.url(token: CertificateStore.shared.add(problem), original: url) else { return false }
+        webView.load(URLRequest(url: address))
+        return true
+    }
+
+    /// "Go Back" and "Visit this website anyway" on a warning page.
+    private func perform(_ action: WarningPage.Action) {
+        switch action {
+        case .back:
+            // Back past the warning, to whatever was showing before it.
+            if let item = webView.backForwardList.backList.last(where: { !WarningPage.isWarning($0.url) }) { webView.go(to: item) }
+            else { load(StartPageSchemeHandler.url) }
+        case .proceed(let token):
+            guard WarningPage.token(of: webView.url) == token, let problem = CertificateStore.shared.problem(for: token) else { return }
+            var exceptions = certificateExceptions
+            exceptions.accept(problem)
+            certificateExceptions = exceptions
+            // In the warning's place in the tab's history, not after it:
+            // Back from the site must not lead to a warning already answered.
+            webView.callAsyncJavaScript("location.replace(address)", arguments: ["address": problem.url.absoluteString],
+                                        in: nil, in: .defaultClient) { [weak self] result in
+                MainActor.assumeIsolated {
+                    if case .failure = result { self?.load(problem.url) }
+                }
+            }
+        }
+    }
 
     @objc func focusAddressBar(_ sender: Any?) {
         window?.makeFirstResponder(addressField)
@@ -951,6 +1046,36 @@ final class BrowserWindowController: NSWindowController,
         syncStar()
     }
 
+    // MARK: - Downloads a page starts by itself
+
+    private var downloadsFromPage = 0
+    private var lastActionWasUserInitiated = true
+
+    /// A page may hand over one file unasked. A second, started by the page
+    /// and not by a click, is asked about: that is how a page fills a disk.
+    private func allowsDownload(userInitiated: Bool) async -> Bool {
+        if userInitiated { return true }
+        downloadsFromPage += 1
+        if downloadsFromPage == 1 { return true }
+        return await permissions.request([.downloads])
+    }
+
+    // MARK: - Camera and microphone
+
+    /// The red camera beside the address, and in the tab, while in use.
+    private func syncCapture() {
+        captureItem?.isHidden = !permissions.isCapturing
+        if permissions.isCapturing {
+            let icon = NSImageView(image: NSImage(systemSymbolName: permissions.cameraInUse ? "video.fill" : "mic.fill",
+                                                  accessibilityDescription: "Using the camera or microphone") ?? NSImage())
+            icon.contentTintColor = .systemRed
+            window?.tab.accessoryView = icon
+        } else if window?.tab.accessoryView is NSImageView {
+            window?.tab.accessoryView = nil
+        }
+        fitAddressField()
+    }
+
     // MARK: - Reader
 
     /// View → Show Reader (⇧⌘R).
@@ -1059,11 +1184,14 @@ final class BrowserWindowController: NSWindowController,
     private func syncSecurity() {
         // In Reader the article is a copy held by the browser: there is no
         // connection to describe, and the article's own lock would be a lie.
-        let url = reader.isActive ? nil : (isHibernated ? hibernatedURL : webView.url)
-        pageSecurity = PageSecurity.of(url, hasOnlySecureContent: webView.hasOnlySecureContent)
+        // A warning is about the page it stands in for, which is not secure.
+        let url = reader.isActive ? nil : (isHibernated ? hibernatedURL : shownURL)
+        pageSecurity = PageSecurity.of(url, hasOnlySecureContent: webView.hasOnlySecureContent,
+                                       certificateAccepted: isShowingCertificateWarning || certificateExceptions.covers(url))
         let trouble = pageSecurity.label != nil
         securityButton.image = pageSecurity.symbol.flatMap { NSImage(systemSymbolName: $0, accessibilityDescription: nil) }?
             .withSymbolConfiguration(.init(pointSize: 11, weight: .medium).applying(.init(paletteColors: [trouble ? .systemOrange : .secondaryLabelColor])))
+        securityButton.contentTintColor = trouble ? .systemOrange : .secondaryLabelColor
         securityButton.attributedTitle = NSAttributedString(string: pageSecurity.label ?? "", attributes: [
             .foregroundColor: NSColor.systemOrange, .font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize, weight: .medium),
         ])
@@ -1073,6 +1201,7 @@ final class BrowserWindowController: NSWindowController,
         case .secure: summary = "Connection is secure"
         case .mixed: summary = "Parts of this page are not encrypted"
         case .notSecure: summary = "Connection is not encrypted"
+        case .untrusted: summary = isShowingCertificateWarning ? "This site's certificate could not be verified" : "Connection is not verified"
         case .local: summary = "This page is on this Mac"
         case .none: summary = ""
         }
@@ -1082,36 +1211,41 @@ final class BrowserWindowController: NSWindowController,
         addressField.setLeadingAccessory(securityButton)
     }
 
+    /// The lock: the connection, the certificate, what the site may do,
+    /// what it has stored, what was blocked.
     @objc func showPageSecurity(_ sender: Any?) {
         guard pageSecurity != .none, securityButton.window != nil else { return }
-        let site = Self.displayAddress(isHibernated ? hibernatedURL : webView.url)
-        let title = NSTextField(labelWithString: securityButton.toolTip ?? "")
-        title.font = .boldSystemFont(ofSize: NSFont.systemFontSize)
-        let body = NSTextField(wrappingLabelWithString: pageSecurity.explanation(site: site))
-        body.textColor = .secondaryLabelColor
-        let stack = NSStackView(views: [title, body])
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 6
-        stack.edgeInsets = NSEdgeInsets(top: 14, left: 16, bottom: 14, right: 16)
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        let controller = NSViewController()
-        controller.view = NSView()
-        controller.view.addSubview(stack)
-        NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: controller.view.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: controller.view.trailingAnchor),
-            stack.topAnchor.constraint(equalTo: controller.view.topAnchor),
-            stack.bottomAnchor.constraint(equalTo: controller.view.bottomAnchor),
-            controller.view.widthAnchor.constraint(equalToConstant: 320),
-        ])
+        if let securityPopover, securityPopover.isShown { securityPopover.close(); return }
+        let url = isHibernated ? hibernatedURL : shownURL
+        let onWarning = isShowingCertificateWarning
+        let site = onWarning ? nil : SitePermissions.site(of: url)
+        var certificate: CertificateStore.Details?
+        if url?.scheme == "https", !onWarning { certificate = CertificateStore.details(of: webView.serverTrust) }
+        let content = PageInfoController.Content(
+            site: site, name: Self.displayAddress(url), security: pageSecurity, summary: securityButton.toolTip ?? "",
+            certificate: certificate, blocked: blocking.blockedCount, blockingOn: blocking.blocker?.isOn == true && !blocking.isOffForSite)
+        let controller = PageInfoController(
+            content: content,
+            permissions: { [weak self] in self?.permissions.stored?() ?? SitePermissions() },
+            setPermission: { [weak self] permission, choice in
+                guard let self, let site else { return }
+                var all = self.permissions.stored?() ?? SitePermissions()
+                all.set(choice, for: permission, site: site)
+                self.permissions.store?(all)
+                NotificationCenter.default.post(name: PermissionsController.didChange, object: nil)
+            },
+            dataStore: webView.configuration.websiteDataStore,
+            host: onWarning ? nil : url?.host(percentEncoded: false)?.lowercased(),
+            onCleared: { [weak self] in self?.reload(nil) })
         let popover = NSPopover()
         popover.behavior = .transient
         popover.contentViewController = controller
         popover.show(relativeTo: securityButton.bounds, of: securityButton, preferredEdge: .maxY)
         securityPopover = popover
+        pageInfo = controller
     }
 
+    private(set) var pageInfo: PageInfoController?
     private(set) var securityPopover: NSPopover?
     /// Developer aid: what the indicator beside the address says.
     var securityLabel: String { securityButton.isHidden ? "" : (securityButton.toolTip ?? "") }
@@ -1664,6 +1798,7 @@ final class BrowserWindowController: NSWindowController,
         devTools?.tearDown()
         passwordCoordinator.uninstall()
         blocking.tearDown()
+        permissions.tearDown()
         reader.uninstall()
         translator.uninstall()
         contextMenu.uninstall()
@@ -1717,7 +1852,7 @@ final class BrowserWindowController: NSWindowController,
     // MARK: - NSToolbarDelegate
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.back, .forward, .reload, .home, .address, .reader, .readerAppearance, .zoom, .shield, .star, .translate, .passwords, .flexibleSpace, .devTools]
+        [.back, .forward, .reload, .home, .address, .capture, .reader, .readerAppearance, .zoom, .shield, .star, .translate, .passwords, .flexibleSpace, .devTools]
             + (isPrivate ? [.privateBadge] : []) + [.profile]
     }
 
@@ -1769,6 +1904,14 @@ final class BrowserWindowController: NSWindowController,
             item.view = profileButton
             item.label = "Profile"
             item.visibilityPriority = .high
+            return item
+        case .capture:
+            let item = NSToolbarItem(itemIdentifier: identifier)
+            item.view = permissions.captureButton
+            item.label = "Camera and Microphone"
+            item.visibilityPriority = .high
+            captureItem = item
+            syncCapture()
             return item
         case .reader:
             let item = NSToolbarItem(itemIdentifier: identifier)
@@ -1857,6 +2000,8 @@ final class BrowserWindowController: NSWindowController,
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         recordNavigation(.committed)
         applyZoomForPage()
+        downloadsFromPage = 0
+        permissions.didCommitNavigation()
         reader.didCommitNavigation()
         finder.didCommitNavigation()
         blocking.didCommit()
@@ -1905,22 +2050,35 @@ final class BrowserWindowController: NSWindowController,
             )), tab: tab)
         }
         // A file the page hands over rather than shows goes to Downloads.
-        if navigationResponse.isForMainFrame && !navigationResponse.canShowMIMEType { return .download }
+        var isDownload = navigationResponse.isForMainFrame && !navigationResponse.canShowMIMEType
         if let http = navigationResponse.response as? HTTPURLResponse,
            (http.value(forHTTPHeaderField: "Content-Disposition") ?? "").lowercased().hasPrefix("attachment") {
-            return .download
+            isDownload = true
         }
-        return .allow
+        guard isDownload else { return .allow }
+        return await allowsDownload(userInitiated: lastActionWasUserInitiated) ? .download : .cancel
     }
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
+        let userInitiated = navigationAction.responds(to: NSSelectorFromString("_isUserInitiated"))
+            ? (navigationAction.value(forKey: "_isUserInitiated") as? Bool ?? true) : true
+        lastActionWasUserInitiated = userInitiated
         // `<a download>`.
-        if navigationAction.shouldPerformDownload { return .download }
+        if navigationAction.shouldPerformDownload {
+            return await allowsDownload(userInitiated: userInitiated) ? .download : .cancel
+        }
         // Whether this tab's requests are filtered goes by the site of the
         // page it shows, decided as that page starts to load.
         if navigationAction.targetFrame?.isMainFrame == true, let url = navigationAction.request.url {
             await blocking.blocker?.waitUntilLookedUp()
             blocking.willNavigate(to: url)
+        }
+        // The warning page's two buttons. Listened to on a warning page only.
+        if let action = WarningPage.action(of: navigationAction.request.url) {
+            if isShowingCertificateWarning, navigationAction.targetFrame?.isMainFrame == true {
+                DispatchQueue.main.async { [weak self] in self?.perform(action) }
+            }
+            return .cancel
         }
         // The start page's search box: only the start page may use it, so a
         // web page cannot make the browser search or navigate through it.
@@ -2003,6 +2161,8 @@ final class BrowserWindowController: NSWindowController,
             return
         }
 
+        if let failedURL, showCertificateWarning(for: failedURL, error: nsError) { return }
+
         let failedURLString = failedURL?.absoluteString ?? ""
         let html = """
         <!doctype html><meta charset="utf-8">
@@ -2033,9 +2193,35 @@ final class BrowserWindowController: NSWindowController,
         for navigationAction: WKNavigationAction,
         windowFeatures: WKWindowFeatures
     ) -> WKWebView? {
+        // Whether the person did something to open it (a click, a key) is
+        // WebKit's to know. Private, read by name; where it cannot be read,
+        // nothing is held back.
+        let userInitiated = navigationAction.responds(to: NSSelectorFromString("_isUserInitiated"))
+            ? (navigationAction.value(forKey: "_isUserInitiated") as? Bool ?? true) : true
+        guard permissions.allowsPopup(to: navigationAction.request.url, userInitiated: userInitiated) else { return nil }
         if let popup = onPopup?(configuration, navigationAction) { return popup }
         if navigationAction.targetFrame == nil { webView.load(navigationAction.request) }
         return nil
+    }
+
+    /// A page asking for the camera, the microphone, or both.
+    func webView(_ webView: WKWebView, requestMediaCapturePermissionFor origin: WKSecurityOrigin, initiatedByFrame frame: WKFrameInfo,
+                 type: WKMediaCaptureType) async -> WKPermissionDecision {
+        let wanted: [SitePermission]
+        switch type {
+        case .camera: wanted = [.camera]
+        case .microphone: wanted = [.microphone]
+        case .cameraAndMicrophone: wanted = [.camera, .microphone]
+        @unknown default: wanted = [.camera, .microphone]
+        }
+        return await permissions.request(wanted, requester: origin) ? .grant : .deny
+    }
+
+    /// A page asking where the person is. Private API, found by name.
+    @objc(_webView:requestGeolocationPermissionForOrigin:initiatedByFrame:decisionHandler:)
+    func webView(_ webView: WKWebView, requestGeolocationPermissionFor origin: WKSecurityOrigin, initiatedByFrame frame: WKFrameInfo,
+                 decisionHandler: @escaping (Bool) -> Void) {
+        permissions.request([.location], requester: origin, answer: decisionHandler)
     }
 
     /// A pop-up calling `window.close()`, as sign-in windows do when finished.
@@ -2061,6 +2247,7 @@ private extension NSToolbarItem.Identifier {
     static let shield = NSToolbarItem.Identifier("shield")
     static let zoom = NSToolbarItem.Identifier("zoom")
     static let reader = NSToolbarItem.Identifier("reader")
+    static let capture = NSToolbarItem.Identifier("capture")
     static let privateBadge = NSToolbarItem.Identifier("private")
     static let readerAppearance = NSToolbarItem.Identifier("readerAppearance")
 }

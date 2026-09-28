@@ -38,6 +38,14 @@
 	<string>public.app-category.productivity</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>15.4</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Websites you allow can use the camera, for video calls and the like. SimpleBrowser asks you first, site by site.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Websites you allow can use the microphone, for calls and recordings. SimpleBrowser asks you first, site by site.</string>
+	<key>NSLocationUsageDescription</key>
+	<string>Websites you allow can learn where you are, for maps and local results. SimpleBrowser asks you first, site by site.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Websites you allow can learn where you are, for maps and local results. SimpleBrowser asks you first, site by site.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSPrincipalClass</key>

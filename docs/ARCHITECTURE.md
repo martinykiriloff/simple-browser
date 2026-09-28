@@ -82,6 +82,31 @@ need `WKUserScript` at `.atDocumentStart` and are not built yet; they are
 counted as skipped. Full uBO parity is not achievable;
 `WKWebExtension` (macOS 15.4+) is the escape hatch for coverage.
 
+## Permissions
+
+`BrowserKit/SitePermissions` holds choices by origin and decides a request
+(`PermissionDecision`); `PermissionsController` is one tab's questions,
+pop-up bar and capture indicator; `CertificateStore` holds certificate
+problems and the exceptions made from them, in memory.
+
+Measured WebKit behaviour:
+
+- **`mediaDevicesEnabled` is off in this app by default.** Pages then have
+  no `navigator.mediaDevices`. It is set on for every tab.
+- **Whether a user opened a window is private.** `WKNavigationAction`'s
+  `_isUserInitiated` is read by name; where it cannot be read nothing is
+  held back.
+- **The warning page takes the site's place in history** by
+  `location.replace`, evaluated from the app, which a page's
+  Content-Security-Policy does not apply to.
+- **Not established:** what makes WebKit pass a page's `getUserMedia`
+  request to the app. On 2026-09-28 it did in three runs, then stopped for
+  the rest of the evening, in quiet runs and in front, with pretend devices
+  and real, in normal and private windows; the request stays pending and
+  the delegate is not called. Occlusion and window activity were each tried
+  as the cause and neither was. The feature self-test reports the camera as
+  not tested when this happens.
+
 ## Reader
 
 `ReaderAgent/reader-agent.js` runs in its own isolated world, main frame
