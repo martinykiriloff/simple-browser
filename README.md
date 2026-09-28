@@ -69,7 +69,31 @@ app takes focus for about half a minute, and the screen has to be unlocked:
 macOS will not make a window key behind the lock screen, which the test
 reports as an environment problem rather than a failure.
 
-## Content blocking
+## Find, zoom and Reader
+
+**Find** (⌘F) opens a bar over the top right of the page. Every match is
+highlighted and counted, "3 of 12", in frames too; ⌘G and ⇧⌘G go to the next
+and the previous, Return and ⇧Return do the same from the bar, Escape closes
+it. ⌘E takes the selection as what ⌘G looks for. The bar stays open from
+page to page.
+
+**Zoom**: ⌘+, ⌘− and ⌘0, in Chrome's steps from 25% to 500%. The level is
+remembered per site and per profile, a site's open tabs follow together, and
+while a page is not at its actual size the level shows beside the address;
+clicking it goes back to 100%.
+
+**Reader** (⇧⌘R, or the button that appears beside the address when the
+page has an article) shows the article alone: headline, author, date,
+reading time, text and pictures. The **Aa** button sets colours (white,
+sepia, dark, or matching the system), font, size and width, for every
+article. Translation works in Reader. Going back to the page returns to
+where it was scrolled.
+
+Reader is built to be safe to point at any page. The article is copied into
+a new document element by element and attribute by attribute, keeping only
+what is on a list; the Reader page forbids all script by policy; and it is
+served by the browser itself, so nothing on it can reach the site's cookies.
+
 
 Ads and trackers are blocked from the first page, with EasyList and
 EasyPrivacy. WebKit does the blocking itself, in its network process, before

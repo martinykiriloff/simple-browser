@@ -142,6 +142,28 @@ enum BrowserSettings {
         else { store.set(Array(Set(sites)).sorted(), forKey: blockingOffKey + profile) }
     }
 
+    // MARK: Reader
+
+    private static let readerKey = "settings.reader.appearance"
+
+    static var readerAppearance: ReaderAppearance {
+        get { store.data(forKey: readerKey).flatMap { try? JSONDecoder().decode(ReaderAppearance.self, from: $0) } ?? ReaderAppearance() }
+        set { store.set(try? JSONEncoder().encode(newValue), forKey: readerKey) }
+    }
+
+    // MARK: Zoom
+
+    private static let zoomKey = "settings.zoom."
+
+    /// Zoom levels by site, in one profile.
+    static func zoomLevels(profile: String) -> [String: Double] {
+        (store.dictionary(forKey: zoomKey + profile) as? [String: Double]) ?? [:]
+    }
+
+    static func setZoomLevels(_ levels: [String: Double], profile: String) {
+        if levels.isEmpty { store.removeObject(forKey: zoomKey + profile) } else { store.set(levels, forKey: zoomKey + profile) }
+    }
+
     // MARK: Bookmarks
 
     private static let favoritesBarKey = "settings.favoritesBar"

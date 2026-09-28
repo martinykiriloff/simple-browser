@@ -82,6 +82,36 @@ need `WKUserScript` at `.atDocumentStart` and are not built yet; they are
 counted as skipped. Full uBO parity is not achievable;
 `WKWebExtension` (macOS 15.4+) is the escape hatch for coverage.
 
+## Reader
+
+`ReaderAgent/reader-agent.js` runs in its own isolated world, main frame
+only. Detection is Mozilla's `isProbablyReaderable`. Extraction scores
+containers by their paragraphs, then **copies** the winner into a new
+document through an allow-list of elements and attributes; nothing is
+cleaned in place, so what the agent does not know about cannot survive.
+
+The article is served at `simplebrowser://reader/<token>?url=<article>` by
+the same scheme handler as the start page, under a Content-Security-Policy
+of `default-src 'none'` plus images and inline style. The token names an
+article held in memory; a Reader address whose article is gone (a restored
+session) answers with a redirect to the article. Everywhere the app asks
+"what page is this tab on", a Reader page answers with its article's
+address: the address bar, bookmarks, zoom, the session.
+
+Measured WebKit behaviour:
+
+- **Scroll position is lost on Back from a page of our own scheme, if the
+  page was left within about a second of scrolling.** Between two http pages
+  it is kept. `ReaderController` records the position as Reader is entered
+  and puts it back if WebKit has not.
+- **`WKFrameInfo` is stale after an app-initiated load.** A navigation
+  action's `sourceFrame.request` and `.securityOrigin` still describe the
+  page shown before. Decisions about who is asking go by `webView.url`.
+
+Find uses `_findString:options:maxCount:` and `_WKFindDelegate` (private,
+probed) for counts, the match index and frames; the public
+`find(_:configuration:)` is the fallback and reports only found or not.
+
 ## Dev tools
 
 Observation sources fan into one `InspectorRecorder`, which starts with the

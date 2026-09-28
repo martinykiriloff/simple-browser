@@ -75,6 +75,15 @@ enum MainMenu {
         let pasteAndGo = menu.addItem(withTitle: "Paste and Go", action: #selector(BrowserWindowController.pasteAndGo(_:)), keyEquivalent: "v")
         pasteAndGo.keyEquivalentModifierMask = [.command, .shift]
         menu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        menu.addItem(.separator())
+        let find = NSMenu(title: "Find")
+        find.addItem(withTitle: "Find…", action: #selector(BrowserWindowController.findInPage(_:)), keyEquivalent: "f")
+        find.addItem(withTitle: "Find Next", action: #selector(BrowserWindowController.findNextInPage(_:)), keyEquivalent: "g")
+        let previous = find.addItem(withTitle: "Find Previous", action: #selector(BrowserWindowController.findPreviousInPage(_:)), keyEquivalent: "g")
+        previous.keyEquivalentModifierMask = [.command, .shift]
+        find.addItem(withTitle: "Use Selection for Find", action: #selector(BrowserWindowController.useSelectionForFind(_:)), keyEquivalent: "e")
+        let findItem = menu.addItem(withTitle: "Find", action: nil, keyEquivalent: "")
+        findItem.submenu = find
         return wrap(menu)
     }
 
@@ -89,6 +98,16 @@ enum MainMenu {
         menu.addItem(withTitle: "Stop",
                      action: #selector(BrowserWindowController.stopLoading(_:)), keyEquivalent: ".")
         menu.addItem(.separator())
+        menu.addItem(withTitle: "Actual Size", action: #selector(BrowserWindowController.zoomReset(_:)), keyEquivalent: "0")
+        menu.addItem(withTitle: "Zoom In", action: #selector(BrowserWindowController.zoomIn(_:)), keyEquivalent: "+")
+        // ⌘= is ⌘+ without Shift, which is how it is typed on most keyboards.
+        let zoomInUnshifted = menu.addItem(withTitle: "Zoom In", action: #selector(BrowserWindowController.zoomIn(_:)), keyEquivalent: "=")
+        zoomInUnshifted.isHidden = true
+        zoomInUnshifted.allowsKeyEquivalentWhenHidden = true
+        menu.addItem(withTitle: "Zoom Out", action: #selector(BrowserWindowController.zoomOut(_:)), keyEquivalent: "-")
+        menu.addItem(.separator())
+        let reader = menu.addItem(withTitle: "Show Reader", action: #selector(BrowserWindowController.toggleReader(_:)), keyEquivalent: "r")
+        reader.keyEquivalentModifierMask = [.command, .shift]
         let translate = menu.addItem(withTitle: "Translate Page",
                                      action: #selector(BrowserWindowController.translatePageTo(_:)), keyEquivalent: "t")
         translate.keyEquivalentModifierMask = [.command, .option]

@@ -789,6 +789,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.controllers.first { $0.tab.description == id }?.window?.makeKeyAndOrderFront(nil)
         }
         controller.removeFromHistory = { [weak self] url in try? self?.history(for: profile)?.deletePage(url) }
+        controller.onZoomChanged = { [weak self, weak controller] site, level in
+            for tab in self?.controllers ?? [] where tab !== controller && tab.profile.id == profile.id { tab.zoomChanged(for: site, to: level) }
+        }
         controller.favoritesBar.items = { [weak self] in self?.bookmarks(for: profile)?.favorites ?? [] }
         controller.favoritesBar.childrenOf = { [weak self] id in (try? self?.bookmarks(for: profile)?.children(of: id)) ?? [] }
         controller.favoritesBar.open = { [weak self, weak controller] url, newTab in

@@ -116,6 +116,15 @@ final class BrowserWindowController: NSWindowController,
     var readingListArchive: ((BookmarkStore.ReadingItem) -> URL)?
     private let starButton = NSButton()
     private let securityButton = NSButton()
+    /// Reader: the article alone, when the page has one.
+    let reader = ReaderController()
+    private weak var readerItem: NSToolbarItem?
+    private weak var readerAppearanceItem: NSToolbarItem?
+    /// Find in page (⌘F).
+    let finder = FindController()
+    /// "125%", beside the address, while the page is not at its actual size.
+    private let zoomButton = NSButton()
+    private weak var zoomItem: NSToolbarItem?
     /// The shield: what was blocked on this page, and the site's switch.
     let blocking = BlockingController()
     private(set) var pageSecurity = PageSecurity.none
@@ -154,6 +163,7 @@ final class BrowserWindowController: NSWindowController,
         passwordCoordinator.install(into: configuration)
         translator.install(into: configuration)
         contextMenu.install(into: configuration)
+        reader.install(into: configuration)
         // The rule lists compiled last time are in place before the first page.
         blocker?.register(configuration.userContentController)
         blocking.blocker = blocker
@@ -222,6 +232,14 @@ final class BrowserWindowController: NSWindowController,
             self?.devTools?.handleAuxiliary(kind: kind, body: body)
         }
 
+        finder.container = pageContainer
+        finder.webView = webView
+        reader.webView = webView
+        reader.onStateChange = { [weak self] in self?.syncReader() }
+        zoomButton.bezelStyle = .toolbar
+        zoomButton.target = self
+        zoomButton.action = #selector(zoomReset(_:))
+        zoomButton.toolTip = "Back to actual size (⌘0)"
         blocking.currentURL = { [weak self] in self?.currentURL }
         blocking.reload = { [weak self] in self?.reload(nil) }
         blocking.openInNewTab = { [weak self] url in self?.openInNewTab?(url, true) }
@@ -445,6 +463,8 @@ final class BrowserWindowController: NSWindowController,
         NSLayoutConstraint.activate(fillConstraints)
 
         contextMenu.webView = fresh
+        finder.webView = fresh
+        reader.webView = fresh
         observePage()
         translator.webView = fresh
         downloads.webView = fresh
@@ -622,7 +642,11 @@ final class BrowserWindowController: NSWindowController,
     }
 
     /// The page currently showing, for "Set to Current Page" in Settings.
-    var currentURL: URL? { isHibernated ? hibernatedURL : webView.url }
+    var currentURL: URL? { isHibernated ? hibernatedURL : shownURL }
+
+    /// The page showing. In Reader that is the article's own address: what
+    /// the address bar says, what a bookmark keeps, what zoom goes by.
+    private var shownURL: URL? { ReaderPage.original(of: webView.url) ?? webView.url }
 
     @objc func focusAddressBar(_ sender: Any?) {
         window?.makeFirstResponder(addressField)
@@ -902,6 +926,86 @@ final class BrowserWindowController: NSWindowController,
         syncStar()
     }
 
+    // MARK: - Reader
+
+    /// View → Show Reader (⇧⌘R).
+    @objc func toggleReader(_ sender: Any?) { reader.toggle(sender) }
+
+    private func syncReader() {
+        readerItem?.isHidden = !(reader.isAvailable || reader.isActive)
+        readerAppearanceItem?.isHidden = !reader.isActive
+        fitAddressField()
+    }
+
+    // MARK: - Find
+
+    /// Edit → Find → Find… (⌘F). Text selected on the page is what it looks for.
+    @objc func findInPage(_ sender: Any?) {
+        Task { @MainActor in
+            let selected = try? await webView.evaluateJavaScript("window.getSelection().toString()") as? String
+            let text = selected.flatMap { $0.contains("\n") || $0.count > 200 ? nil : $0 }
+            finder.show(with: text)
+        }
+    }
+
+    @objc func findNextInPage(_ sender: Any?) { finder.findNext(sender) }
+    @objc func findPreviousInPage(_ sender: Any?) { finder.findPrevious(sender) }
+
+    /// ⌘E: the selection becomes what ⌘G looks for, without opening the bar.
+    @objc func useSelectionForFind(_ sender: Any?) {
+        Task { @MainActor in
+            guard let selected = try? await webView.evaluateJavaScript("window.getSelection().toString()") as? String else { return }
+            finder.useSelection(selected)
+        }
+    }
+
+    // MARK: - Zoom
+
+    /// The page's zoom, remembered for its site in this profile.
+    var zoom: Double { webView.pageZoom }
+
+    @objc func zoomIn(_ sender: Any?) { setZoom(PageZoom.larger(than: webView.pageZoom)) }
+    @objc func zoomOut(_ sender: Any?) { setZoom(PageZoom.smaller(than: webView.pageZoom)) }
+    @objc func zoomReset(_ sender: Any?) { setZoom(1) }
+
+    private func setZoom(_ level: Double) {
+        webView.pageZoom = level
+        if let key = PageZoom.key(for: currentURL) {
+            let profileID = profile.id.description
+            BrowserSettings.setZoomLevels(PageZoom.setting(level, for: key, in: BrowserSettings.zoomLevels(profile: profileID)), profile: profileID)
+            onZoomChanged?(key, level)
+        }
+        syncZoom()
+    }
+
+    /// Another tab of this profile changed the zoom of a site: if this tab
+    /// shows that site, it follows, as tabs of one site do everywhere.
+    func zoomChanged(for key: String, to level: Double) {
+        guard PageZoom.key(for: currentURL) == key, !isHibernated, abs(webView.pageZoom - level) > 0.001 else { return }
+        webView.pageZoom = level
+        syncZoom()
+    }
+
+    var onZoomChanged: ((String, Double) -> Void)?
+
+    /// The site's own level as a page of it commits.
+    private func applyZoomForPage() {
+        let level = PageZoom.key(for: shownURL).flatMap { BrowserSettings.zoomLevels(profile: profile.id.description)[$0] } ?? 1
+        if abs(webView.pageZoom - level) > 0.001 { webView.pageZoom = level }
+        syncZoom()
+    }
+
+    private func syncZoom() {
+        let level = webView.pageZoom
+        zoomButton.title = PageZoom.label(level)
+        zoomButton.setAccessibilityLabel("Zoom \(PageZoom.label(level)). Click for actual size.")
+        zoomItem?.isHidden = PageZoom.isDefault(level)
+        fitAddressField()
+    }
+
+    /// Developer aid: what the zoom indicator shows; empty when it is hidden.
+    var zoomIndicator: String { PageZoom.isDefault(webView.pageZoom) ? "" : zoomButton.title }
+
     // MARK: - Page security
 
     private func configureSecurityButton() {
@@ -920,7 +1024,9 @@ final class BrowserWindowController: NSWindowController,
     /// A lock for https, "Not Secure" for plain http, nothing for the
     /// browser's own pages.
     private func syncSecurity() {
-        let url = isHibernated ? hibernatedURL : webView.url
+        // In Reader the article is a copy held by the browser: there is no
+        // connection to describe, and the article's own lock would be a lie.
+        let url = reader.isActive ? nil : (isHibernated ? hibernatedURL : webView.url)
         pageSecurity = PageSecurity.of(url, hasOnlySecureContent: webView.hasOnlySecureContent)
         let trouble = pageSecurity.label != nil
         securityButton.image = pageSecurity.symbol.flatMap { NSImage(systemSymbolName: $0, accessibilityDescription: nil) }?
@@ -983,11 +1089,11 @@ final class BrowserWindowController: NSWindowController,
 
     /// Filled when this page is bookmarked.
     func syncStar() {
-        let bookmarked = webView.url.flatMap { try? bookmarks?()?.bookmark(for: $0) } != nil
+        let bookmarked = shownURL.flatMap { try? bookmarks?()?.bookmark(for: $0) } != nil
         starButton.image = NSImage(systemSymbolName: bookmarked ? "star.fill" : "star", accessibilityDescription: "Bookmark")?
             .withSymbolConfiguration(.init(paletteColors: [bookmarked ? .systemYellow : .labelColor]))
         starButton.toolTip = bookmarked ? "Edit bookmark (⌘D)" : "Bookmark this page (⌘D)"
-        starButton.isEnabled = !(StartPageSchemeHandler.isStartPage(webView.url) || webView.url == nil)
+        starButton.isEnabled = !(StartPageSchemeHandler.isStartPage(webView.url) || shownURL == nil)
     }
 
     /// Bookmarks → Add Bookmark… (⌘D), and the star.
@@ -1011,7 +1117,7 @@ final class BrowserWindowController: NSWindowController,
 
     /// Bookmarks → Add to Reading List (⇧⌘D): saved with an offline copy.
     @objc func addToReadingList(_ sender: Any?) {
-        guard let url = webView.url, url.scheme?.hasPrefix("http") == true, let store = bookmarks?() else { return }
+        guard let url = shownURL, url.scheme?.hasPrefix("http") == true, let store = bookmarks?() else { return }
         guard let id = try? store.addToReadingList(url: url, title: webView.title ?? ""),
               let item = try? store.readingList().first(where: { $0.id == id }), let file = readingListArchive?(item) else { return }
         onBookmarksChanged?()
@@ -1226,7 +1332,7 @@ final class BrowserWindowController: NSWindowController,
                 textView.string = typedAddress
                 completionURL = nil
             } else {
-                addressField.stringValue = Self.displayAddress(webView.url)
+                addressField.stringValue = Self.displayAddress(shownURL)
                 window?.makeFirstResponder(webView)
             }
             return true
@@ -1244,14 +1350,14 @@ final class BrowserWindowController: NSWindowController,
     func controlTextDidEndEditing(_ notification: Notification) {
         guard (notification.object as? NSTextField) === addressField else { return }
         suggestionsPanel.hide()
-        if !isHibernated { addressField.stringValue = Self.displayAddress(webView.url) }
+        if !isHibernated { addressField.stringValue = Self.displayAddress(shownURL) }
     }
 
     private func choose(_ suggestion: AddressSuggestion) {
         suggestionsPanel.hide()
         switch suggestion.kind {
         case .switchToTab(let id):
-            addressField.stringValue = Self.displayAddress(webView.url)
+            addressField.stringValue = Self.displayAddress(shownURL)
             window?.makeFirstResponder(webView)
             switchToTab?(id)
         case .search:
@@ -1319,10 +1425,47 @@ final class BrowserWindowController: NSWindowController,
         addressField.translatesAutoresizingMaskIntoConstraints = false
         let preferredWidth = addressField.widthAnchor.constraint(equalToConstant: 720)
         preferredWidth.priority = .defaultLow
+        addressWidth = preferredWidth
         NSLayoutConstraint.activate([
             addressField.widthAnchor.constraint(greaterThanOrEqualToConstant: 240),
             preferredWidth,
         ])
+    }
+
+    private var addressWidth: NSLayoutConstraint?
+
+    /// The toolbar takes the address field's preferred width as the width
+    /// it must have, and moves buttons into the overflow menu to make room.
+    /// So the preferred width is what the other items leave, and it is the
+    /// address that gives way when the window narrows or a button appears.
+    func fitAddressField() {
+        guard let window, let toolbar = window.toolbar, let addressWidth else { return }
+        var others: CGFloat = 0
+        for item in toolbar.items where item.itemIdentifier != .address && item.itemIdentifier != .flexibleSpace && !item.isHidden {
+            // Buttons made from an image have no view; they are as wide as a toolbar button.
+            others += (item.view.map { max($0.fittingSize.width, 28) } ?? 28) + 16
+        }
+        // The window's own buttons, and the margins at both ends.
+        let available = window.frame.width - others - 110
+        let width = max(240, min(860, available))
+        if abs(addressWidth.constant - width) > 0.5 { addressWidth.constant = width }
+    }
+
+    func windowDidResize(_ notification: Notification) {
+        guard (notification.object as? NSWindow) === window else { return }
+        fitAddressField()
+    }
+
+    /// Developer aid: whether a toolbar item is hidden, by identifier.
+    func toolbarItemIsHidden(_ identifier: String) -> Bool {
+        window?.toolbar?.items.first { $0.itemIdentifier.rawValue == identifier }?.isHidden ?? true
+    }
+
+    /// Developer aid: toolbar buttons that did not fit and went to the overflow menu.
+    var overflowingToolbarItems: [String] {
+        guard let toolbar = window?.toolbar else { return [] }
+        let visible = Set((toolbar.visibleItems ?? []).map(\.itemIdentifier))
+        return toolbar.items.filter { !$0.isHidden && !visible.contains($0.itemIdentifier) }.map(\.itemIdentifier.rawValue)
     }
 
     private var isEditingAddress: Bool {
@@ -1339,13 +1482,14 @@ final class BrowserWindowController: NSWindowController,
         if !isEditingAddress {
             // The start page is the browser's own: the address bar stays
             // empty and ready for typing, as on a new tab everywhere.
-            addressField.stringValue = Self.displayAddress(webView.url)
+            addressField.stringValue = Self.displayAddress(shownURL)
         }
         let title = webView.title.flatMap { $0.isEmpty ? nil : $0 }
-        let resolved = title ?? webView.url?.host() ?? "SimpleBrowser"
+        let resolved = title ?? shownURL?.host() ?? "SimpleBrowser"
         window?.title = resolved
         recorderPanel?.update(title: resolved)
         devToolsWindow?.title = "DevTools — \(resolved)"
+        fitAddressField()
         window?.toolbar?.validateVisibleItems()
     }
 
@@ -1480,6 +1624,7 @@ final class BrowserWindowController: NSWindowController,
         devTools?.tearDown()
         passwordCoordinator.uninstall()
         blocking.tearDown()
+        reader.uninstall()
         translator.uninstall()
         contextMenu.uninstall()
         bridge.uninstall()
@@ -1503,6 +1648,17 @@ final class BrowserWindowController: NSWindowController,
             return !translator.optedOut && webView.url != nil
         case #selector(showOriginalPage(_:)):
             return translator.isTranslated
+        case #selector(toggleReader(_:)):
+            menuItem.title = reader.isActive ? "Hide Reader" : "Show Reader"
+            return reader.isActive || reader.isAvailable
+        case #selector(zoomIn(_:)):
+            return webView.pageZoom < (PageZoom.steps.last ?? 5) - 0.001
+        case #selector(zoomOut(_:)):
+            return webView.pageZoom > (PageZoom.steps.first ?? 0.25) + 0.001
+        case #selector(zoomReset(_:)):
+            return !PageZoom.isDefault(webView.pageZoom)
+        case #selector(findNextInPage(_:)), #selector(findPreviousInPage(_:)):
+            return webView.url != nil
         case #selector(pasteAndGo(_:)):
             // Says what it will do with what is on the clipboard.
             let text = pasteboard.string(forType: .string)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -1521,7 +1677,7 @@ final class BrowserWindowController: NSWindowController,
     // MARK: - NSToolbarDelegate
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.back, .forward, .reload, .home, .address, .shield, .star, .translate, .passwords, .flexibleSpace, .devTools, .profile]
+        [.back, .forward, .reload, .home, .address, .reader, .readerAppearance, .zoom, .shield, .star, .translate, .passwords, .flexibleSpace, .devTools, .profile]
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
@@ -1565,6 +1721,27 @@ final class BrowserWindowController: NSWindowController,
             item.view = profileButton
             item.label = "Profile"
             item.visibilityPriority = .high
+            return item
+        case .reader:
+            let item = NSToolbarItem(itemIdentifier: identifier)
+            item.view = reader.button
+            item.label = "Reader"
+            readerItem = item
+            syncReader()
+            return item
+        case .readerAppearance:
+            let item = NSToolbarItem(itemIdentifier: identifier)
+            item.view = reader.appearanceButton
+            item.label = "Reader Appearance"
+            readerAppearanceItem = item
+            syncReader()
+            return item
+        case .zoom:
+            let item = NSToolbarItem(itemIdentifier: identifier)
+            item.view = zoomButton
+            item.label = "Zoom"
+            zoomItem = item
+            syncZoom()
             return item
         case .shield:
             let item = NSToolbarItem(itemIdentifier: identifier)
@@ -1631,6 +1808,9 @@ final class BrowserWindowController: NSWindowController,
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         recordNavigation(.committed)
+        applyZoomForPage()
+        reader.didCommitNavigation()
+        finder.didCommitNavigation()
         blocking.didCommit()
         passwordCoordinator.didCommitNavigation()
         translator.didCommitNavigation()
@@ -1645,6 +1825,7 @@ final class BrowserWindowController: NSWindowController,
         }
         typedNavigation = false
         recordNavigation(.finished)
+        reader.didFinishNavigation()
         passwordCoordinator.didFinishNavigation()
         syncChrome()
     }
@@ -1830,4 +2011,7 @@ private extension NSToolbarItem.Identifier {
     static let translate = NSToolbarItem.Identifier("translate")
     static let star = NSToolbarItem.Identifier("star")
     static let shield = NSToolbarItem.Identifier("shield")
+    static let zoom = NSToolbarItem.Identifier("zoom")
+    static let reader = NSToolbarItem.Identifier("reader")
+    static let readerAppearance = NSToolbarItem.Identifier("readerAppearance")
 }

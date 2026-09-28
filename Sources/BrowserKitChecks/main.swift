@@ -175,6 +175,47 @@ do {
     }
     check("the start page says nothing", PageSecurity.of(u("simplebrowser://start"), hasOnlySecureContent: false) == .none)
     check("no page says nothing", PageSecurity.of(nil, hasOnlySecureContent: false) == .none)
+    let original = u("https://news.example/2026/story?id=7&x=a%20b#part")
+    let reader = ReaderPage.url(token: "abc123", original: original)
+    check("a Reader address carries its article's address, intact", ReaderPage.original(of: reader) == original, reader as Any)
+    check("…and its token", ReaderPage.token(of: reader) == "abc123" && ReaderPage.isReader(reader))
+    check("the start page is not a Reader page", !ReaderPage.isReader(u("simplebrowser://start")) && ReaderPage.original(of: u("simplebrowser://start")) == nil)
+    check("a Reader address naming a script or a file has no article", ReaderPage.original(of: u("simplebrowser://reader/x?url=javascript:alert(1)")) == nil
+          && ReaderPage.original(of: u("simplebrowser://reader/x?url=file:///etc/passwd")) == nil)
+    var article = ReaderArticle(url: original, title: "Tom & Jerry <script>alert(1)</script>", byline: "A \"Writer\"", site: "News", published: "2026-03-12T09:30:00Z",
+                                language: "en", words: 1150, html: "<p>Body</p>")
+    let page = ReaderPage.html(article, appearance: ReaderAppearance())
+    check("the title is text, never markup", page.contains("Tom &amp; Jerry &lt;script&gt;alert(1)&lt;/script&gt;") && !page.contains("<script>alert"))
+    check("the byline too", page.contains("A &quot;Writer&quot;"))
+    check("the page forbids script, frames and forms", page.contains("Content-Security-Policy") && page.contains("default-src 'none'") && page.contains("form-action 'none'"))
+    check("…and sends no referrer to the images it loads", page.contains("name=\"referrer\" content=\"no-referrer\""))
+    check("reading time, at 230 words a minute", article.minutes == 5 && page.contains("5 min read"))
+    check("a short article is one minute, not none", ReaderArticle(url: original, title: "t", words: 12, html: "").minutes == 1)
+    check("the date is written for a person", page.contains("2026") && !page.contains("T09:30"))
+    article.published = "yesterday-ish"
+    check("a date that is not one is left out", !ReaderPage.html(article, appearance: ReaderAppearance()).contains("yesterday"))
+    article.language = "en\" onload=\"x"
+    check("a language that is not one is left out", !ReaderPage.html(article, appearance: ReaderAppearance()).contains("onload"))
+    var look = ReaderAppearance()
+    check("Reader starts in New York, 19 points, medium, matching the system", look.font == .newYork && look.size == 19 && look.width == .medium && look.theme == .auto)
+    look.grow(); look.grow()
+    check("larger, by steps", look.size == 22)
+    for _ in 0..<20 { look.shrink() }
+    check("smaller stops at 14", look.size == 14 && !look.canShrink && look.canGrow)
+    look.theme = .sepia
+    check("the look is set on the page's root", ReaderPage.html(article, appearance: look).contains("data-theme=\"sepia\"") && look.attributes["style"]?.contains("--size: 14px") == true)
+    check("a Reader page that lost its article sends the tab to the article", ReaderPage.redirect(to: original).contains("url=https://news.example/2026/story?id=7&amp;x=a%20b#part"))
+    check("zoom steps up", PageZoom.larger(than: 1) == 1.1 && PageZoom.larger(than: 1.1) == 1.25 && PageZoom.larger(than: 5) == 5)
+    check("zoom steps down", PageZoom.smaller(than: 1) == 0.9 && PageZoom.smaller(than: 0.25) == 0.25)
+    check("zoom between steps moves to the next step", PageZoom.larger(than: 1.2) == 1.25 && PageZoom.smaller(than: 1.2) == 1.1)
+    check("up then down is back where it was", PageZoom.steps.dropLast().allSatisfy { PageZoom.smaller(than: PageZoom.larger(than: $0)) == $0 })
+    check("zoom label", PageZoom.label(1.25) == "125%" && PageZoom.label(0.67) == "67%" && PageZoom.label(1) == "100%")
+    check("zoom is kept per site: www and the scheme do not matter", PageZoom.key(for: u("https://www.Example.com/a?b")) == "example.com"
+          && PageZoom.key(for: u("http://example.com:8080/")) == "example.com")
+    check("…a subdomain is another site", PageZoom.key(for: u("https://docs.example.com/")) == "docs.example.com")
+    check("…and the browser's own pages have none", PageZoom.key(for: u("simplebrowser://start")) == nil && PageZoom.key(for: nil) == nil)
+    check("100% is forgotten rather than remembered", PageZoom.setting(1, for: "a.example", in: ["a.example": 1.5, "b.example": 2]) == ["b.example": 2])
+    check("another level is remembered", PageZoom.setting(1.25, for: "a.example", in: [:]) == ["a.example": 1.25])
     check("only trouble gets words", PageSecurity.secure.label == nil && PageSecurity.local.label == nil
           && PageSecurity.notSecure.label == "Not Secure" && PageSecurity.mixed.label == "Not Secure")
 }
