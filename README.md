@@ -6,8 +6,11 @@ A native macOS browser. Swift above the engine, WebKit below it.
 
 Early. `BlockKit`, `BrowserKit` and `InspectKit` are pure-Foundation packages
 with no WebKit or AppKit dependency — they build and test anywhere a Swift
-toolchain exists. `BrowserApp` is a one-tab-per-window shell with profiles and
-working dev tools; tabs, hibernation, blocking and the proxy are not wired yet.
+toolchain exists. `BrowserApp` has tabs that sleep when idle, session
+restore, history, bookmarks, a smart address bar, profiles, a password manager
+and dev tools; content blocking and the proxy are not wired yet. The
+[roadmap](https://github.com/martinykiriloff/simple-browser/issues/1) lists
+what is left.
 
 The partitioning algorithm in `BlockKit` has been verified against an oracle —
 see [Verification](#verification).
@@ -29,8 +32,31 @@ click on the Dock icon start with: the homepage (the default) or an empty
 page. Either way the keyboard stays in the address bar, so ⌘N and typing a
 destination works while the homepage loads behind it.
 
+### The address bar
+
+Typing offers a list: open tabs first (**Switch to Tab**, which switches
+without reloading), then bookmarks, history, the search itself and the
+engine's suggestions. The best matching site is completed inline, so `git`
+and Return opens `github.com`. ↑ and ↓ move through the list, ⇥ accepts the
+completion, ⌫ drops it, and ⇧⌫ on a history row forgets that page.
+
+While it is not being edited the bar shows the site's name, and the full
+address on focus. With the scheme out of sight, the indicator inside the
+field is what tells `http` from `https`: a lock for an encrypted page,
+**Not Secure** in orange for plain http or for an https page that loaded
+parts of itself unencrypted, and a computer for a page on this Mac. Clicking
+it says what that means.
+
+**Settings → Search engine** chooses DuckDuckGo, Google, Bing, Ecosia, Kagi,
+Startpage, or any address with `%s` where the words go. The address bar, the
+start page's search box, *Search … for "…"* in the right-click menu and
+**Edit → Paste and Go** (⇧⌘V, which reads *Paste and Search* when the
+clipboard holds words) all follow it. *Show search suggestions as you type*
+can be switched off; then nothing typed leaves the Mac until Return.
+
 ```sh
 scripts/test-ui.sh            # the app presses its own keys and buttons, then reports
+scripts/test-features.sh      # tabs, sessions, history, bookmarks, the address bar
 ```
 
 macOS does not let an outside process press keys without the Accessibility

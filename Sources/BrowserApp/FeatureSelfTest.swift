@@ -32,6 +32,7 @@ final class FeatureSelfTest {
             if let scratch = UserDefaults(suiteName: suite) { BrowserSettings.store = scratch }
             BrowserSettings.newWindowContent = .empty
             BrowserSettings.showFavoritesBar = true
+            BrowserSettings.searchSuggestions = false   // never ask a real search engine
             await test.pause(1)
             // "session-seed" and "session-verify" belong to scripts/test-session.sh,
             // either side of a SIGKILL: they run only when named.
@@ -53,7 +54,7 @@ final class FeatureSelfTest {
 
     /// One entry per ticket, in the order they were built.
     var sections: [(String, () async -> Void)] {
-        [("tabs", tabs), ("hibernation", hibernation), ("session", sessionRoundTrip), ("history", history), ("bookmarks", bookmarks),
+        [("tabs", tabs), ("hibernation", hibernation), ("session", sessionRoundTrip), ("history", history), ("bookmarks", bookmarks), ("address-bar", addressBar),
          ("session-seed", sessionSeed), ("session-verify", sessionVerify)]
     }
 
@@ -122,6 +123,143 @@ final class FeatureSelfTest {
             window.sendEvent(event)
         }
         return true
+    }
+
+    // MARK: - #5 Smart address bar
+
+    func addressBar() async {
+        let browser = first
+        browser.window?.makeKeyAndOrderFront(nil)
+        guard let history = app.history(for: browser.profile) else { return }
+        try? history.deleteVisits(since: .distantPast)
+        await open("/tabs", in: browser)
+        await open("/second", in: browser)
+        let other = app.newTab(beside: browser, url: URL(string: site + "/long"))
+        _ = await waitFor { other.currentURL?.path == "/long" && !other.pageWebView.isLoading }
+        browser.window?.makeKeyAndOrderFront(nil)
+        _ = await waitFor { self.front === browser }
+
+        check("address bar: not editing, it shows the site", browser.addressText == "127.0.0.1", browser.addressText)
+
+        browser.typeInAddressBar("127.0")
+        check("address bar: typing completes the site inline", browser.addressEditorText == "127.0.0.1:8767", browser.addressEditorText)
+        check("address bar: suggestions appear", !browser.suggestionTitles.isEmpty)
+        check("address bar: the typed search is offered", browser.suggestionKinds.contains(.search))
+
+        browser.typeInAddressBar("Long")
+        check("address bar: an open tab is offered as Switch to Tab", browser.suggestionKinds.first.map { if case .switchToTab = $0 { return true } else { return false } } ?? false,
+              browser.suggestionTitles)
+        browser.pressInAddressBar(#selector(NSResponder.moveDown(_:)))
+        browser.pressInAddressBar(#selector(NSResponder.insertNewline(_:)))
+        check("address bar: …choosing it switches to that tab", await waitFor { self.front === other })
+        check("address bar: …without reloading it", other.pageWebView.url?.path == "/long")
+
+        browser.window?.makeKeyAndOrderFront(nil)
+        _ = await waitFor { self.front === browser }
+        browser.typeInAddressBar("127.0")
+        browser.pressInAddressBar(#selector(NSResponder.insertNewline(_:)))
+        check("address bar: Return goes to the completed site", await waitFor { browser.currentURL?.absoluteString == self.site + "/" }, browser.currentURL as Any)
+        check("address bar: …and it counts as typed", await waitFor { ((try? history.page(for: URL(string: self.site + "/")!))??.typedCount ?? 0) > 0 })
+
+        browser.typeInAddressBar("swift concurrency")
+        browser.pressInAddressBar(#selector(NSResponder.insertNewline(_:)))
+        check("address bar: words are searched with the chosen engine", await waitFor { browser.currentURL?.host() == "duckduckgo.com" }, browser.currentURL as Any)
+        browser.pageWebView.stopLoading()
+
+        BrowserSettings.searchEngine = SearchEngine.all.first { $0.id == "bing" }!
+        browser.typeInAddressBar("hello world")
+        browser.pressInAddressBar(#selector(NSResponder.insertNewline(_:)))
+        check("address bar: changing the engine changes the search", await waitFor { browser.currentURL?.host() == "www.bing.com" }, browser.currentURL as Any)
+        browser.pageWebView.stopLoading()
+        BrowserSettings.searchEngine = .default
+
+        // ⇧⌫ forgets a history suggestion. An address no tab has open: a
+        // page that is open is offered as its tab, not as history.
+        await open("/second?forget=1", in: browser)
+        await open("/tabs", in: browser)
+        browser.typeInAddressBar("forget")
+        let before = browser.suggestionKinds
+        if let index = before.firstIndex(of: .history) {
+            for _ in 0...index { browser.pressInAddressBar(#selector(NSResponder.moveDown(_:))) }
+            browser.removeSelectedSuggestionForTest()
+            check("address bar: ⇧⌫ removes a history suggestion", (try? history.page(for: URL(string: self.site + "/second?forget=1")!)) == nil)
+            check("address bar: …and it leaves the list", !browser.suggestionKinds.contains(.history), browser.suggestionTitles)
+        } else {
+            check("address bar: (setup) a history suggestion to remove", false, browser.suggestionTitles)
+        }
+        browser.pressInAddressBar(#selector(NSResponder.cancelOperation(_:)))
+        browser.pressInAddressBar(#selector(NSResponder.cancelOperation(_:)))
+
+        // After a suggestion was chosen the list is emptied; typing again
+        // must start a new one. (This crashed: a stale selected row.)
+        browser.typeInAddressBar("Long")
+        browser.pressInAddressBar(#selector(NSResponder.moveDown(_:)))
+        browser.pressInAddressBar(#selector(NSResponder.cancelOperation(_:)))
+        browser.typeInAddressBar("Lon")
+        check("address bar: typing after the list was dismissed offers a new list", !browser.suggestionTitles.isEmpty)
+        browser.pressInAddressBar(#selector(NSResponder.cancelOperation(_:)))
+        browser.pressInAddressBar(#selector(NSResponder.cancelOperation(_:)))
+
+        // With the scheme out of sight, the indicator is what tells http from https.
+        await open("/second", in: browser)
+        check("address bar: a page on this Mac says so", await waitFor { browser.securityLabel == "This page is on this Mac" }, browser.securityLabel)
+        check("address bar: …without the words Not Secure", browser.securityTitle.isEmpty, browser.securityTitle)
+        browser.window?.layoutIfNeeded()
+        check("address bar: the address starts after the indicator, not under it",
+              browser.securityIndicatorEnd > 0 && browser.addressTextStart >= browser.securityIndicatorEnd, "\(browser.addressTextStart) vs \(browser.securityIndicatorEnd)")
+        browser.showPageSecurity(nil)
+        check("address bar: clicking the indicator explains it", browser.securityPopover?.isShown == true)
+        snapshot(browser.window, "address-bar-security")
+        browser.securityPopover?.close()
+
+        // The start page's search box.
+        browser.load(StartPageSchemeHandler.url)
+        _ = await waitFor { StartPageSchemeHandler.isStartPage(browser.pageWebView.url) && !browser.pageWebView.isLoading }
+        check("address bar: the browser's own page shows no indicator", await waitFor { browser.securityLabel.isEmpty }, browser.securityLabel)
+        check("address bar: …and leaves no gap for one", browser.addressTextStart < 12, browser.addressTextStart)
+        let placeholder = await js("return document.querySelector('input[name=q]').placeholder", in: browser) as? String
+        check("start page: the search box names the engine", placeholder == "Search DuckDuckGo or enter an address", placeholder as Any)
+        _ = await js("const q = document.querySelector('input[name=q]'); q.value = '\(site)/second'; q.form.submit()", in: browser)
+        check("start page: an address typed into the search box is opened", await waitFor { browser.currentURL?.absoluteString == self.site + "/second" }, browser.currentURL as Any)
+
+        BrowserSettings.searchEngine = SearchEngine.all.first { $0.id == "ecosia" }!
+        browser.load(StartPageSchemeHandler.url)
+        _ = await waitFor { StartPageSchemeHandler.isStartPage(browser.pageWebView.url) && !browser.pageWebView.isLoading }
+        let changed = await js("return document.querySelector('input[name=q]').placeholder", in: browser) as? String
+        check("start page: changing the engine changes the search box", changed == "Search Ecosia or enter an address", changed as Any)
+        _ = await js("const q = document.querySelector('input[name=q]'); q.value = 'two words + c++'; q.form.submit()", in: browser)
+        check("start page: words are searched with that engine, spaces and pluses intact",
+              await waitFor { browser.currentURL?.absoluteString == "https://www.ecosia.org/search?q=two%20words%20%2B%20c%2B%2B" }, browser.currentURL as Any)
+        browser.pageWebView.stopLoading()
+        BrowserSettings.searchEngine = .default
+
+        // Only the start page may use the search address.
+        await open("/second", in: browser)
+        _ = await js("location.href = 'simplebrowser://search?q=http://127.0.0.1:8767/long'", in: browser)
+        await pause(1)
+        check("start page: a web page cannot drive the browser's search box", browser.currentURL?.path == "/second", browser.currentURL as Any)
+
+        // Edit → Paste and Go says what it will do. On a pasteboard of the
+        // test's own: what the person has copied is not touched.
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
+        browser.pasteboard = pasteboard
+        let item = NSMenuItem(title: "Paste and Go", action: #selector(BrowserWindowController.pasteAndGo(_:)), keyEquivalent: "")
+        pasteboard.clearContents()
+        pasteboard.setString("example.com/docs", forType: .string)
+        check("paste and go: an address on the clipboard is Paste and Go", browser.validateMenuItem(item) && item.title == "Paste and Go", item.title)
+        pasteboard.clearContents()
+        pasteboard.setString("how tall is everest", forType: .string)
+        check("paste and go: words on the clipboard are Paste and Search", browser.validateMenuItem(item) && item.title == "Paste and Search", item.title)
+        pasteboard.clearContents()
+        pasteboard.setString(site + "/long", forType: .string)
+        browser.pasteAndGo(nil)
+        check("paste and go: it goes there", await waitFor { browser.currentURL?.path == "/long" }, browser.currentURL as Any)
+        pasteboard.clearContents()
+        check("paste and go: nothing to paste, nothing to do", !browser.validateMenuItem(item))
+        browser.pasteboard = .general
+
+        other.window?.close()
     }
 
     // MARK: - #7 Bookmarks, favorites bar, start page, reading list

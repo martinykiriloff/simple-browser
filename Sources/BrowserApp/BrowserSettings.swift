@@ -76,6 +76,41 @@ enum BrowserSettings {
         }
     }
 
+    // MARK: Search
+
+    private static let engineKey = "settings.search.engine"
+    private static let customEngineKey = "settings.search.custom"
+    private static let suggestionsKey = "settings.search.suggestions"
+
+    /// The engine the address bar and "Search for …" use.
+    static var searchEngine: SearchEngine {
+        get {
+            let id = store.string(forKey: engineKey) ?? SearchEngine.default.id
+            if id == "custom", let custom = SearchEngine.custom(template: customSearchTemplate) { return custom }
+            return SearchEngine.all.first { $0.id == id } ?? .default
+        }
+        set { store.set(newValue.id, forKey: engineKey) }
+    }
+
+    /// What typed text means: an address if it names one, otherwise a
+    /// search with the chosen engine.
+    static func destination(for text: String) -> URL? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return AddressResolver.address(trimmed) ?? searchEngine.searchURL(for: trimmed)
+    }
+
+    static var customSearchTemplate: String {
+        get { store.string(forKey: customEngineKey) ?? "" }
+        set { store.set(newValue, forKey: customEngineKey) }
+    }
+
+    /// What is typed goes to the engine for suggestions. On unless switched off.
+    static var searchSuggestions: Bool {
+        get { store.object(forKey: suggestionsKey) as? Bool ?? true }
+        set { store.set(newValue, forKey: suggestionsKey) }
+    }
+
     // MARK: Bookmarks
 
     private static let favoritesBarKey = "settings.favoritesBar"

@@ -152,9 +152,10 @@ final class PageContextMenu: NSObject, WKScriptMessageHandler {
         let selection = context.selection.trimmingCharacters(in: .whitespacesAndNewlines)
         if !selection.isEmpty {
             let quoted = Self.quoted(selection)
-            if replace(.searchWeb, in: menu, title: "Search DuckDuckGo for “\(quoted)”", action: #selector(searchSelection(_:))) == nil,
+            let engine = BrowserSettings.searchEngine.name
+            if replace(.searchWeb, in: menu, title: "Search \(engine) for “\(quoted)”", action: #selector(searchSelection(_:))) == nil,
                let copy = find(menu, .copy) {
-                _ = add("Search DuckDuckGo for “\(quoted)”", #selector(searchSelection(_:)), after: copy, in: menu)
+                _ = add("Search \(engine) for “\(quoted)”", #selector(searchSelection(_:)), after: copy, in: menu)
             }
             let title = "Translate “\(quoted)” to \(PageTranslator.target.name)"
             if replace(.translate, in: menu, title: title, action: #selector(translateSelection(_:))) == nil {
@@ -239,10 +240,7 @@ final class PageContextMenu: NSObject, WKScriptMessageHandler {
         let text = context.selection.trimmingCharacters(in: .whitespacesAndNewlines)
         // Always a search, even for something that looks like an address:
         // that is what the item says it does.
-        var allowed = CharacterSet.urlQueryAllowed
-        allowed.remove(charactersIn: "&+=?#")
-        guard !text.isEmpty, let query = text.addingPercentEncoding(withAllowedCharacters: allowed),
-              let url = URL(string: AddressResolver.defaultSearchTemplate + query) else { return }
+        guard !text.isEmpty, let url = BrowserSettings.searchEngine.searchURL(for: text) else { return }
         openInNewWindow?(url)
     }
 

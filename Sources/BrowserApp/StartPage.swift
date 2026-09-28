@@ -19,6 +19,19 @@ final class StartPageSchemeHandler: NSObject, WKURLSchemeHandler {
         var frequent: [(title: String, url: URL)] = []
         var reading: [(title: String, url: URL)] = []
         var closed: [(title: String, url: URL)] = []
+        /// The engine the search box uses, by name.
+        var searchEngine = SearchEngine.default.name
+    }
+
+    /// Where the page's search box sends what was typed. The tab takes it
+    /// from there, so the box follows the engine chosen in Settings and an
+    /// address typed into it is opened, not searched for.
+    static func searchText(from url: URL?) -> String? {
+        guard let url, url.scheme == scheme, url.host() == "search",
+              var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
+        // A form writes a space as "+", and a real plus as %2B.
+        components.percentEncodedQuery = components.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%20")
+        return components.queryItems?.first { $0.name == "q" }?.value
     }
 
     /// Gathered when the page loads, so it is always current.
@@ -94,8 +107,16 @@ final class StartPageSchemeHandler: NSObject, WKURLSchemeHandler {
           li + li a { border-top: 1px solid rgba(128,128,128,.18); }
           li a:hover { background: rgba(128,128,128,.12); }
           li span { color: var(--muted); white-space: nowrap; }
-          .empty { color: var(--muted); text-align: center; margin-top: 20vh; }
+          .empty { color: var(--muted); text-align: center; margin-top: 12vh; }
+          form { margin: 0 auto 8px; max-width: 560px; }
+          input { width: 100%; box-sizing: border-box; font: 16px -apple-system, system-ui; padding: 11px 18px; border-radius: 22px;
+                  border: 1px solid rgba(128,128,128,.3); background: var(--card); color: var(--text); outline: none; }
+          input:focus { border-color: AccentColor; box-shadow: 0 0 0 3px color-mix(in srgb, AccentColor 30%, transparent); }
         </style></head><body><main>
+        <form action="simplebrowser://search" method="get" role="search">
+          <input name="q" type="search" autocomplete="off" spellcheck="false" aria-label="Search \(escape(content.searchEngine)) or enter an address"
+                 placeholder="Search \(escape(content.searchEngine)) or enter an address">
+        </form>
         \(section("Favorites", "<div class=tiles>" + content.favorites.map(tile).joined() + "</div>", empty: content.favorites.isEmpty))
         \(section("Frequently Visited", "<div class=tiles>" + content.frequent.map(tile).joined() + "</div>", empty: content.frequent.isEmpty))
         \(section("Reading List", "<ul>" + content.reading.prefix(8).map(row).joined() + "</ul>", empty: content.reading.isEmpty))

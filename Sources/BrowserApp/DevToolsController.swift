@@ -253,7 +253,7 @@ final class DevToolsController: NSObject, WKScriptMessageHandler, WKNavigationDe
         case "Page.reload":
             onReload?(); return true
         case "Page.navigate":
-            if let raw = params["url"] as? String, let url = AddressResolver.resolve(raw) { onNavigate?(url) }
+            if let raw = params["url"] as? String, let url = BrowserSettings.destination(for: raw) { onNavigate?(url) }
             return true
 
         case "Console.getEntries":

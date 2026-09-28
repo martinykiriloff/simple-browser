@@ -120,5 +120,64 @@ do {
     check("session checks", false, error)
 }
 
+// MARK: Address bar
+
+do {
+    func u(_ s: String) -> URL { URL(string: s)! }
+    let google = SearchEngine.all.first { $0.id == "google" }!
+    check("an engine searches with the words encoded", google.searchURL(for: "a&b c")?.absoluteString == "https://www.google.com/search?q=a%26b%20c")
+    check("suggestions URL", SearchEngine.default.suggestURL(for: "swift")?.absoluteString == "https://duckduckgo.com/ac/?q=swift&type=list")
+    check("OpenSearch answers parse", SearchEngine.parseSuggestions(Data(#"["sw",["swift","swiftui"]]"#.utf8)) == ["swift", "swiftui"])
+    check("a broken answer is no suggestions", SearchEngine.parseSuggestions(Data("oops".utf8)).isEmpty)
+    check("a custom engine needs %s", SearchEngine.custom(template: "https://search.example/?q=x") == nil)
+    check("a custom engine is named after its host", SearchEngine.custom(template: "https://www.search.example/?q=%s")?.name == "search.example")
+    check("a custom engine must be a web address", SearchEngine.custom(template: "javascript:alert(%s)") == nil)
+
+    check("typeable drops scheme and www", SuggestionRanker.typeable(u("https://www.github.com/")) == "github.com")
+    check("typeable keeps the path", SuggestionRanker.typeable(u("https://github.com/apple/swift")) == "github.com/apple/swift")
+
+    let candidates = [SuggestionRanker.Candidate(title: "GitHub", url: u("https://github.com/apple/swift"), score: 50),
+                      SuggestionRanker.Candidate(title: "GitLab", url: u("https://gitlab.com/"), score: 10)]
+    let completion = SuggestionRanker.completion(for: "git", candidates: candidates)
+    check("git completes to the best host, not the whole path", completion?.text == "hub.com", completion?.text as Any)
+    check("…and goes to the site", completion?.url.absoluteString == "https://github.com/", completion?.url as Any)
+    check("typing a path completes the path", SuggestionRanker.completion(for: "github.com/ap", candidates: candidates)?.text == "ple/swift")
+    check("case does not matter", SuggestionRanker.completion(for: "GIT", candidates: candidates)?.text == "hub.com")
+    let local = [SuggestionRanker.Candidate(title: "Dev", url: u("http://127.0.0.1:8767/tabs?x=1"), score: 1)]
+    check("completion keeps the port and scheme", SuggestionRanker.completion(for: "127.0", candidates: local)?.url.absoluteString == "http://127.0.0.1:8767/",
+          SuggestionRanker.completion(for: "127.0", candidates: local)?.url as Any)
+    check("words are not completed", SuggestionRanker.completion(for: "git hub", candidates: candidates) == nil)
+    check("nothing completes when nothing starts with it", SuggestionRanker.completion(for: "hub", candidates: candidates) == nil)
+    check("a complete address is not completed further", SuggestionRanker.completion(for: "gitlab.com", candidates: candidates) == nil)
+
+    let ranked = SuggestionRanker.rank(
+        query: "git", tabs: [(id: "t1", title: "GitHub", url: u("https://github.com/apple/swift"))],
+        bookmarks: [.init(title: "GitHub", url: u("https://github.com/apple/swift")), .init(title: "Git docs", url: u("https://git-scm.com/doc"))],
+        history: [.init(title: "GitLab", url: u("https://gitlab.com/"), score: 5), .init(title: "News", url: u("https://news.example/"), score: 99)],
+        searches: ["github copilot", "git"], engine: .default)
+    check("an open tab comes first, as Switch to Tab", ranked.first?.kind == .switchToTab(id: "t1"), ranked.map(\.title))
+    check("the same page is not listed twice", ranked.filter { $0.url.host() == "github.com" }.count == 1)
+    check("bookmarks before history", (ranked.firstIndex { $0.title == "Git docs" } ?? 99) < (ranked.firstIndex { $0.title == "GitLab" } ?? -1))
+    check("pages that do not match are left out", !ranked.contains { $0.title == "News" })
+    check("the typed search is offered, once", ranked.filter { $0.kind == .search && $0.detail.lowercased() == "git" }.count == 1, ranked.map(\.detail))
+    check("the engine's suggestions follow", ranked.last?.detail == "github copilot", ranked.map(\.detail))
+    check("an empty query suggests nothing", SuggestionRanker.rank(query: " ", tabs: [], bookmarks: [], history: [], searches: [], engine: .default).isEmpty)
+
+    check("https with only secure content is secure", PageSecurity.of(u("https://example.com/"), hasOnlySecureContent: true) == .secure)
+    check("https that loaded http parts is mixed", PageSecurity.of(u("https://example.com/"), hasOnlySecureContent: false) == .mixed)
+    check("http is not secure", PageSecurity.of(u("http://example.com/"), hasOnlySecureContent: false) == .notSecure)
+    check("http is not secure whatever WebKit says about content", PageSecurity.of(u("http://example.com/"), hasOnlySecureContent: true) == .notSecure)
+    for local in ["http://localhost:3000/", "http://127.0.0.1:8767/x", "http://app.localhost/", "http://[::1]:8080/"] {
+        check("\(local) is this Mac", PageSecurity.of(u(local), hasOnlySecureContent: false) == .local)
+    }
+    for trick in ["http://127.0.0.1.evil.example/", "http://localhost.evil.example/", "http://127.evil.example/"] {
+        check("\(trick) is not this Mac", PageSecurity.of(u(trick), hasOnlySecureContent: false) == .notSecure)
+    }
+    check("the start page says nothing", PageSecurity.of(u("simplebrowser://start"), hasOnlySecureContent: false) == .none)
+    check("no page says nothing", PageSecurity.of(nil, hasOnlySecureContent: false) == .none)
+    check("only trouble gets words", PageSecurity.secure.label == nil && PageSecurity.local.label == nil
+          && PageSecurity.notSecure.label == "Not Secure" && PageSecurity.mixed.label == "Not Secure")
+}
+
 print(failures == 0 ? "✔ \(passed) checks passed" : "\(failures) of \(passed + failures) checks failed")
 exit(failures == 0 ? 0 : 1)

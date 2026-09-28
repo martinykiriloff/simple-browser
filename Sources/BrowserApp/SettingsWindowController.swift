@@ -22,6 +22,9 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate, N
     private let resetButton = NSButton(title: "Reset to Default", target: nil, action: nil)
     private let newWindowPopUp = NSPopUpButton(frame: .zero, pullsDown: false)
     let startupPopUp = NSPopUpButton(frame: .zero, pullsDown: false)
+    let enginePopUp = NSPopUpButton(frame: .zero, pullsDown: false)
+    let customEngineField = NSTextField()
+    let suggestionsCheckbox = NSButton(checkboxWithTitle: "Show search suggestions as you type", target: nil, action: nil)
     let memorySaverCheckbox = NSButton(checkboxWithTitle: "Put inactive tabs to sleep to save memory", target: nil, action: nil)
     let keepActiveField = NSTextField()
 
@@ -119,6 +122,18 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate, N
         startupPopUp.action = #selector(startupChanged(_:))
         startupPopUp.setAccessibilityLabel("SimpleBrowser opens with")
 
+        let engineTitle = NSTextField(labelWithString: "Search engine:")
+        engineTitle.alignment = .right
+        enginePopUp.addItems(withTitles: SearchEngine.all.map(\.name) + ["Custom…"])
+        enginePopUp.target = self
+        enginePopUp.action = #selector(engineChanged(_:))
+        enginePopUp.setAccessibilityLabel("Search engine")
+        customEngineField.placeholderString = "https://search.example/?q=%s"
+        customEngineField.delegate = self
+        customEngineField.setAccessibilityLabel("Custom search address, with %s for the words")
+        suggestionsCheckbox.target = self
+        suggestionsCheckbox.action = #selector(suggestionsChanged(_:))
+
         let memoryTitle = NSTextField(labelWithString: "Memory Saver:")
         memoryTitle.alignment = .right
         memorySaverCheckbox.target = self
@@ -139,6 +154,9 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate, N
             [NSGridCell.emptyContentView, buttons],
             [NSGridCell.emptyContentView, help],
             [newWindowTitle, newWindowPopUp],
+            [engineTitle, enginePopUp],
+            [NSGridCell.emptyContentView, customEngineField],
+            [NSGridCell.emptyContentView, suggestionsCheckbox],
             [memoryTitle, memorySaverCheckbox],
             [NSGridCell.emptyContentView, keepActiveField],
             [NSGridCell.emptyContentView, memoryHelp],
@@ -155,7 +173,11 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate, N
         grid.row(at: 5).topPadding = 10
         grid.row(at: 5).yPlacement = .center
         grid.cell(for: newWindowPopUp)?.xPlacement = .leading
+        grid.cell(for: enginePopUp)?.xPlacement = .leading
         grid.row(at: 6).topPadding = 12
+        grid.row(at: 6).yPlacement = .center
+        grid.cell(for: suggestionsCheckbox)?.xPlacement = .leading
+        grid.row(at: 9).topPadding = 12
         grid.cell(for: memorySaverCheckbox)?.xPlacement = .leading
         grid.translatesAutoresizingMaskIntoConstraints = false
 
@@ -175,6 +197,21 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate, N
 
     // MARK: - State
 
+    @objc private func engineChanged(_ sender: Any?) {
+        let index = enginePopUp.indexOfSelectedItem
+        if SearchEngine.all.indices.contains(index) {
+            BrowserSettings.searchEngine = SearchEngine.all[index]
+        } else {
+            BrowserSettings.searchEngine = SearchEngine(id: "custom", name: "Custom", searchTemplate: "", suggestTemplate: nil)
+            window?.makeFirstResponder(customEngineField)
+        }
+        customEngineField.isHidden = BrowserSettings.searchEngine.id != "custom" && index < SearchEngine.all.count
+    }
+
+    @objc private func suggestionsChanged(_ sender: Any?) {
+        BrowserSettings.searchSuggestions = suggestionsCheckbox.state == .on
+    }
+
     @objc private func startupChanged(_ sender: Any?) {
         BrowserSettings.startup = startupPopUp.indexOfSelectedItem == 1 ? .newWindow : .lastSession
     }
@@ -186,6 +223,11 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate, N
 
     private func refresh() {
         startupPopUp.selectItem(at: BrowserSettings.startup == .newWindow ? 1 : 0)
+        let stored = BrowserSettings.store.string(forKey: "settings.search.engine") ?? SearchEngine.default.id
+        enginePopUp.selectItem(at: stored == "custom" ? SearchEngine.all.count : SearchEngine.all.firstIndex { $0.id == stored } ?? 0)
+        customEngineField.stringValue = BrowserSettings.customSearchTemplate
+        customEngineField.isHidden = stored != "custom"
+        suggestionsCheckbox.state = BrowserSettings.searchSuggestions ? .on : .off
         memorySaverCheckbox.state = BrowserSettings.memorySaver ? .on : .off
         keepActiveField.stringValue = BrowserSettings.keepActiveSites.joined(separator: ", ")
         keepActiveField.isEnabled = BrowserSettings.memorySaver
@@ -214,6 +256,10 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate, N
     // MARK: - Actions
 
     func controlTextDidChange(_ notification: Notification) {
+        if (notification.object as? NSTextField) === customEngineField {
+            BrowserSettings.customSearchTemplate = customEngineField.stringValue
+            return
+        }
         if (notification.object as? NSTextField) === keepActiveField {
             // Hosts, however they were typed: "https://Music.example.com/x" is music.example.com.
             BrowserSettings.keepActiveSites = keepActiveField.stringValue

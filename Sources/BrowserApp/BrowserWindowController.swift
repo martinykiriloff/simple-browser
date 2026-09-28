@@ -17,6 +17,7 @@ final class BrowserWindowController: NSWindowController,
                                      NSToolbarDelegate,
                                      NSToolbarItemValidation,
                                      NSMenuItemValidation,
+                                     NSTextFieldDelegate,
                                      WKNavigationDelegate,
                                      WKUIDelegate {
 
@@ -41,7 +42,24 @@ final class BrowserWindowController: NSWindowController,
     /// Every web view this tab makes comes from it: same data store, same
     /// agents and message handlers.
     private let configuration: WKWebViewConfiguration
-    private let addressField = NSTextField()
+    private let addressField = AddressField()
+    private let suggestionsPanel = SuggestionsPanel()
+    /// What the person actually typed, without the inline completion.
+    private var typedAddress = ""
+    /// Where Return goes while an inline completion is showing.
+    private var completionURL: URL?
+    private var searchSuggestions: [String] = []
+    private var suggestTask: Task<Void, Never>?
+
+    /// What the address bar suggests from, gathered per keystroke by the app delegate.
+    struct AddressSources {
+        var tabs: [(id: String, title: String, url: URL)] = []
+        var bookmarks: [SuggestionRanker.Candidate] = []
+        var history: [SuggestionRanker.Candidate] = []
+    }
+    var addressSources: ((String) -> AddressSources)?
+    var switchToTab: ((String) -> Void)?
+    var removeFromHistory: ((URL) -> Void)?
     private let splitView = NSSplitView()
     private let pageContainer = NSView()
     private var fillConstraints: [NSLayoutConstraint] = []
@@ -97,6 +115,8 @@ final class BrowserWindowController: NSWindowController,
     /// Where the reading list keeps its offline copy of a page.
     var readingListArchive: ((BookmarkStore.ReadingItem) -> URL)?
     private let starButton = NSButton()
+    private let securityButton = NSButton()
+    private(set) var pageSecurity = PageSecurity.none
     let favoritesBar = FavoritesBarController()
     /// Called as the tab closes, with what "Reopen Closed Tab" needs.
     var onTabClosed: ((URL?, Data?, String) -> Void)?
@@ -204,6 +224,7 @@ final class BrowserWindowController: NSWindowController,
         configureAddressField()
         configureNavigationButtons()
         configureStarButton()
+        configureSecurityButton()
         observePage()
         configureProfileButton()
         configureTranslateButton()
@@ -521,7 +542,10 @@ final class BrowserWindowController: NSWindowController,
     // MARK: - Actions (reached via menu key equivalents and toolbar buttons)
 
     @objc func navigate(_ sender: Any?) {
-        guard let url = AddressResolver.resolve(addressField.stringValue) else { return }
+        let text = addressField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let completed = completionURL.flatMap { text == typedAddress + completionText ? $0 : nil }
+        guard let url = completed ?? BrowserSettings.destination(for: text) else { return }
+        suggestionsPanel.hide()
         typedNavigation = true
         load(url)
         window?.makeFirstResponder(webView)
@@ -865,6 +889,85 @@ final class BrowserWindowController: NSWindowController,
         syncStar()
     }
 
+    // MARK: - Page security
+
+    private func configureSecurityButton() {
+        // Inside the address field, before the address, as in Safari and
+        // Chrome: it is a statement about the address, not another button.
+        securityButton.isBordered = false
+        securityButton.imagePosition = .imageLeading
+        securityButton.font = .systemFont(ofSize: NSFont.smallSystemFontSize, weight: .medium)
+        securityButton.setButtonType(.momentaryChange)
+        securityButton.refusesFirstResponder = true
+        securityButton.target = self
+        securityButton.action = #selector(showPageSecurity(_:))
+        syncSecurity()
+    }
+
+    /// A lock for https, "Not Secure" for plain http, nothing for the
+    /// browser's own pages.
+    private func syncSecurity() {
+        let url = isHibernated ? hibernatedURL : webView.url
+        pageSecurity = PageSecurity.of(url, hasOnlySecureContent: webView.hasOnlySecureContent)
+        let trouble = pageSecurity.label != nil
+        securityButton.image = pageSecurity.symbol.flatMap { NSImage(systemSymbolName: $0, accessibilityDescription: nil) }?
+            .withSymbolConfiguration(.init(pointSize: 11, weight: .medium).applying(.init(paletteColors: [trouble ? .systemOrange : .secondaryLabelColor])))
+        securityButton.attributedTitle = NSAttributedString(string: pageSecurity.label ?? "", attributes: [
+            .foregroundColor: NSColor.systemOrange, .font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize, weight: .medium),
+        ])
+        let site = Self.displayAddress(url)
+        let summary: String
+        switch pageSecurity {
+        case .secure: summary = "Connection is secure"
+        case .mixed: summary = "Parts of this page are not encrypted"
+        case .notSecure: summary = "Connection is not encrypted"
+        case .local: summary = "This page is on this Mac"
+        case .none: summary = ""
+        }
+        securityButton.toolTip = summary
+        securityButton.setAccessibilityLabel(summary.isEmpty ? "Page security" : "\(summary): \(site)")
+        securityButton.isHidden = pageSecurity == .none
+        addressField.setLeadingAccessory(securityButton)
+    }
+
+    @objc func showPageSecurity(_ sender: Any?) {
+        guard pageSecurity != .none, securityButton.window != nil else { return }
+        let site = Self.displayAddress(isHibernated ? hibernatedURL : webView.url)
+        let title = NSTextField(labelWithString: securityButton.toolTip ?? "")
+        title.font = .boldSystemFont(ofSize: NSFont.systemFontSize)
+        let body = NSTextField(wrappingLabelWithString: pageSecurity.explanation(site: site))
+        body.textColor = .secondaryLabelColor
+        let stack = NSStackView(views: [title, body])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 6
+        stack.edgeInsets = NSEdgeInsets(top: 14, left: 16, bottom: 14, right: 16)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        let controller = NSViewController()
+        controller.view = NSView()
+        controller.view.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: controller.view.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: controller.view.trailingAnchor),
+            stack.topAnchor.constraint(equalTo: controller.view.topAnchor),
+            stack.bottomAnchor.constraint(equalTo: controller.view.bottomAnchor),
+            controller.view.widthAnchor.constraint(equalToConstant: 320),
+        ])
+        let popover = NSPopover()
+        popover.behavior = .transient
+        popover.contentViewController = controller
+        popover.show(relativeTo: securityButton.bounds, of: securityButton, preferredEdge: .maxY)
+        securityPopover = popover
+    }
+
+    private(set) var securityPopover: NSPopover?
+    /// Developer aid: what the indicator beside the address says.
+    var securityLabel: String { securityButton.isHidden ? "" : (securityButton.toolTip ?? "") }
+    var securityTitle: String { securityButton.isHidden ? "" : securityButton.title }
+    /// Developer aid: where the address text starts and where the indicator ends, in the field.
+    var addressTextStart: CGFloat { addressField.cell?.drawingRect(forBounds: addressField.bounds).minX ?? 0 }
+    var securityIndicatorEnd: CGFloat { securityButton.isHidden ? 0 : securityButton.frame.maxX }
+
     /// Filled when this page is bookmarked.
     func syncStar() {
         let bookmarked = webView.url.flatMap { try? bookmarks?()?.bookmark(for: $0) } != nil
@@ -961,6 +1064,10 @@ final class BrowserWindowController: NSWindowController,
             webView.observe(\.canGoForward, options: [.new]) { [weak self] _, _ in
                 DispatchQueue.main.async { self?.syncNavigationButtons() }
             },
+            // A page can pull in something unencrypted long after it loaded.
+            webView.observe(\.hasOnlySecureContent, options: [.new]) { [weak self] _, _ in
+                DispatchQueue.main.async { self?.syncSecurity() }
+            },
         ]
     }
 
@@ -1011,7 +1118,181 @@ final class BrowserWindowController: NSWindowController,
 
     // MARK: - Address field
 
+    // MARK: - Address bar suggestions
+
+    /// Not editing: the site, as Safari shows it. Editing: the full address.
+    static func displayAddress(_ url: URL?) -> String {
+        guard let url, !StartPageSchemeHandler.isStartPage(url) else { return "" }
+        guard url.scheme == "http" || url.scheme == "https", let host = url.host() else { return url.absoluteString }
+        return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
+    }
+
+    private var completionText = ""
+
+    private func addressFieldDidFocus() {
+        guard !isHibernated || hibernatedURL != nil else { return }
+        let url = currentURL
+        addressField.stringValue = StartPageSchemeHandler.isStartPage(url) ? "" : url?.absoluteString ?? ""
+        typedAddress = addressField.stringValue
+        DispatchQueue.main.async { [weak self] in self?.addressField.currentEditor()?.selectAll(nil) }
+    }
+
+    func controlTextDidChange(_ notification: Notification) {
+        guard (notification.object as? NSTextField) === addressField, let editor = addressField.currentEditor() as? NSTextView else { return }
+        let text = editor.string
+        // Deleting (⌫ removes the completion first) never completes again.
+        let deleting = typedAddress.hasPrefix(text) && text.count < typedAddress.count
+        typedAddress = text
+        completionURL = nil
+        completionText = ""
+        let sources = addressSources?(text) ?? AddressSources()
+        if !deleting, editor.selectedRange().location == (text as NSString).length,
+           let completion = SuggestionRanker.completion(for: text, candidates: sources.history + sources.bookmarks) {
+            let start = (text as NSString).length
+            editor.replaceCharacters(in: NSRange(location: start, length: 0), with: completion.text)
+            editor.setSelectedRange(NSRange(location: start, length: (completion.text as NSString).length))
+            completionURL = completion.url
+            completionText = completion.text
+        }
+        showSuggestions(for: text, sources: sources)
+        fetchSearchSuggestions(for: text)
+    }
+
+    private func showSuggestions(for text: String, sources: AddressSources) {
+        let items = SuggestionRanker.rank(query: text, tabs: sources.tabs.filter { $0.id != tab.description }, bookmarks: sources.bookmarks,
+                                          history: sources.history, searches: searchSuggestions, engine: BrowserSettings.searchEngine)
+        if text.trimmingCharacters(in: .whitespaces).isEmpty { suggestionsPanel.hide() } else { suggestionsPanel.show(items, below: addressField) }
+    }
+
+    /// The engine's suggestions, a moment after typing pauses. Never sent
+    /// when switched off, and only for what was typed, not a completion.
+    private func fetchSearchSuggestions(for text: String) {
+        suggestTask?.cancel()
+        searchSuggestions = []
+        let query = text.trimmingCharacters(in: .whitespaces)
+        guard BrowserSettings.searchSuggestions, !query.isEmpty, AddressResolver.address(query) == nil || !query.contains("."),
+              let url = BrowserSettings.searchEngine.suggestURL(for: query) else { return }
+        suggestTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(150))
+            guard !Task.isCancelled else { return }
+            var request = URLRequest(url: url)
+            request.httpShouldHandleCookies = false
+            request.timeoutInterval = 3
+            guard let (data, _) = try? await Self.suggestSession.data(for: request), !Task.isCancelled,
+                  self.typedAddress == text else { return }
+            self.searchSuggestions = Array(SearchEngine.parseSuggestions(data).prefix(4))
+            if self.isEditingAddress { self.showSuggestions(for: text, sources: self.addressSources?(text) ?? AddressSources()) }
+        }
+    }
+
+    /// No cookies, no cache: suggestions are not tied to a sign-in.
+    private static let suggestSession = URLSession(configuration: .ephemeral)
+
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        guard control === addressField else { return false }
+        switch selector {
+        case #selector(NSResponder.moveDown(_:)):
+            suggestionsPanel.move(by: 1)
+            return suggestionsPanel.isVisible
+        case #selector(NSResponder.moveUp(_:)):
+            suggestionsPanel.move(by: -1)
+            return suggestionsPanel.isVisible
+        case #selector(NSResponder.insertNewline(_:)):
+            if let chosen = suggestionsPanel.selected { choose(chosen) } else { navigate(nil) }
+            return true
+        case #selector(NSResponder.insertTab(_:)):
+            // ⇥ accepts the inline completion, as in Safari.
+            let range = textView.selectedRange()
+            guard range.length > 0, range.location + range.length == (textView.string as NSString).length else { return false }
+            textView.setSelectedRange(NSRange(location: (textView.string as NSString).length, length: 0))
+            typedAddress = textView.string
+            return true
+        case #selector(NSResponder.cancelOperation(_:)):
+            if suggestionsPanel.isVisible {
+                suggestionsPanel.hide()
+                textView.string = typedAddress
+                completionURL = nil
+            } else {
+                addressField.stringValue = Self.displayAddress(webView.url)
+                window?.makeFirstResponder(webView)
+            }
+            return true
+        case #selector(NSResponder.deleteBackward(_:)) where NSApp.currentEvent?.modifierFlags.contains(.shift) == true:
+            // ⇧⌫ on a history suggestion forgets it.
+            guard let chosen = suggestionsPanel.selected, chosen.kind == .history else { return false }
+            removeFromHistory?(chosen.url)
+            showSuggestions(for: typedAddress, sources: addressSources?(typedAddress) ?? AddressSources())
+            return true
+        default:
+            return false
+        }
+    }
+
+    func controlTextDidEndEditing(_ notification: Notification) {
+        guard (notification.object as? NSTextField) === addressField else { return }
+        suggestionsPanel.hide()
+        if !isHibernated { addressField.stringValue = Self.displayAddress(webView.url) }
+    }
+
+    private func choose(_ suggestion: AddressSuggestion) {
+        suggestionsPanel.hide()
+        switch suggestion.kind {
+        case .switchToTab(let id):
+            addressField.stringValue = Self.displayAddress(webView.url)
+            window?.makeFirstResponder(webView)
+            switchToTab?(id)
+        case .search:
+            load(suggestion.url)
+            window?.makeFirstResponder(webView)
+        case .bookmark, .history:
+            typedNavigation = true
+            load(suggestion.url)
+            window?.makeFirstResponder(webView)
+        }
+    }
+
+    /// The clipboard Paste and Go reads. The self-test swaps in its own, so
+    /// a test run never touches what the person has copied.
+    var pasteboard = NSPasteboard.general
+
+    /// Edit → Paste and Go (⇧⌘V): the clipboard as an address, or a search.
+    @objc func pasteAndGo(_ sender: Any?) {
+        guard let text = pasteboard.string(forType: .string), let url = BrowserSettings.destination(for: text) else { return }
+        typedNavigation = true
+        load(url)
+        window?.makeFirstResponder(webView)
+    }
+
+    /// Developer aid: types into the address bar as a person would, one
+    /// edit notification per call, with the field focused.
+    func typeInAddressBar(_ text: String) {
+        window?.makeFirstResponder(addressField)
+        guard let editor = addressField.currentEditor() as? NSTextView else { return }
+        editor.string = text
+        editor.setSelectedRange(NSRange(location: (text as NSString).length, length: 0))
+        controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: addressField))
+    }
+
+    /// Developer aid, for the self-test.
+    var suggestionTitles: [String] { suggestionsPanel.titles }
+    var suggestionKinds: [AddressSuggestion.Kind] { suggestionsPanel.suggestions.map(\.kind) }
+    var addressEditorText: String { (addressField.currentEditor() as? NSTextView)?.string ?? addressField.stringValue }
+    /// Developer aid: ⇧⌫ on the selected suggestion.
+    func removeSelectedSuggestionForTest() {
+        guard let chosen = suggestionsPanel.selected, chosen.kind == .history else { return }
+        removeFromHistory?(chosen.url)
+        showSuggestions(for: typedAddress, sources: addressSources?(typedAddress) ?? AddressSources())
+    }
+
+    func pressInAddressBar(_ selector: Selector) {
+        guard let editor = addressField.currentEditor() as? NSTextView else { return }
+        _ = control(addressField, textView: editor, doCommandBy: selector)
+    }
+
     private func configureAddressField() {
+        addressField.delegate = self
+        addressField.onFocus = { [weak self] in self?.addressFieldDidFocus() }
+        suggestionsPanel.onChoose = { [weak self] suggestion in self?.choose(suggestion) }
         addressField.placeholderString = "Search or enter website name"
         addressField.usesSingleLineMode = true
         addressField.lineBreakMode = .byTruncatingTail
@@ -1041,10 +1322,11 @@ final class BrowserWindowController: NSWindowController,
         if isHibernated { return }
         syncNavigationButtons()
         syncStar()
+        syncSecurity()
         if !isEditingAddress {
             // The start page is the browser's own: the address bar stays
             // empty and ready for typing, as on a new tab everywhere.
-            addressField.stringValue = StartPageSchemeHandler.isStartPage(webView.url) ? "" : webView.url?.absoluteString ?? ""
+            addressField.stringValue = Self.displayAddress(webView.url)
         }
         let title = webView.title.flatMap { $0.isEmpty ? nil : $0 }
         let resolved = title ?? webView.url?.host() ?? "SimpleBrowser"
@@ -1207,6 +1489,11 @@ final class BrowserWindowController: NSWindowController,
             return !translator.optedOut && webView.url != nil
         case #selector(showOriginalPage(_:)):
             return translator.isTranslated
+        case #selector(pasteAndGo(_:)):
+            // Says what it will do with what is on the clipboard.
+            let text = pasteboard.string(forType: .string)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            menuItem.title = text.isEmpty || AddressResolver.address(text) != nil ? "Paste and Go" : "Paste and Search"
+            return !text.isEmpty
         case #selector(toggleFavoritesBar(_:)):
             menuItem.title = BrowserSettings.showFavoritesBar ? "Hide Favorites Bar" : "Show Favorites Bar"
         case #selector(addBookmark(_:)), #selector(addToReadingList(_:)):
@@ -1380,6 +1667,23 @@ final class BrowserWindowController: NSWindowController,
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
         // `<a download>`.
         if navigationAction.shouldPerformDownload { return .download }
+        // The start page's search box: only the start page may use it, so a
+        // web page cannot make the browser search or navigate through it.
+        if let text = StartPageSchemeHandler.searchText(from: navigationAction.request.url) {
+            // Judged by the page that is showing. Not by `sourceFrame`:
+            // measured, after an app-initiated load its request and its
+            // security origin still name the page that was showing before.
+            if StartPageSchemeHandler.isStartPage(webView.url), navigationAction.sourceFrame.isMainFrame,
+               navigationAction.targetFrame?.isMainFrame == true, let url = BrowserSettings.destination(for: text) {
+                // Once this navigation is out of the way: a load started
+                // while WebKit is still deciding it can be cancelled with it.
+                DispatchQueue.main.async { [weak self] in
+                    self?.typedNavigation = true
+                    self?.load(url)
+                }
+            }
+            return .cancel
+        }
         // ⌘-click or a middle click on a link: a tab behind this one, or in
         // front with ⇧ as well, as in Safari and Chrome.
         if navigationAction.navigationType == .linkActivated, let url = navigationAction.request.url,

@@ -425,6 +425,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let handler = StartPageSchemeHandler { [weak self] in
             guard let self else { return .init() }
             var content = StartPageSchemeHandler.Content()
+            content.searchEngine = BrowserSettings.searchEngine.name
             if let store = self.bookmarks(for: profile) {
                 content.favorites = store.favorites.compactMap { node in node.url.map { (node.title, $0) } }
                 content.reading = ((try? store.readingList(includeRead: false)) ?? []).map { ($0.title, $0.url) }
@@ -678,6 +679,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         controller.readingListArchive = { [weak self] item in
             self?.readingListArchive(for: profile, item) ?? FileManager.default.temporaryDirectory
         }
+        controller.addressSources = { [weak self] text in
+            guard let self else { return .init() }
+            var sources = BrowserWindowController.AddressSources()
+            sources.tabs = self.controllers.filter { $0.profile.id == profile.id }.compactMap { tab in
+                tab.currentURL.flatMap { StartPageSchemeHandler.isStartPage($0) ? nil : (tab.tab.description, tab.window?.title ?? "", $0) }
+            }
+            let query = text.trimmingCharacters(in: .whitespaces)
+            // Search the typed words, and for completion the first word as an address prefix.
+            let now = Date()
+            let pages = ((try? self.history(for: profile)?.pages(matching: query, limit: 12)) ?? [])
+            sources.history = pages.map { .init(title: $0.title, url: $0.url, score: $0.score(now: now)) }
+            sources.bookmarks = ((try? self.bookmarks(for: profile)?.search(query, limit: 12)) ?? []).compactMap { node in
+                node.url.map { url in .init(title: node.title, url: url, score: (try? self.history(for: profile)?.page(for: url))??.score(now: now) ?? 1) }
+            }
+            return sources
+        }
+        controller.switchToTab = { [weak self] id in
+            self?.controllers.first { $0.tab.description == id }?.window?.makeKeyAndOrderFront(nil)
+        }
+        controller.removeFromHistory = { [weak self] url in try? self?.history(for: profile)?.deletePage(url) }
         controller.favoritesBar.items = { [weak self] in self?.bookmarks(for: profile)?.favorites ?? [] }
         controller.favoritesBar.childrenOf = { [weak self] id in (try? self?.bookmarks(for: profile)?.children(of: id)) ?? [] }
         controller.favoritesBar.open = { [weak self, weak controller] url, newTab in
