@@ -12,6 +12,17 @@ final class BlockingController: NSObject {
     /// The tab's content controller, which the rule lists are added to.
     var contentController: WKUserContentController?
     var profileID = ""
+    /// Where the sites blocking is off for are kept: the profile's settings,
+    /// or for a private window, the private session.
+    var offSites: (() -> [String])?
+    var setOffSites: (([String]) -> Void)?
+
+    private var sites: [String] {
+        get { offSites?() ?? BrowserSettings.blockingOffSites(profile: profileID) }
+        set {
+            if let setOffSites { setOffSites(newValue) } else { BrowserSettings.setBlockingOffSites(newValue, profile: profileID) }
+        }
+    }
     /// The page showing, for the popover and the switch.
     var currentURL: (() -> URL?)?
     var reload: (() -> Void)?
@@ -54,7 +65,7 @@ final class BlockingController: NSObject {
     var site: String? { Self.site(of: currentURL?()) }
 
     func isOff(forSiteOf url: URL?) -> Bool {
-        BlockingAllowlist.contains(Self.site(of: url), in: BrowserSettings.blockingOffSites(profile: profileID))
+        BlockingAllowlist.contains(Self.site(of: url), in: sites)
     }
 
     var isOffForSite: Bool { isOff(forSiteOf: currentURL?()) }
@@ -88,14 +99,14 @@ final class BlockingController: NSObject {
     /// The switch in the popover. The page is reloaded so the choice shows.
     func setOff(_ off: Bool) {
         guard let site else { return }
-        var sites = BrowserSettings.blockingOffSites(profile: profileID).filter { $0 != site }
+        var sites = self.sites.filter { $0 != site }
         if off {
             // A wider entry already covers this site; narrowing is removing that one.
             sites.append(site)
         } else {
             sites.removeAll { BlockingAllowlist.contains(site, in: [$0]) }
         }
-        BrowserSettings.setBlockingOffSites(sites, profile: profileID)
+        self.sites = sites
         if let contentController { blocker?.setSuspended(off, for: contentController) }
         NotificationCenter.default.post(name: ContentBlocker.didChange, object: blocker)
         reload?()

@@ -3,8 +3,11 @@
 # Tests translation, the right-click menu and downloads: TranslateKit's unit
 # checks, then the in-app self-test against the fixture site in
 # Tests/Fixtures/page. Google is never called (the app is given a stub), and
-# nothing is written outside a scratch folder. The app takes focus while it
-# runs: right-clicks are real mouse events sent to its window.
+# nothing is written outside a scratch folder. Right-clicks are real mouse
+# events, sent to the app's own window.
+#
+# It runs quietly: the app never becomes active and its windows stay beneath
+# yours. FOCUS=1 runs it in front instead.
 #
 #   scripts/test-page.sh
 #   SNAPSHOTS=/tmp/shots scripts/test-page.sh     # also saves pictures of the window
@@ -26,7 +29,9 @@ if ! curl -s -m 2 -o /dev/null http://127.0.0.1:8767/; then
 fi
 
 rm -f "$REPORT"
-"$APP" --page-selftest "$REPORT" ${SNAPSHOTS:+--snapshot-windows "$SNAPSHOTS"} about:blank >/dev/null 2>&1 &
+QUIET_FLAG=--quiet
+[ -n "${FOCUS:-}" ] && QUIET_FLAG=
+"$APP" $QUIET_FLAG --page-selftest "$REPORT" ${SNAPSHOTS:+--snapshot-windows "$SNAPSHOTS"} about:blank >/dev/null 2>&1 &
 APP_PID=$!
 for _ in $(seq 1 180); do
   [ -s "$REPORT" ] && break

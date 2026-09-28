@@ -21,6 +21,12 @@ final class BrowserWindowController: NSWindowController,
                                      WKNavigationDelegate,
                                      WKUIDelegate {
 
+    /// Set for a private window: its tabs share this and nothing else.
+    let privateSession: PrivateSession?
+    var isPrivate: Bool { privateSession != nil }
+    private weak var privateItem: NSToolbarItem?
+    private var appearanceObservation: NSKeyValueObservation?
+
     /// Which identity this window browses as. Fixed for the window's life:
     /// its web view's data store was chosen from it. Replaced only by a
     /// rename, which keeps the data store.
@@ -134,8 +140,9 @@ final class BrowserWindowController: NSWindowController,
 
     init(profile: Profile, recorder: InspectorRecorder, passwords: PasswordService,
          configuration popupConfiguration: WKWebViewConfiguration? = nil, startPage: StartPageSchemeHandler? = nil,
-         blocker: ContentBlocker? = nil) {
+         blocker: ContentBlocker? = nil, privateSession: PrivateSession? = nil) {
         self.profile = profile
+        self.privateSession = privateSession
         self.recorder = recorder
         self.bridge = InspectorBridge(recorder: recorder, tab: tab)
         self.passwordCoordinator = PasswordCoordinator(service: passwords)
@@ -152,7 +159,8 @@ final class BrowserWindowController: NSWindowController,
         } else {
             configuration = WKWebViewConfiguration()
             // Per-profile isolation at the WebKit level. Never `.default()`.
-            configuration.websiteDataStore = WKWebsiteDataStore(forIdentifier: profile.dataStoreIdentifier)
+            // A private window's store is in memory only, and the session's own.
+            configuration.websiteDataStore = privateSession?.dataStore ?? WKWebsiteDataStore(forIdentifier: profile.dataStoreIdentifier)
         }
         if let startPage { StartPageSchemeHandler.install(startPage, into: configuration) }
         // Keeps the `_inspector` object alive for the WebKit-inspector menu item.
@@ -180,13 +188,25 @@ final class BrowserWindowController: NSWindowController,
         )
         super.init(window: window)
 
+        QuietMode.apply(to: window)
         window.title = "New Tab"
         window.titleVisibility = .hidden
         window.toolbarStyle = .unified
         // Not a tab until it is on screen: ⌘N must open a window even when the
         // person's macOS setting prefers tabs. `didShow` lets it take tabs.
         window.tabbingMode = .disallowed
-        window.tabbingIdentifier = Self.tabbingIdentifier(for: profile)
+        // Private tabs only ever join private windows, of the same profile.
+        window.tabbingIdentifier = Self.tabbingIdentifier(for: profile) + (privateSession == nil ? "" : ".private")
+        if privateSession != nil {
+            // Dark chrome, so a private window is known at a glance. The
+            // page itself keeps following the system's appearance.
+            window.appearance = NSAppearance(named: .darkAqua)
+            webView.appearance = NSApp.effectiveAppearance
+            appearanceObservation = NSApp.observe(\.effectiveAppearance) { [weak self] app, _ in
+                DispatchQueue.main.async { self?.webView.appearance = app.effectiveAppearance }
+            }
+            passwordCoordinator.allowsSaving = false
+        }
         window.minSize = NSSize(width: 480, height: 320)
         window.center()
         window.setFrameAutosaveName("BrowserWindow")
@@ -240,6 +260,10 @@ final class BrowserWindowController: NSWindowController,
         zoomButton.target = self
         zoomButton.action = #selector(zoomReset(_:))
         zoomButton.toolTip = "Back to actual size (⌘0)"
+        if let privateSession {
+            blocking.offSites = { privateSession.blockingOffSites }
+            blocking.setOffSites = { privateSession.blockingOffSites = $0 }
+        }
         blocking.currentURL = { [weak self] in self?.currentURL }
         blocking.reload = { [weak self] in self?.reload(nil) }
         blocking.openInNewTab = { [weak self] url in self?.openInNewTab?(url, true) }
@@ -444,6 +468,7 @@ final class BrowserWindowController: NSWindowController,
         fresh.isInspectable = true
         fresh.customUserAgent = old.customUserAgent
         fresh.pageZoom = old.pageZoom
+        fresh.appearance = old.appearance
         fresh.contextMenu = contextMenu
         fresh.translatesAutoresizingMaskIntoConstraints = false
 
@@ -971,8 +996,7 @@ final class BrowserWindowController: NSWindowController,
     private func setZoom(_ level: Double) {
         webView.pageZoom = level
         if let key = PageZoom.key(for: currentURL) {
-            let profileID = profile.id.description
-            BrowserSettings.setZoomLevels(PageZoom.setting(level, for: key, in: BrowserSettings.zoomLevels(profile: profileID)), profile: profileID)
+            zoomLevels = PageZoom.setting(level, for: key, in: zoomLevels)
             onZoomChanged?(key, level)
         }
         syncZoom()
@@ -988,9 +1012,18 @@ final class BrowserWindowController: NSWindowController,
 
     var onZoomChanged: ((String, Double) -> Void)?
 
+    /// By site: the profile's, remembered; a private window's, for as long
+    /// as the private session lasts.
+    private var zoomLevels: [String: Double] {
+        get { privateSession?.zoomLevels ?? BrowserSettings.zoomLevels(profile: profile.id.description) }
+        set {
+            if let privateSession { privateSession.zoomLevels = newValue } else { BrowserSettings.setZoomLevels(newValue, profile: profile.id.description) }
+        }
+    }
+
     /// The site's own level as a page of it commits.
     private func applyZoomForPage() {
-        let level = PageZoom.key(for: shownURL).flatMap { BrowserSettings.zoomLevels(profile: profile.id.description)[$0] } ?? 1
+        let level = PageZoom.key(for: shownURL).flatMap { zoomLevels[$0] } ?? 1
         if abs(webView.pageZoom - level) > 0.001 { webView.pageZoom = level }
         syncZoom()
     }
@@ -1289,8 +1322,7 @@ final class BrowserWindowController: NSWindowController,
         suggestTask?.cancel()
         searchSuggestions = []
         let query = text.trimmingCharacters(in: .whitespaces)
-        guard BrowserSettings.searchSuggestions, !query.isEmpty, AddressResolver.address(query) == nil || !query.contains("."),
-              let url = BrowserSettings.searchEngine.suggestURL(for: query) else { return }
+        guard let url = suggestionsURL(for: query) else { return }
         suggestTask = Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(150))
             guard !Task.isCancelled else { return }
@@ -1302,6 +1334,14 @@ final class BrowserWindowController: NSWindowController,
             self.searchSuggestions = Array(SearchEngine.parseSuggestions(data).prefix(4))
             if self.isEditingAddress { self.showSuggestions(for: text, sources: self.addressSources?(text) ?? AddressSources()) }
         }
+    }
+
+    /// Where the engine's suggestions for these words would be asked for;
+    /// nil when they must not be: switched off, a private window, or what
+    /// was typed is an address, which is nobody's business but the site's.
+    func suggestionsURL(for query: String) -> URL? {
+        guard BrowserSettings.searchSuggestions, !isPrivate, !query.isEmpty, AddressResolver.address(query) == nil || !query.contains(".") else { return nil }
+        return BrowserSettings.searchEngine.suggestURL(for: query)
     }
 
     /// No cookies, no cache: suggestions are not tied to a sign-in.
@@ -1485,7 +1525,7 @@ final class BrowserWindowController: NSWindowController,
             addressField.stringValue = Self.displayAddress(shownURL)
         }
         let title = webView.title.flatMap { $0.isEmpty ? nil : $0 }
-        let resolved = title ?? shownURL?.host() ?? "SimpleBrowser"
+        let resolved = title ?? shownURL?.host() ?? (isPrivate ? "Private" : "SimpleBrowser")
         window?.title = resolved
         recorderPanel?.update(title: resolved)
         devToolsWindow?.title = "DevTools — \(resolved)"
@@ -1677,7 +1717,8 @@ final class BrowserWindowController: NSWindowController,
     // MARK: - NSToolbarDelegate
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.back, .forward, .reload, .home, .address, .reader, .readerAppearance, .zoom, .shield, .star, .translate, .passwords, .flexibleSpace, .devTools, .profile]
+        [.back, .forward, .reload, .home, .address, .reader, .readerAppearance, .zoom, .shield, .star, .translate, .passwords, .flexibleSpace, .devTools]
+            + (isPrivate ? [.privateBadge] : []) + [.profile]
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
@@ -1715,6 +1756,13 @@ final class BrowserWindowController: NSWindowController,
             let item = button(identifier, symbol: "wrench.and.screwdriver", label: "Developer Tools",
                               action: #selector(toggleDevTools(_:)))
             item.toolTip = "Toggle Developer Tools (⌥⌘I)"
+            return item
+        case .privateBadge:
+            let item = NSToolbarItem(itemIdentifier: identifier)
+            item.view = PrivateBadge.view()
+            item.label = "Private"
+            item.visibilityPriority = .high
+            privateItem = item
             return item
         case .profile:
             let item = NSToolbarItem(itemIdentifier: identifier)
@@ -2013,5 +2061,6 @@ private extension NSToolbarItem.Identifier {
     static let shield = NSToolbarItem.Identifier("shield")
     static let zoom = NSToolbarItem.Identifier("zoom")
     static let reader = NSToolbarItem.Identifier("reader")
+    static let privateBadge = NSToolbarItem.Identifier("private")
     static let readerAppearance = NSToolbarItem.Identifier("readerAppearance")
 }

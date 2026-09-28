@@ -211,7 +211,7 @@ enum PageSelfTest {
                 }
                 defer { menu.onMenuReady = nil }
                 for _ in 0..<3 {
-                    NSApp.activate(ignoringOtherApps: true)
+                    QuietMode.activate()
                     window.makeKeyAndOrderFront(nil)
                     guard let down = NSEvent.mouseEvent(with: .rightMouseDown, location: inWindow, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
                                                         windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1),

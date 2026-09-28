@@ -56,8 +56,16 @@ can be switched off; then nothing typed leaves the Mac until Return.
 
 ```sh
 scripts/test-ui.sh            # the app presses its own keys and buttons, then reports
-scripts/test-features.sh      # tabs, sessions, history, bookmarks, the address bar
+scripts/test-features.sh      # tabs, sessions, history, bookmarks, the address bar, blocking, Reader, private windows
 ```
+
+`test-features.sh` and `test-page.sh` run **quietly**: the app is given
+`--quiet`, never becomes active, and keeps its windows beneath yours, so you
+can go on working while they run. That is not only politeness. A test that
+takes the keyboard also takes whatever you type meanwhile, and fails for it.
+`FOCUS=1` runs them in front. `test-ui.sh` and the parts of
+`test-passwords.sh` about the list under a sign-in field need the keyboard
+and take it; `QUIET=1 scripts/test-passwords.sh` runs the rest.
 
 macOS does not let an outside process press keys without the Accessibility
 permission, so this test runs inside the app (`--ui-selftest <file>`). Key
@@ -207,6 +215,28 @@ swift run BrowserKitChecks
 
 The profile that existed before profiles were added is carried over as
 "Default" with its data store, so nobody is signed out by the upgrade.
+
+## Private windows
+
+**File → New Private Window** (⇧⌘N) opens a window with a dark toolbar and
+a *Private* badge, in the profile of the window it was opened from. Its
+website data store exists only in memory: cookies, caches and stored data
+never reach the disk, and closing the last private tab ends the private
+session and everything in it.
+
+| | In a private window |
+|---|---|
+| History, the address bar's suggestions, Reopen Closed Tab | nothing from the window is recorded or offered |
+| Session restore | private windows are never saved or restored |
+| Signing in | separate from the normal windows, in both directions; shared between the private tabs |
+| Saved passwords | filled; new ones are not saved or offered, and strong passwords are not suggested |
+| Search suggestions | what is typed is not sent to the search engine |
+| Zoom and blocking switched off for a site | hold for the private session, and are not written down |
+| Bookmarks you add, files you download | kept: you asked for them |
+
+A tab opened from a private window (⌘T, a link, a page's pop-up) is
+private, and private tabs cannot be dragged into a normal window or the
+other way round.
 
 ## Passwords
 

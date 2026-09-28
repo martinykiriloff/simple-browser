@@ -55,7 +55,7 @@ final class FeatureSelfTest {
     /// One entry per ticket, in the order they were built.
     var sections: [(String, () async -> Void)] {
         [("tabs", tabs), ("hibernation", hibernation), ("session", sessionRoundTrip), ("history", history), ("bookmarks", bookmarks), ("address-bar", addressBar),
-         ("blocking", blocking), ("find", find), ("zoom", zoom), ("reader", reader),
+         ("blocking", blocking), ("find", find), ("zoom", zoom), ("reader", reader), ("private", privateWindows),
          ("session-seed", sessionSeed), ("session-verify", sessionVerify)]
     }
 
@@ -527,7 +527,7 @@ final class FeatureSelfTest {
 
     func tabs() async {
         let browser = first
-        NSApp.activate()
+        QuietMode.activate()
         browser.window?.makeKeyAndOrderFront(nil)
         _ = await waitFor { browser.window?.isKeyWindow == true }
         check("tabs: the tab bar shows from the first tab", browser.window?.tabGroup?.isTabBarVisible == true)

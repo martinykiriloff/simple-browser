@@ -11,6 +11,11 @@
 #   scripts/test-passwords.sh                # debug build
 #   APP=dist/SimpleBrowser.app/Contents/MacOS/SimpleBrowser scripts/test-passwords.sh
 #   KEYCHAIN=1 scripts/test-passwords.sh     # also round-trips a throwaway key through the login Keychain
+#   QUIET=1 scripts/test-passwords.sh        # without taking the keyboard: skips the steps that need it
+#
+# The list under a sign-in field only drops when the page has keyboard focus,
+# which needs the app in front. QUIET=1 keeps the app beneath your windows,
+# runs everything else, and says which steps it skipped.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -35,7 +40,7 @@ fi
 # you are actually using, may be running too.
 for attempt in 1 2 3; do
   rm -f "$REPORT"
-  "$APP" --passwords-selftest "$REPORT" about:blank >/dev/null 2>&1 &
+  "$APP" ${QUIET:+--quiet} --passwords-selftest "$REPORT" about:blank >/dev/null 2>&1 &
   APP_PID=$!
   for _ in $(seq 1 240); do
     [ -f "$REPORT" ] && break
@@ -54,15 +59,23 @@ if [ ! -f "$REPORT" ]; then
   exit 2
 fi
 
-python3 - "$REPORT" <<'PY'
+python3 - "$REPORT" "${QUIET:-}" <<'PY'
 import json, sys
 data = json.load(open(sys.argv[1]))
+quiet = len(sys.argv) > 2 and sys.argv[2] != ""
 for failure in data.get("failures", []):
     print("✘", failure)
-for problem in data.get("environment", []):
-    print("⚠", problem, "(environment, not the app; run it again)")
-if data.get("passed"):
-    print(f"✔ all {data.get('checksPassed')} password manager checks passed")
+environment = data.get("environment", [])
+needs_keyboard = [p for p in environment if "could not take focus" in p]
+for problem in environment:
+    if quiet and problem in needs_keyboard:
+        print("– skipped, needs the keyboard:", problem.split(":")[0])
+    else:
+        print("⚠", problem, "(environment, not the app; run it again)")
+if data.get("failures"):
+    sys.exit(1)
+if data.get("passed") or (quiet and environment == needs_keyboard):
+    print(f"✔ all {data.get('checksPassed')} password manager checks passed" + (" (quietly)" if quiet else ""))
     sys.exit(0)
-sys.exit(1 if data.get("failures") else 3)
+sys.exit(3)
 PY

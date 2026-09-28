@@ -41,7 +41,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var passwordServices: [ProfileID: PasswordService] = [:]
     /// A self-test run gets a scratch vault with its own key, so it can never
     /// touch, or prompt for, the real one.
-    private lazy var scratchPasswords: PasswordService? = launch.passwordsSelfTestOutput == nil ? nil
+    private lazy var scratchPasswords: PasswordService? = !usesScratchData ? nil
         : PasswordService.scratch(in: FileManager.default.temporaryDirectory
             .appendingPathComponent("SimpleBrowser-passwords-selftest-\(UUID().uuidString)"))
 
@@ -161,7 +161,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let path = launch.dumpRecordingPath {
             startDumping(to: URL(fileURLWithPath: path))
         }
-        NSApp.activate()
+        if !QuietMode.isOn { NSApp.activate() }
     }
 
 
@@ -251,6 +251,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         openWindow(in: currentProfile)
     }
 
+    // MARK: - Private windows
+
+    private var privateSessions: [ProfileID: PrivateSession] = [:]
+
+    /// File → New Private Window (⇧⌘N), in the profile of the window in front.
+    @objc func newPrivateWindow(_ sender: Any?) {
+        openWindow(in: frontmostBrowser?.profile ?? currentProfile, isPrivate: true)
+    }
+
+    /// The profile's private session, begun by its first private tab.
+    private func privateSession(for profile: Profile) -> PrivateSession {
+        if let session = privateSessions[profile.id] { return session }
+        let session = PrivateSession()
+        privateSessions[profile.id] = session
+        return session
+    }
+
+    /// A private tab closed. After the last one the session is let go: its
+    /// data store, which was only ever in memory, goes with it.
+    private func privateTabClosed(_ controller: BrowserWindowController) {
+        guard let session = controller.privateSession else { return }
+        session.tabs -= 1
+        guard session.tabs <= 0 else { return }
+        privateSessions = privateSessions.filter { $0.value !== session }
+        // Let go of what it held now, not whenever WebKit gets round to it.
+        session.dataStore.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast) {}
+    }
+
+    /// For the self-test.
+    var hasPrivateSession: Bool { !privateSessions.isEmpty }
+
     // MARK: - Tabs
 
     /// ⌘T with no browser window open: a window.
@@ -274,7 +305,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func newTab(beside browser: BrowserWindowController?, url: URL? = nil, inFront: Bool = true,
                 state: Data? = nil, configuration: WKWebViewConfiguration? = nil) -> BrowserWindowController {
         let profile = browser?.profile ?? currentProfile
-        let tab = makeWindow(profile: profile, configuration: configuration)
+        // A tab opened from a private window is private, whatever opened it:
+        // ⌘T, a link, a page's pop-up.
+        let tab = makeWindow(profile: profile, configuration: configuration, isPrivate: browser?.isPrivate ?? false)
         if let window = browser?.window, let tabWindow = tab.window {
             tabWindow.tabbingMode = .automatic
             window.addTabbedWindow(tabWindow, ordered: .above)
@@ -531,6 +564,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return handler
     }
 
+    /// A private window's start page. One for the app: it draws on nothing
+    /// but the favorites of the profile asking, and the search engine.
+    private lazy var privateStartPage = StartPageSchemeHandler { [weak self] in
+        var content = StartPageSchemeHandler.Content()
+        content.isPrivate = true
+        content.searchEngine = BrowserSettings.searchEngine.name
+        if let self, let profile = self.frontmostBrowser?.profile, let store = self.bookmarks(for: profile) {
+            content.favorites = store.favorites.compactMap { node in node.url.map { (node.title, $0) } }
+        }
+        return content
+    }
+
     /// What a new tab or window shows: the start page, the homepage, or nothing.
     func loadNewTabContent(in tab: BrowserWindowController) {
         switch BrowserSettings.newWindowContent {
@@ -577,7 +622,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         var seen: Set<ObjectIdentifier> = []
         var windows: [SessionSnapshot.Window] = []
         let ordered = NSApp.orderedWindows.compactMap { window in controllers.first { $0.window === window } }
-        for controller in ordered + controllers {
+        // Private windows are never part of a session: not saved, not restored.
+        for controller in ordered + controllers where !controller.isPrivate {
             guard let window = controller.window else { continue }
             let key = window.tabGroup.map(ObjectIdentifier.init) ?? ObjectIdentifier(window)
             guard !seen.contains(key) else { continue }
@@ -663,6 +709,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var restoredPrevious = false
 
     private func rememberClosedWindow(_ controller: BrowserWindowController) {
+        guard !controller.isPrivate else { return }
         closedWindows.append(windowSnapshot(of: controller))
         if closedWindows.count > 10 { closedWindows.removeFirst() }
     }
@@ -749,8 +796,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pane.profileLabel.isHidden = profiles.profiles.count == 1
     }
 
-    private func openWindow(in profile: Profile) {
-        let controller = makeWindow(profile: profile)
+    private func openWindow(in profile: Profile, isPrivate: Bool = false) {
+        let controller = makeWindow(profile: profile, isPrivate: isPrivate)
         controller.showWindowAndFocusAddress()
         // Loaded rather than sent Home: Home hands the keyboard to the page,
         // and a new window should leave it in the address bar, so typing a
@@ -759,11 +806,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @discardableResult
-    private func makeWindow(profile: Profile? = nil, configuration: WKWebViewConfiguration? = nil) -> BrowserWindowController {
+    private func makeWindow(profile: Profile? = nil, configuration: WKWebViewConfiguration? = nil, isPrivate: Bool = false) -> BrowserWindowController {
         let profile = profile ?? currentProfile
         profiles.markUsed(profile.id)
+        let session = isPrivate ? privateSession(for: profile) : nil
+        session?.tabs += 1
         let controller = BrowserWindowController(profile: profile, recorder: recorder, passwords: passwords(for: profile),
-                                                 configuration: configuration, startPage: startPage(for: profile), blocker: blocker)
+                                                 configuration: configuration, startPage: isPrivate ? privateStartPage : startPage(for: profile),
+                                                 blocker: blocker, privateSession: session)
         controller.bookmarks = { [weak self] in self?.bookmarks(for: profile) }
         controller.onBookmarksChanged = { [weak self] in self?.bookmarksChanged() }
         controller.readingListArchive = { [weak self] item in
@@ -772,7 +822,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         controller.addressSources = { [weak self] text in
             guard let self else { return .init() }
             var sources = BrowserWindowController.AddressSources()
-            sources.tabs = self.controllers.filter { $0.profile.id == profile.id }.compactMap { tab in
+            // A private tab is offered to private windows only, and a normal one to normal windows.
+            sources.tabs = self.controllers.filter { $0.profile.id == profile.id && $0.isPrivate == isPrivate }.compactMap { tab in
                 tab.currentURL.flatMap { StartPageSchemeHandler.isStartPage($0) ? nil : (tab.tab.description, tab.window?.title ?? "", $0) }
             }
             let query = text.trimmingCharacters(in: .whitespaces)
@@ -790,7 +841,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         controller.removeFromHistory = { [weak self] url in try? self?.history(for: profile)?.deletePage(url) }
         controller.onZoomChanged = { [weak self, weak controller] site, level in
-            for tab in self?.controllers ?? [] where tab !== controller && tab.profile.id == profile.id { tab.zoomChanged(for: site, to: level) }
+            for tab in self?.controllers ?? [] where tab !== controller && tab.profile.id == profile.id && tab.isPrivate == isPrivate {
+                tab.zoomChanged(for: site, to: level)
+            }
         }
         controller.favoritesBar.items = { [weak self] in self?.bookmarks(for: profile)?.favorites ?? [] }
         controller.favoritesBar.childrenOf = { [weak self] id in (try? self?.bookmarks(for: profile)?.children(of: id)) ?? [] }
@@ -805,7 +858,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // work account's mail opens signed in to work, not to Default.
         controller.openInNewWindow = { [weak self, weak controller] url in
             guard let self, let controller else { return }
-            let window = self.makeWindow(profile: controller.profile)
+            let window = self.makeWindow(profile: controller.profile, isPrivate: controller.isPrivate)
             window.showWindow(nil)
             window.load(url)
         }
@@ -820,14 +873,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return self.newTab(beside: controller, configuration: configuration).pageWebView
         }
         controller.onWindowClosing = { [weak self] controller in self?.rememberClosedWindow(controller) }
-        controller.onVisit = { [weak self] url, title, typed in
-            try? self?.history(for: profile)?.recordVisit(url, title: title, typed: typed)
-        }
-        controller.onTitleChange = { [weak self] url, title in
-            try? self?.history(for: profile)?.updateTitle(title, for: url)
+        // A private window writes no history, and its closed tabs and
+        // windows cannot be reopened: they are gone.
+        if !isPrivate {
+            controller.onVisit = { [weak self] url, title, typed in
+                try? self?.history(for: profile)?.recordVisit(url, title: title, typed: typed)
+            }
+            controller.onTitleChange = { [weak self] url, title in
+                try? self?.history(for: profile)?.updateTitle(title, for: url)
+            }
         }
         controller.onTabClosed = { [weak self, weak controller] url, state, title in
-            guard let self, let controller, !self.terminating, url != nil || state != nil else { return }
+            guard let self, let controller, !controller.isPrivate, !self.terminating, url != nil || state != nil else { return }
             // The last tab of a window closing is the window closing.
             if (controller.window?.tabbedWindows?.count ?? 1) <= 1 { self.rememberClosedWindow(controller) }
             self.closedTabs.append(ClosedTab(profileID: controller.profile.id, url: url, state: state, title: title))
@@ -836,6 +893,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         controllers.append(controller)
         controller.onClose = { [weak self, weak controller] in
             self?.controllers.removeAll { $0 === controller }
+            if let controller { self?.privateTabClosed(controller) }
         }
         controller.onBecomeKey = { [weak self, weak controller] in
             guard let self, let controller else { return }

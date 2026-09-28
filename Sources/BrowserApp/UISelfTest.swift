@@ -42,7 +42,7 @@ enum UISelfTest {
                 let window = window ?? browser.window
                 for _ in 0..<30 {
                     if NSApp.isActive, window?.isKeyWindow == true { body(); return true }
-                    NSApp.activate(ignoringOtherApps: true)
+                    QuietMode.activate()
                     window?.makeKeyAndOrderFront(nil)
                     await pause(0.4)
                 }

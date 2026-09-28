@@ -7,7 +7,7 @@ struct BrowserApp {
         let app = NSApplication.shared
         let delegate = AppDelegate()
         app.delegate = delegate
-        app.setActivationPolicy(.regular)
+        app.setActivationPolicy(QuietMode.isOn ? .accessory : .regular)
         // A packaged .app gets its Dock icon from AppIcon.icns. Run from the
         // build folder there is no bundle to carry one, and the Dock would
         // show a generic executable, so the same artwork is set here.

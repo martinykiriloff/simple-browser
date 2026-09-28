@@ -44,6 +44,7 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate, N
             defer: false
         )
         super.init(window: window)
+        QuietMode.apply(to: window)
         window.title = "Settings"
         window.isReleasedWhenClosed = false
         window.delegate = self

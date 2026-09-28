@@ -21,6 +21,9 @@ final class StartPageSchemeHandler: NSObject, WKURLSchemeHandler {
         var closed: [(title: String, url: URL)] = []
         /// The engine the search box uses, by name.
         var searchEngine = SearchEngine.default.name
+        /// A private window's start page: what private means, and nothing
+        /// drawn from history.
+        var isPrivate = false
     }
 
     /// Where the page's search box sends what was typed. The tab takes it
@@ -65,6 +68,45 @@ final class StartPageSchemeHandler: NSObject, WKURLSchemeHandler {
 
     // MARK: - The page
 
+    private static func privateHTML(_ content: Content, escape: (String) -> String, tiles: String) -> String {
+        """
+        <!doctype html><html><head><meta charset="utf-8"><title>Private Browsing</title>
+        <meta name="color-scheme" content="dark">
+        <style>
+          body { margin: 0; background: #1b1922; color: #f2f0f7; font: 14px -apple-system, system-ui; }
+          main { max-width: 640px; margin: 12vh auto; padding: 0 24px; }
+          h1 { font-size: 26px; margin: 0 0 6px; }
+          p.lead { color: #b9b3c9; margin: 0 0 26px; font-size: 15px; }
+          form { margin: 0 0 30px; }
+          input { width: 100%; box-sizing: border-box; font: 16px -apple-system, system-ui; padding: 11px 18px; border-radius: 22px;
+                  border: 1px solid rgba(255,255,255,.18); background: #2a2735; color: inherit; outline: none; }
+          input:focus { border-color: #9b86e0; box-shadow: 0 0 0 3px rgba(155,134,224,.3); }
+          .columns { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+          .card { background: #252231; border-radius: 12px; padding: 14px 18px; }
+          h2 { font-size: 13px; margin: 0 0 8px; color: #cfc8e6; }
+          ul { margin: 0; padding-left: 18px; color: #b9b3c9; line-height: 1.55; }
+          h3 { font-size: 15px; margin: 30px 0 10px; }
+          .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 14px; }
+          .tile { display: flex; flex-direction: column; align-items: center; gap: 8px; text-decoration: none; color: inherit; padding: 8px; border-radius: 12px; }
+          .tile:hover { background: #252231; }
+          .icon { width: 56px; height: 56px; border-radius: 14px; display: grid; place-items: center; color: white; font: 600 24px -apple-system; }
+          .label { font-size: 12px; max-width: 96px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; }
+        </style></head><body><main>
+        <h1 id="private-title">Private Browsing</h1>
+        <p class="lead">What you do in this window stays out of your history and is gone when you close it.</p>
+        <form action="simplebrowser://search" method="get" role="search">
+          <input name="q" type="search" autocomplete="off" spellcheck="false" aria-label="Search \(escape(content.searchEngine)) or enter an address"
+                 placeholder="Search \(escape(content.searchEngine)) or enter an address">
+        </form>
+        <div class="columns">
+          <div class="card"><h2>Not kept</h2><ul><li>The pages you visit</li><li>Cookies and site data</li><li>What you type into forms</li><li>New passwords</li></ul></div>
+          <div class="card"><h2>Still visible to others</h2><ul><li>Sites you visit see your visit</li><li>Your network and employer</li><li>Files you download stay</li><li>Bookmarks you add stay</li></ul></div>
+        </div>
+        \(tiles.isEmpty ? "" : "<h3>Favorites</h3><div class=tiles>" + tiles + "</div>")
+        </main></body></html>
+        """
+    }
+
     static func html(_ content: Content) -> String {
         func escape(_ text: String) -> String {
             text.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;")
@@ -90,6 +132,7 @@ final class StartPageSchemeHandler: NSObject, WKURLSchemeHandler {
             empty ? "" : "<section><h2>\(title)</h2>\(body)</section>"
         }
         let nothing = content.favorites.isEmpty && content.frequent.isEmpty && content.reading.isEmpty && content.closed.isEmpty
+        if content.isPrivate { return privateHTML(content, escape: escape, tiles: content.favorites.map(tile).joined()) }
         return """
         <!doctype html><html><head><meta charset="utf-8"><title>Start Page</title>
         <meta name="color-scheme" content="light dark">

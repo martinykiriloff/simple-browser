@@ -164,6 +164,13 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def do_POST(self):
+        self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        self.send_response(302)
+        self.send_header("Location", "/second")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def do_GET(self):
         path = self.path.split("?")[0]
         if path == "/":
@@ -188,6 +195,17 @@ class Handler(BaseHTTPRequestHandler):
             self.send(200, ENGLISH)
         elif path == "/recette":
             self.send(200, "<!doctype html><title>Recette</title><p id=recipe>La recette</p>")
+        elif path == "/cookie/set":
+            value = self.path.split("v=", 1)[1] if "v=" in self.path else "set"
+            self.send(200, "<!doctype html><title>Cookie set</title><p>Signed in as " + value + "</p><script>localStorage.setItem('who', '" + value + "')</script>",
+                      headers={"Set-Cookie": "session=" + value + "; Path=/; Max-Age=86400"})
+        elif path == "/cookie/show":
+            self.send(200, "<!doctype html><title>Who</title><p id=cookie>" + (self.headers.get("Cookie") or "") + "</p>"
+                      "<p id=stored></p><script>document.getElementById('stored').textContent = localStorage.getItem('who') || ''</script>")
+        elif path == "/signin":
+            self.send(200, """<!doctype html><title>Sign in</title><form method=post action=/signin>
+<label>Username <input name=username id=username></label><label>Password <input name=password id=password type=password></label>
+<button id=submit>Sign in</button></form>""")
         elif path == "/article":
             self.send(200, NEWS_ARTICLE)
         elif path == "/webapp":

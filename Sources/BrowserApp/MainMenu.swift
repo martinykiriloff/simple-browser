@@ -47,6 +47,9 @@ enum MainMenu {
         let menu = NSMenu(title: "File")
         menu.addItem(withTitle: "New Window",
                      action: #selector(AppDelegate.newWindow(_:)), keyEquivalent: "n")
+        let privateWindow = menu.addItem(withTitle: "New Private Window",
+                                         action: #selector(AppDelegate.newPrivateWindow(_:)), keyEquivalent: "n")
+        privateWindow.keyEquivalentModifierMask = [.command, .shift]
         menu.addItem(withTitle: "New Tab",
                      action: #selector(NSResponder.newWindowForTab(_:)), keyEquivalent: "t")
         menu.addItem(withTitle: "Open Location…",

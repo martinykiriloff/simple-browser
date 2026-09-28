@@ -126,7 +126,7 @@ enum PasswordSelfTest {
                         _ = await js("document.activeElement && document.activeElement.blur(); document.querySelector('\(selector)').focus()")
                         return true
                     }
-                    NSApp.activate(ignoringOtherApps: true)
+                    QuietMode.activate()
                     browser.window?.makeKeyAndOrderFront(nil)
                     await pause(0.4)
                 }

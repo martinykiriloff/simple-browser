@@ -36,6 +36,7 @@ final class HistoryWindowController: NSWindowController, NSOutlineViewDataSource
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 560),
                               styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         super.init(window: window)
+        QuietMode.apply(to: window)
         window.title = "History — \(profile.name)"
         window.minSize = NSSize(width: 480, height: 320)
         window.isReleasedWhenClosed = false

@@ -2,8 +2,11 @@
 #
 # Tests the roadmap features (tabs, session restore, history, …): the unit
 # checks, then the in-app feature self-test against the fixture site in
-# Tests/Fixtures/page. Settings go to a scratch suite. The app takes focus
-# while it runs.
+# Tests/Fixtures/page. Settings go to a scratch suite.
+#
+# It runs quietly: the app never becomes active and its windows stay beneath
+# yours, so you can keep working (and typing) while it runs. FOCUS=1 runs it
+# in front instead, as a person would see it.
 #
 #   scripts/test-features.sh
 #   ONLY=tabs,history scripts/test-features.sh      # some sections only
@@ -27,7 +30,9 @@ if ! curl -s -m 2 -o /dev/null http://127.0.0.1:8767/; then
 fi
 
 rm -f "$REPORT"
-"$APP" --feature-selftest "$REPORT" ${ONLY:+--only "$ONLY"} ${SNAPSHOTS:+--snapshot-windows "$SNAPSHOTS"} about:blank >/dev/null 2>&1 &
+QUIET_FLAG=--quiet
+[ -n "${FOCUS:-}" ] && QUIET_FLAG=
+"$APP" $QUIET_FLAG --feature-selftest "$REPORT" ${ONLY:+--only "$ONLY"} ${SNAPSHOTS:+--snapshot-windows "$SNAPSHOTS"} about:blank >/dev/null 2>&1 &
 APP_PID=$!
 for _ in $(seq 1 180); do
   [ -s "$REPORT" ] && break

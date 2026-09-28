@@ -44,6 +44,8 @@ final class PasswordCoordinator: NSObject, WKScriptMessageHandler, NSPopoverDele
     }
 
     let service: PasswordService
+    /// False in a private window: saved sign-ins are filled, none is saved.
+    var allowsSaving = true
     weak var webView: WKWebView?
     /// The key button, which the popovers hang from.
     var anchorItem: (() -> NSToolbarItem?)?
@@ -325,7 +327,10 @@ final class PasswordCoordinator: NSObject, WKScriptMessageHandler, NSPopoverDele
         Task { @MainActor in
             var items: [CredentialSuggestionPanel.Item] = []
             if focus.role == "new-password" {
-                guard fieldIsEmpty else { suggestions.hide(); return }
+                // A generated password is saved as it is filled, which a
+                // private window does not do; and one that is not saved
+                // would be a password nobody has.
+                guard fieldIsEmpty, allowsSaving else { suggestions.hide(); return }
                 let password = PasswordGenerator.generate(rules: focusRules)
                 items.append(.init(title: "Use Strong Password", subtitle: password, symbol: "key.fill") { [weak self] in
                     self?.useGeneratedPassword(password, frame: focus.frame, origin: focus.origin)
@@ -396,6 +401,8 @@ final class PasswordCoordinator: NSObject, WKScriptMessageHandler, NSPopoverDele
                         try? await service.store.markUsed(used.credential.id)
                     }
                     note("already saved")
+                case .offerSave where !allowsSaving, .offerUpdate where !allowsSaving:
+                    note("private window: not offered")
                 case .offerSave:
                     guard BrowserSettings.offerToSavePasswords, !service.isNeverSaved(candidate.origin) else {
                         note(service.isNeverSaved(candidate.origin) ? "never for this site" : "offering is off")

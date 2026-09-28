@@ -27,6 +27,7 @@ final class BookmarksWindowController: NSWindowController, NSOutlineViewDataSour
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 720, height: 520),
                               styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         super.init(window: window)
+        QuietMode.apply(to: window)
         window.title = "Bookmarks — \(profile.name)"
         window.isReleasedWhenClosed = false
         window.minSize = NSSize(width: 460, height: 300)
