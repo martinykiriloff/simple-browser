@@ -483,5 +483,30 @@ do {
     check("two letters search as usual", CommandPalette.rank("pu", everything).first?.id == first.id)
 }
 
+// MARK: Extensions
+
+do {
+    let all = ExtensionPermissionWording.describe(permissions: ["storage", "tabs", "activeTab"], matchPatterns: ["<all_urls>"])
+    check("extensions: all sites is said first, in plain words", all.first == "Read and change your data on all websites", all)
+    check("extensions: …then the rest", all.contains("See the addresses and titles of your open tabs") && all.contains("Store its own data"), all)
+    check("extensions: activeTab is not said when it can read sites anyway", !all.contains { $0.contains("when you click") })
+    check("extensions: a few sites are named", ExtensionPermissionWording.describeSites(["*://*.github.com/*", "https://gitlab.com/*"]) == "Read and change your data on github.com and gitlab.com")
+    check("extensions: many sites are counted", ExtensionPermissionWording.describeSites(["*://a.com/*", "*://b.com/*", "*://c.com/*", "*://d.com/*", "*://e.com/*"])
+          == "Read and change your data on a.com, b.com, c.com and 2 more sites")
+    check("extensions: *://*/* is every site", ExtensionPermissionWording.host(of: "*://*/*") == "*")
+    check("extensions: only activeTab is the page you click on", ExtensionPermissionWording.describe(permissions: ["activeTab"], matchPatterns: [])
+          == ["Read and change the page you are on when you click it"])
+    check("extensions: site access grants what it says", ExtensionSiteAccess.onClick.granted(from: ["<all_urls>"]).isEmpty
+          && ExtensionSiteAccess.allRequested.granted(from: ["<all_urls>"]) == ["<all_urls>"]
+          && ExtensionSiteAccess.sites(["example.com"]).granted(from: ["<all_urls>"]) == ["*://example.com/*", "*://*.example.com/*"])
+
+    let zip = Data([0x50, 0x4B, 0x03, 0x04, 1, 2, 3])
+    var crx3 = Data("Cr24".utf8) + Data([3, 0, 0, 0, 5, 0, 0, 0]) + Data([9, 9, 9, 9, 9]) + zip
+    check("extensions: a .crx gives the zip inside", CRXPackage.zip(from: crx3) == zip)
+    check("extensions: a zip is a zip", CRXPackage.zip(from: zip) == zip)
+    crx3[4] = 7
+    check("extensions: an unknown .crx is refused", CRXPackage.zip(from: crx3) == nil && CRXPackage.zip(from: Data("hello".utf8)) == nil)
+}
+
 print(failures == 0 ? "✔ \(passed) checks passed" : "\(failures) of \(passed + failures) checks failed")
 exit(failures == 0 ? 0 : 1)

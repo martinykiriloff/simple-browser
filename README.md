@@ -56,7 +56,7 @@ can be switched off; then nothing typed leaves the Mac until Return.
 
 ```sh
 scripts/test-ui.sh            # the app presses its own keys and buttons, then reports
-scripts/test-features.sh      # tabs, sessions, history, bookmarks, the address bar, blocking, Reader, private windows, downloads, the sidebar, ⌘K, split view and importing
+scripts/test-features.sh      # tabs, sessions, history, bookmarks, the address bar, blocking, Reader, private windows, downloads, the sidebar, ⌘K, split view, importing and extensions
 scripts/test-downloads.sh     # downloads paused or under way at quit go on after a relaunch
 ```
 
@@ -267,6 +267,45 @@ The other browser's databases are copied before they are read (a running
 browser keeps them locked) and never written. `DataKitChecks` and the
 `import` self-test read fixture browsers built in a scratch folder, never
 yours.
+
+## Extensions
+
+Web extensions, through WebKit's own `WKWebExtension` (the reason macOS
+15.4 is the floor): Manifest V3, and V2 where WebKit still runs it.
+**Settings → Extensions → Add Extension…** takes an extension's folder
+(with its `manifest.json`), a `.zip`, or a `.crx` from the Chrome Web
+Store. Before it is added it says, in plain words, what the extension
+could do ("Read and change your data on all websites", "See the addresses
+and titles of your open tabs"…). Its files are copied in, so it does not
+depend on where they came from.
+
+Each extension is turned on per profile: it runs in the profile it was
+added in, and in another only once turned on there. Private windows run
+none. Its button is in the toolbar, with its badge and its popup; its
+items are in the right-click menu; **Options** opens its settings page.
+*Site access* is per extension and profile: every site it asks for, only
+the page in front when you click it, or a list of sites. What it asks for
+while running is asked of you, in the same words.
+
+Extensions see the browser's windows and tabs as they are: a window is a
+tab bar, and pinned tabs, the tab in front, a split view's pages, closing,
+reloading and zoom all read and act as `chrome.tabs` and `chrome.windows`
+expect.
+
+Measured, not yet overcome: this WebKit does not deliver
+`runtime.onInstalled`, in a persistent or a non-persistent store, with or
+without its background page loaded. An extension that only sets things up
+there (a right-click menu, say) finds them missing until it sets them up
+another way; set up when its worker starts, they work. The self-test's
+extension does it that way.
+
+Not yet verified here: which popular Chrome extensions work unmodified.
+That needs them downloaded from the Chrome Web Store and tried one by one,
+and a password manager's needs an account signed in; the self-test covers
+the same ground with an extension of its own: a content script, a popup
+that fills a sign-in form through `chrome.tabs.sendMessage`, a background
+worker with a badge and a right-click item, per-profile isolation and site
+access.
 
 ## Profiles
 

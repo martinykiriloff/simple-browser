@@ -38,6 +38,8 @@ final class PageContextMenu: NSObject, WKScriptMessageHandler {
     var openInNewTab: ((URL) -> Void)?
     /// Beside the page, in split view.
     var openInSplitView: ((URL) -> Void)?
+    /// The extensions' own items, for this page.
+    var extensionItems: (() -> [NSMenuItem])?
     var inspect: ((CGPoint) -> Void)?
     var viewSource: (() -> Void)?
     /// For the self-test: the titles of the last menu shown, after rewriting.
@@ -194,6 +196,15 @@ final class PageContextMenu: NSObject, WKScriptMessageHandler {
                 menu.insertItem(item, at: index)
                 index += 1
             }
+        }
+
+        // What extensions add, before DevTools.
+        // WebKit may have put some in already.
+        let present = Set(menu.items.map(\.title))
+        let fromExtensions = (extensionItems?() ?? []).filter { !present.contains($0.title) }
+        if !fromExtensions.isEmpty {
+            menu.addItem(.separator())
+            fromExtensions.forEach(menu.addItem)
         }
 
         // Our DevTools, in place of the WebKit inspector, always last.

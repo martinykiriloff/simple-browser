@@ -67,9 +67,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return (profile?.id.description ?? "", profile?.name ?? "")
         }
         controller.currentPageURL = { [weak self] in self?.frontmostBrowser?.currentURL }
+        controller.extensionsPane.store = { [weak self] in self?.extensionStore }
+        controller.extensionsPane.profile = { [weak self] in self?.frontmostBrowser?.profile ?? self?.currentProfile }
+        controller.extensionsPane.running = { [weak self] profile in self?.extensions(for: profile) }
         controller.willShow = { [weak self] in self?.syncSettingsProfile() }
         return controller
     }()
+
+    /// Installed web extensions, and each profile's running.
+    private(set) lazy var extensionStore: ExtensionStore = {
+        let directory = usesScratchData
+            ? FileManager.default.temporaryDirectory.appendingPathComponent("SimpleBrowser-extensions-\(UUID().uuidString)")
+            : FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("SimpleBrowser/Extensions")
+        let store = ExtensionStore(directory: directory)
+        NotificationCenter.default.addObserver(forName: ExtensionStore.didChange, object: store, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                for running in self?.profileExtensions.values ?? [:].values { Task { await running.sync() } }
+            }
+        }
+        return store
+    }()
+    private var profileExtensions: [ProfileID: ProfileExtensions] = [:]
+
+    /// The profile's extensions, running in its (not private) windows.
+    func extensions(for profile: Profile) -> ProfileExtensions {
+        if let running = profileExtensions[profile.id] { return running }
+        let running = ProfileExtensions(profile: profile, store: extensionStore,
+                                        dataStore: WKWebsiteDataStore(forIdentifier: profile.dataStoreIdentifier), persistent: !usesScratchData)
+        running.organizer = tabOrganizer
+        running.tabs = { [weak self] in self?.controllers.filter { $0.profile.id == profile.id && !$0.isPrivate } ?? [] }
+        running.openTab = { [weak self] url, beside, active in
+            guard let self else { return nil }
+            if let beside { return self.newTab(beside: beside, url: url, inFront: active) }
+            let window = self.makeWindow(profile: profile)
+            window.showWindow(nil)
+            if let url { window.load(url) } else { self.loadNewTabContent(in: window) }
+            return window
+        }
+        running.openWindow = { [weak self] url in
+            guard let self else { return nil }
+            let window = self.makeWindow(profile: profile)
+            window.showWindow(nil)
+            if let url { window.load(url) } else { self.loadNewTabContent(in: window) }
+            return window
+        }
+        profileExtensions[profile.id] = running
+        Task { await running.sync() }
+        return running
+    }
+
+    /// Settings → Extensions, from an extension's button.
+    @objc func showExtensionsSettings(_ sender: Any?) { settingsWindow.show(.extensions) }
 
     /// Pinned tabs and tab groups, for every window.
     let tabOrganizer = TabOrganizer()
@@ -1020,7 +1068,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         session?.tabs += 1
         let controller = BrowserWindowController(profile: profile, recorder: recorder, passwords: passwords(for: profile),
                                                  configuration: configuration, startPage: isPrivate ? privateStartPage : startPage(for: profile),
-                                                 blocker: blocker, privateSession: session, downloads: downloads(for: profile))
+                                                 blocker: blocker, privateSession: session, downloads: downloads(for: profile),
+                                                 extensions: isPrivate ? nil : extensions(for: profile))
         controller.showAllDownloads = { [weak self] in self?.showDownloadsWindow(nil) }
         controller.bookmarks = { [weak self] in self?.bookmarks(for: profile) }
         controller.onBookmarksChanged = { [weak self] in self?.bookmarksChanged() }
@@ -1116,6 +1165,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if self.closedTabs.count > 25 { self.closedTabs.removeFirst() }
         }
         controllers.append(controller)
+        controller.extensions?.didOpen(controller)
         controller.onClose = { [weak self, weak controller] in
             self?.controllers.removeAll { $0 === controller }
             if let controller { self?.privateTabClosed(controller) }

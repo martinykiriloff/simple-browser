@@ -152,6 +152,12 @@ final class BrowserWindowController: NSWindowController,
     /// Called as the tab closes, with what "Reopen Closed Tab" needs.
     var onTabClosed: ((URL?, Data?, String) -> Void)?
 
+    /// The profile's web extensions: none in private windows.
+    let extensions: ProfileExtensions?
+    let extensionButtons = NSStackView()
+    private(set) var extensionsItem: NSToolbarItem?
+    private var extensionsObserver: NSObjectProtocol?
+
     /// The group this tab is in, and whether it is pinned: see `TabOrganizer`.
     var groupID: TabGroupID?
     var isPinned = false
@@ -170,7 +176,9 @@ final class BrowserWindowController: NSWindowController,
 
     init(profile: Profile, recorder: InspectorRecorder, passwords: PasswordService,
          configuration popupConfiguration: WKWebViewConfiguration? = nil, startPage: StartPageSchemeHandler? = nil,
-         blocker: ContentBlocker? = nil, privateSession: PrivateSession? = nil, downloads manager: DownloadManager? = nil) {
+         blocker: ContentBlocker? = nil, privateSession: PrivateSession? = nil, downloads manager: DownloadManager? = nil,
+         extensions: ProfileExtensions? = nil) {
+        self.extensions = extensions
         self.profile = profile
         self.privateSession = privateSession
         // A private window's downloads are listed with the private session.
@@ -195,6 +203,8 @@ final class BrowserWindowController: NSWindowController,
             configuration.websiteDataStore = privateSession?.dataStore ?? WKWebsiteDataStore(forIdentifier: profile.dataStoreIdentifier)
         }
         if let startPage { StartPageSchemeHandler.install(startPage, into: configuration) }
+        // The profile's extensions run in its pages; a pop-up's configuration has them already.
+        if popupConfiguration == nil, let extensions { configuration.webExtensionController = extensions.controller }
         // Keeps the `_inspector` object alive for the WebKit-inspector menu item.
         WebInspectorSPI.enableDeveloperExtras(on: configuration)
         WebInspectorSPI.keepDebuggableWhenHidden(configuration)
@@ -294,6 +304,7 @@ final class BrowserWindowController: NSWindowController,
         contextMenu.openInNewWindow = { [weak self] url in self?.openInNewWindow?(url) }
         contextMenu.openInNewTab = { [weak self] url in self?.openInNewTab?(url, false) }
         contextMenu.openInSplitView = { [weak self] url in self?.openLinkInSplitView(url) }
+        contextMenu.extensionItems = { [weak self] in self?.extensionMenuItems() ?? [] }
         translator.webView = webView
         translator.onStateChange = { [weak self] in self?.syncTranslateItem() }
         downloads.webView = webView
@@ -387,6 +398,12 @@ final class BrowserWindowController: NSWindowController,
         sidebarObserver = NotificationCenter.default.addObserver(forName: Self.sidebarDidChange, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.syncSidebar() }
         }
+        extensionButtons.spacing = 2
+        if let extensions {
+            extensionsObserver = NotificationCenter.default.addObserver(forName: ProfileExtensions.didChange, object: extensions, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.syncExtensionButtons() }
+            }
+        }
 
         if let error = passwordCoordinator.installError {
             recorder.record(.console(ConsoleEntry(level: .error, message: "Password manager is off for this window: \(error).")), tab: tab)
@@ -438,6 +455,7 @@ final class BrowserWindowController: NSWindowController,
                 self.wake()
                 self.sidebar?.reloadIfStale()
                 self.syncTabBar()
+                self.extensions?.didActivate(self)
                 self.organizer?.changed()
             }
         }
@@ -1977,6 +1995,7 @@ final class BrowserWindowController: NSWindowController,
         if listed != listedAs {
             listedAs = listed
             organizer?.changed()
+            extensions?.didChange(self)
         }
     }
 
@@ -2114,6 +2133,8 @@ final class BrowserWindowController: NSWindowController,
         blocking.tearDown()
         if let downloadsObserver { NotificationCenter.default.removeObserver(downloadsObserver) }
         if let sidebarObserver { NotificationCenter.default.removeObserver(sidebarObserver) }
+        if let extensionsObserver { NotificationCenter.default.removeObserver(extensionsObserver) }
+        extensions?.didClose(self)
         organizer?.changed()
         downloadsPopover?.close()
         permissions.tearDown()
@@ -2180,7 +2201,7 @@ final class BrowserWindowController: NSWindowController,
     // MARK: - NSToolbarDelegate
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.sidebar, .back, .forward, .reload, .home, .address, .capture, .reader, .readerAppearance, .zoom, .shield, .star, .translate, .passwords, .downloads, .flexibleSpace, .devTools]
+        [.sidebar, .back, .forward, .reload, .home, .address, .capture, .reader, .readerAppearance, .zoom, .shield, .star, .translate, .extensions, .passwords, .downloads, .flexibleSpace, .devTools]
             + (isPrivate ? [.privateBadge] : []) + [.profile]
     }
 
@@ -2194,6 +2215,13 @@ final class BrowserWindowController: NSWindowController,
         willBeInsertedIntoToolbar flag: Bool
     ) -> NSToolbarItem? {
         switch identifier {
+        case .extensions:
+            let item = NSToolbarItem(itemIdentifier: identifier)
+            item.view = extensionButtons
+            item.label = "Extensions"
+            extensionsItem = item
+            syncExtensionButtons()
+            return item
         case .sidebar:
             let item = button(identifier, symbol: "sidebar.left", label: "Sidebar", action: #selector(toggleBrowserSidebar(_:)))
             item.toolTip = "Show or hide the sidebar (⇧⌘S)"
@@ -2591,6 +2619,7 @@ private extension NSToolbarItem.Identifier {
     static let capture = NSToolbarItem.Identifier("capture")
     static let downloads = NSToolbarItem.Identifier("downloads")
     static let sidebar = NSToolbarItem.Identifier("sidebar")
+    static let extensions = NSToolbarItem.Identifier("extensions")
     static let privateBadge = NSToolbarItem.Identifier("private")
     static let readerAppearance = NSToolbarItem.Identifier("readerAppearance")
 }
