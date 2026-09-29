@@ -308,5 +308,19 @@ if CommandLine.arguments.contains("--keychain") {
     }
 }
 
+// MARK: Chromium's saved passwords
+
+do {
+    let key = ChromiumPasswords.key(from: "peanuts")
+    check("chromium: the key is PBKDF2-SHA1 of the Keychain secret, saltysalt, 1003 rounds",
+          key?.map { String(format: "%02x", $0) }.joined() == "d9a09d499b4e1b7461f28e67972c6dbd")
+    // Made with openssl, apart from this code: "correct horse", AES-128-CBC, IV of spaces.
+    let fromOpenSSL = Data("v10".utf8) + Data([0x2c, 0x4b, 0xb4, 0x0f, 0x87, 0x5f, 0x1b, 0x63, 0x39, 0x35, 0x8d, 0x9c, 0x8f, 0xc0, 0xf8, 0x7b])
+    check("chromium: a password Chrome stored reads back", key.flatMap { ChromiumPasswords.decrypt(fromOpenSSL, key: $0) } == "correct horse")
+    check("chromium: …and one written here reads back the same", key.flatMap { k in ChromiumPasswords.encrypt("pässwörd ✓", key: k).flatMap { ChromiumPasswords.decrypt($0, key: k) } } == "pässwörd ✓")
+    check("chromium: the wrong secret reads nothing", ChromiumPasswords.key(from: "almonds").flatMap { ChromiumPasswords.decrypt(fromOpenSSL, key: $0) } == nil)
+    check("chromium: a value without v10 is not taken", key.flatMap { ChromiumPasswords.decrypt(Data(fromOpenSSL.dropFirst(3)), key: $0) } == nil)
+}
+
 print(failures == 0 ? "✔ all \(passed) PasswordKit checks passed" : "✘ \(failures) of \(passed + failures) checks failed")
 exit(failures == 0 ? 0 : 1)

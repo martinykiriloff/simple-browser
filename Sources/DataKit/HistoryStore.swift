@@ -77,6 +77,35 @@ public final class HistoryStore {
         }
     }
 
+    /// Pages from another browser's history, with its counts, so the most
+    /// visited sites are the same here from the start. Counts are taken as
+    /// the larger of the two, not added, so importing again changes nothing;
+    /// each page gets its last visit, for the History window.
+    @discardableResult
+    public func importPages(_ pages: [BrowserImport.Page]) throws -> Int {
+        var added = 0
+        try db.transaction {
+            for page in pages {
+                guard let scheme = page.url.scheme?.lowercased(), scheme == "http" || scheme == "https" else { continue }
+                let key = page.url.absoluteString, time = page.lastVisit.timeIntervalSince1970
+                let known = try db.query("SELECT 1 FROM pages WHERE url = ?", [.text(key)]).isEmpty == false
+                try db.execute("""
+                    INSERT INTO pages (url, title, visit_count, typed_count, last_visit) VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(url) DO UPDATE SET
+                        title = CASE WHEN pages.title = '' THEN excluded.title ELSE pages.title END,
+                        visit_count = MAX(pages.visit_count, excluded.visit_count),
+                        typed_count = MAX(pages.typed_count, excluded.typed_count),
+                        last_visit = MAX(pages.last_visit, excluded.last_visit)
+                    """, [.text(key), .text(page.title), .int(Int64(max(1, page.visitCount))), .int(Int64(page.typedCount)), .double(time)])
+                if try db.query("SELECT 1 FROM visits WHERE url = ? AND visited_at = ?", [.text(key), .double(time)]).isEmpty {
+                    try db.execute("INSERT INTO visits (url, visited_at) VALUES (?, ?)", [.text(key), .double(time)])
+                }
+                if !known { added += 1 }
+            }
+        }
+        return added
+    }
+
     /// Titles arrive after the page loads.
     public func updateTitle(_ title: String, for url: URL) throws {
         guard !title.isEmpty else { return }

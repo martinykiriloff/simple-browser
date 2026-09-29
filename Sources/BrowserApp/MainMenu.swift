@@ -58,6 +58,8 @@ enum MainMenu {
         menu.addItem(withTitle: "Command Palette…",
                      action: #selector(BrowserWindowController.showCommandPalette(_:)), keyEquivalent: "k")
         menu.addItem(.separator())
+        menu.addItem(withTitle: "Import From…", action: #selector(AppDelegate.showImport(_:)), keyEquivalent: "")
+        menu.addItem(.separator())
         menu.addItem(withTitle: "Close Tab",
                      action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
         let closeWindow = menu.addItem(withTitle: "Close Window",

@@ -56,7 +56,7 @@ can be switched off; then nothing typed leaves the Mac until Return.
 
 ```sh
 scripts/test-ui.sh            # the app presses its own keys and buttons, then reports
-scripts/test-features.sh      # tabs, sessions, history, bookmarks, the address bar, blocking, Reader, private windows, downloads, the sidebar, ⌘K and split view
+scripts/test-features.sh      # tabs, sessions, history, bookmarks, the address bar, blocking, Reader, private windows, downloads, the sidebar, ⌘K, split view and importing
 scripts/test-downloads.sh     # downloads paused or under way at quit go on after a relaunch
 ```
 
@@ -237,6 +237,36 @@ swift run TranslateKitChecks          # languages, batching, requests, responses
 swift run TranslateKitChecks --live   # also asks the real Google Translate
 scripts/test-page.sh                  # translation, the right-click menu, downloads (takes focus)
 ```
+
+## Coming from another browser
+
+The first launch opens a welcome window: pick the browser you use now, and
+its bookmarks, history, open tabs and passwords come over from its own
+files, with nothing to export. It also offers the search engine and
+**Make SimpleBrowser the Default Browser** (macOS confirms in its own
+dialog). **File → Import From…** does the same at any time; nothing is
+brought over twice.
+
+| | Bookmarks | History | Open tabs | Passwords |
+|---|---|---|---|---|
+| Chrome, Brave, Edge, Arc, Vivaldi, Chromium (every profile) | ✓ | ✓ | ✓ | ✓ |
+| Firefox | ✓ | ✓ | ✓ | from a file: about:logins → Export |
+| Safari | ✓ with the reading list | ✓ | – | from a file: Passwords app → Export |
+
+A browser's bookmarks bar becomes the favorites bar; its other bookmarks
+go in *Imported from …* in the Bookmarks menu. History comes with its
+visit counts, so the start page's frequently visited sites are the same
+from the first day. Open tabs open in their windows, asleep until shown.
+Chromium browsers encrypt their passwords with a key in your Keychain
+("Chrome Safe Storage"): macOS asks you to allow SimpleBrowser to use it.
+Safari's files are kept from other apps until SimpleBrowser has Full Disk
+Access, which the window explains, with a button to the right place in
+System Settings.
+
+The other browser's databases are copied before they are read (a running
+browser keeps them locked) and never written. `DataKitChecks` and the
+`import` self-test read fixture browsers built in a scratch folder, never
+yours.
 
 ## Profiles
 

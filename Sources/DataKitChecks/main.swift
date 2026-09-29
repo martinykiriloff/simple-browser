@@ -132,5 +132,74 @@ do {
     check("bookmark checks", false, error)
 }
 
+// MARK: Importing from other browsers
+
+do {
+    let home = FileManager.default.temporaryDirectory.appendingPathComponent("DataKitChecks-import-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: home) }
+    try BrowserImportFixture.write(into: home) { Data("v10".utf8) + Data($0.utf8) }
+    let sources = BrowserImport.sources(home: home)
+    check("import: every browser and profile is found", sources.map(\.title) == ["Google Chrome — Ada", "Google Chrome — Work", "Firefox", "Safari"], sources.map(\.title))
+    check("import: Safari's files, readable here, need no Full Disk Access", sources.last?.needsFullDiskAccess == false)
+
+    let chrome = try BrowserImport.read(sources[0])
+    check("chrome: the bookmarks bar, folders kept", chrome.bookmarksBar.map(\.title) == BrowserImportFixture.chromeBar
+          && chrome.bookmarksBar[1].children.map(\.title) == ["Linear", "Figma"], chrome.bookmarksBar.map(\.title))
+    check("chrome: the other bookmarks", chrome.otherBookmarks.map(\.title) == ["Recipes"] && chrome.otherBookmarks[0].count == 1)
+    check("chrome: history, web pages only, with counts and times", chrome.history.count == 5 && chrome.history.first?.url == BrowserImportFixture.chromeTopSite
+          && chrome.history.first?.visitCount == 120 && abs(chrome.history.first!.lastVisit.timeIntervalSinceNow + 8640) < 60, chrome.history.map(\.url))
+    check("chrome: the open tabs of the last session, by window", chrome.windows.map { $0.map(\.title) } == [["Pull requests", "Hacker News"], ["Inbox (3) - Gmail"]],
+          chrome.windows)
+    check("chrome: sign-ins, not the sites it was told never to save", chrome.logins.map(\.origin) == BrowserImportFixture.chromeLogins.map(\.0)
+          && String(decoding: chrome.logins[0].encryptedPassword.dropFirst(3), as: UTF8.self) == "correct horse battery")
+    check("chrome: only what was asked for is read", try BrowserImport.read(sources[0], parts: .bookmarks).history.isEmpty)
+    check("chrome: the other profile is its own", try BrowserImport.read(sources[1]).bookmarksBar.map(\.title) == ["Jira"])
+
+    let firefox = try BrowserImport.read(sources[2])
+    check("firefox: the toolbar and the menu's folders", firefox.bookmarksBar.map(\.title) == ["MDN"] && firefox.otherBookmarks.map(\.title) == ["Mozilla things"],
+          (firefox.bookmarksBar.map(\.title), firefox.otherBookmarks.map(\.title)))
+    check("firefox: history", Set(firefox.history.map(\.title)) == ["Mozilla", "MDN Web Docs"] && firefox.history.first { $0.title == "MDN Web Docs" }?.typedCount == 4)
+    check("firefox: the open tabs, each at the page it was on, not its own pages", firefox.windows.map { $0.map(\.url.absoluteString) } == [["https://developer.mozilla.org/"]],
+          firefox.windows)
+
+    let safari = try BrowserImport.read(sources[3])
+    check("safari: the favorites bar, the menu and the reading list", safari.bookmarksBar.map(\.title) == ["Apple"] && safari.otherBookmarks.map(\.title) == ["WebKit"]
+          && safari.readingList.map(\.title) == ["A long read"], (safari.bookmarksBar, safari.otherBookmarks, safari.readingList))
+    check("safari: history, with the newest title", safari.history.map(\.title) == ["Apple (new)"] && safari.history.first?.visitCount == 7)
+
+    // Into the browser's own stores.
+    let bookmarks = try BookmarkStore(path: nil)
+    try bookmarks.addBookmark(url: url("https://forums.swift.org/"), title: "Already here", in: bookmarks.favoritesID)
+    let barAdded = try bookmarks.importBookmarks(chrome.bookmarksBar, into: bookmarks.favoritesID)
+    check("import: the bar becomes the favorites bar, less what is already bookmarked", barAdded == 3
+          && bookmarks.favorites.map(\.title) == ["Already here", "GitHub", "Work"], bookmarks.favorites.map(\.title))
+    let folder = try bookmarks.importFolder(named: "Imported from Google Chrome")
+    try bookmarks.importBookmarks(chrome.otherBookmarks, into: folder)
+    check("import: the rest in a folder of the Bookmarks menu", try bookmarks.children(of: folder).map(\.title) == ["Recipes"])
+    let again = try bookmarks.importBookmarks(chrome.bookmarksBar, into: bookmarks.favoritesID) + bookmarks.importBookmarks(chrome.otherBookmarks, into: bookmarks.importFolder(named: "Imported from Google Chrome"))
+    let menuFolders = try bookmarks.children(of: bookmarks.menuID).count
+    check("import: importing again adds nothing", again == 0 && bookmarks.favorites.count == 3 && menuFolders == 1)
+    let firstRead = try bookmarks.importReadingList(safari.readingList), secondRead = try bookmarks.importReadingList(safari.readingList)
+    check("import: the reading list", firstRead == 1 && secondRead == 0)
+
+    let history = try HistoryStore(path: nil)
+    try history.recordVisit(url("https://news.ycombinator.com/"), title: "HN", at: Date().addingTimeInterval(-100))
+    let pages = try history.importPages(chrome.history)
+    check("import: history pages", pages == 4, pages)
+    check("import: …so the most visited sites are the same here", try history.topPages(limit: 3).map(\.url) == [BrowserImportFixture.chromeTopSite, url("https://news.ycombinator.com/"), url("https://mail.google.com/mail/u/0/")],
+          try history.topPages(limit: 3).map(\.url))
+    check("import: a title already here is kept", try history.page(for: url("https://news.ycombinator.com/"))?.title == "HN")
+    check("import: …and each is in the History list", try history.visits(limit: 50).count == 6)
+    _ = try history.importPages(chrome.history)
+    let top = try history.page(for: BrowserImportFixture.chromeTopSite)?.visitCount, visits = try history.visits(limit: 50).count
+    check("import: importing again changes nothing", top == 120 && visits == 6)
+
+    check("mozlz4: round trip", MozLZ4.decode(MozLZ4.encode(Data("hello hello hello hello".utf8))) == Data("hello hello hello hello".utf8))
+    check("mozlz4: anything else is not taken", MozLZ4.decode(Data("not a session".utf8)) == nil)
+    check("snss: anything else is not taken", ChromiumSession.windows(from: Data("hello".utf8)).isEmpty)
+} catch {
+    check("import checks", false, error)
+}
+
 print(failures == 0 ? "✔ all \(passed) DataKit checks passed" : "✘ \(failures) of \(passed + failures) checks failed")
 exit(failures == 0 ? 0 : 1)

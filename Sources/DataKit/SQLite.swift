@@ -41,7 +41,13 @@ public final class SQLiteDatabase {
         try execute("PRAGMA foreign_keys = ON")
     }
 
-    deinit { sqlite3_close(handle) }
+    /// Runs once the connection is closed: for a copy made to be read and thrown away.
+    public var onClose: (() -> Void)?
+
+    deinit {
+        sqlite3_close(handle)
+        onClose?()
+    }
 
     public func execute(_ sql: String, _ arguments: [Value] = []) throws {
         _ = try query(sql, arguments)

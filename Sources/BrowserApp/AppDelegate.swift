@@ -76,6 +76,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private(set) lazy var tabGroupsMenuFiller = TabGroupsMenuFiller(organizer: tabOrganizer) { [weak self] in self?.frontmostBrowser }
     /// ⌘K, shown over whichever window asked for it.
     private(set) lazy var commandPalette = CommandPaletteController()
+    /// The first launch's welcome, and File → Import From….
+    private(set) lazy var importWindow: ImportWindowController = {
+        let controller = ImportWindowController(importer: BrowserImporter(app: self)) { [weak self] in
+            self?.frontmostBrowser?.profile ?? self?.currentProfile ?? Profile(name: "Default")
+        }
+        controller.importPasswordFile = { [weak self] in self?.importPasswordFile() }
+        controller.onFinish = { BrowserSettings.didFirstRun = true }
+        return controller
+    }()
 
     /// The profile of the browser window in front, or the one used last.
     var currentProfile: Profile { frontmostBrowser?.profile ?? profiles.lastUsed }
@@ -176,6 +185,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             newWindow(nil)
         }
+        if launch.url == nil { welcomeIfFirstLaunch() }
         startUpdater()
         memorySaver.start()
         if let path = launch.dumpRecordingPath {
@@ -701,6 +711,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func openInProfile(_ profile: Profile, url: URL, newTab: Bool) {
         let browser = frontmostBrowser?.profile.id == profile.id ? frontmostBrowser : controllers.last { $0.profile.id == profile.id }
         if newTab || browser == nil { self.newTab(beside: browser, url: url) } else { browser?.load(url); browser?.showWindow(nil) }
+    }
+
+    // MARK: - First launch and importing
+
+    /// The welcome window, once: not for someone who has used the browser
+    /// already, which a saved session or any history shows.
+    private func welcomeIfFirstLaunch() {
+        guard !BrowserSettings.didFirstRun else { return }
+        let usedBefore = session.previous != nil || ((try? history(for: currentProfile)?.topPages(limit: 1).isEmpty) == false)
+        if usedBefore {
+            BrowserSettings.didFirstRun = true
+            return
+        }
+        importWindow.show(.firstRun)
+    }
+
+    /// File → Import From….
+    @objc func showImport(_ sender: Any?) { importWindow.show(.importOnly) }
+
+    /// Passwords a browser or password manager exported to a file.
+    func importPasswordFile() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.commaSeparatedText]
+        panel.message = "Choose the passwords file exported from Safari’s Passwords app, Firefox, or a password manager."
+        let profile = importWindow.profile()
+        let finish: (NSApplication.ModalResponse) -> Void = { [weak self] response in
+            guard let self, response == .OK, let url = panel.url else { return }
+            Task { @MainActor in
+                let label = self.importWindow.resultLabel
+                do {
+                    let summary = try await self.passwords(for: profile).importCSV(from: url)
+                    label.stringValue = "\(summary.added) passwords added, \(summary.updated) updated. The file holds every password in the clear: delete it now."
+                } catch {
+                    label.stringValue = "That file could not be imported: \(PasswordCoordinator.describe(error))"
+                }
+            }
+        }
+        if let window = importWindow.window { panel.beginSheetModal(for: window, completionHandler: finish) } else { finish(panel.runModal()) }
     }
 
     // MARK: - Command palette

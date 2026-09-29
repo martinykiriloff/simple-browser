@@ -126,10 +126,16 @@ final class PasswordService {
     func importCSV(from url: URL) async throws -> ImportSummary {
         let text = try String(contentsOf: url, encoding: .utf8)
         let parsed = try PasswordCSV.parse(text)
-        var summary = ImportSummary(skipped: parsed.skipped)
+        return try await importRows(parsed.rows, skipped: parsed.skipped)
+    }
+
+    /// Sign-ins from another browser, or a file: new ones added, changed
+    /// ones updated, the same ones left.
+    func importRows(_ rows: [PasswordCSV.Row], skipped: Int = 0) async throws -> ImportSummary {
+        var summary = ImportSummary(skipped: skipped)
         var existing: [String: UUID] = [:]
         for credential in try await store.all() { existing[credential.origin + "\n" + credential.username] = credential.id }
-        for row in parsed.rows {
+        for row in rows {
             if let id = existing[row.origin + "\n" + row.username] {
                 if try await store.password(for: id) == row.password { summary.unchanged += 1 } else { summary.updated += 1 }
             } else {

@@ -212,6 +212,15 @@ enum BrowserSettings {
         set { store.set(newValue, forKey: favoritesBarKey) }
     }
 
+    // MARK: First launch
+
+    /// The welcome window has been shown, or there was no need: someone
+    /// already using the browser is not welcomed again.
+    static var didFirstRun: Bool {
+        get { store.bool(forKey: "settings.firstRunDone") }
+        set { store.set(newValue, forKey: "settings.firstRunDone") }
+    }
+
     // MARK: Tabs
 
     private static let tabsInSidebarKey = "settings.tabs.inSidebar"
