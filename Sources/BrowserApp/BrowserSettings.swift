@@ -236,6 +236,12 @@ enum BrowserSettings {
         set { store.set(min(max(newValue, SidebarWidth.minimum), SidebarWidth.maximum), forKey: sidebarWidthKey) }
     }
 
+    /// Where the divider of a split view was left: the left page's share.
+    static var splitFraction: Double {
+        get { store.object(forKey: "settings.split.fraction") as? Double ?? 0.5 }
+        set { store.set(min(max(newValue, 0.2), 0.8), forKey: "settings.split.fraction") }
+    }
+
     enum SidebarWidth {
         static let minimum = 180.0
         static let maximum = 420.0

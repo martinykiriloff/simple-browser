@@ -197,7 +197,8 @@ final class TabSidebarController: NSViewController, NSTableViewDataSource, NSTab
             cell.setAccessibilityLabel("Group \(cell.title), \(members.count) tabs, \(group.isCollapsed ? "collapsed" : "expanded")")
         case .tab(let id, let inGroup):
             guard let tab = tab(id) else { break }
-            let title = tab.window?.title ?? ""
+            // A split shows as the pair, as in the tab bar.
+            let title = (tab.split != nil ? tab.window?.tab.title : nil) ?? tab.window?.title ?? ""
             cell.configure(icon: Favicons.shared.icon(for: tab.currentURL, title: title), title: title.isEmpty ? "New Tab" : title,
                            indent: inGroup ? 16 : 0, dimmed: tab.isHibernated)
             cell.onClose = { [weak tab] in tab?.window?.performClose(nil) }
@@ -260,7 +261,7 @@ final class TabSidebarController: NSViewController, NSTableViewDataSource, NSTab
     }
 
     private func select(_ id: TabID) {
-        tab(id)?.window?.makeKeyAndOrderFront(nil)
+        tab(id)?.show()
     }
 
     // MARK: - Menus
@@ -281,7 +282,7 @@ final class TabSidebarController: NSViewController, NSTableViewDataSource, NSTab
         switch rows[row] {
         case .tab:
             let chosen = tabsForMenu(clicked: row)
-            TabMenus.fill(menu, for: chosen, organizer: organizer, edit: { [weak self] id in self?.edit(id) })
+            TabMenus.fill(menu, for: chosen, organizer: organizer, front: browser, edit: { [weak self] id in self?.edit(id) })
         case .group(let id):
             TabMenus.fill(menu, forGroup: id, organizer: organizer, profile: browser?.isPrivate == false ? browser?.profile : nil,
                           edit: { [weak self] id in self?.edit(id) })
@@ -304,7 +305,7 @@ final class TabSidebarController: NSViewController, NSTableViewDataSource, NSTab
     private func pinnedMenu(for id: TabID) -> NSMenu? {
         guard let tab = tab(id) else { return nil }
         let menu = NSMenu()
-        TabMenus.fill(menu, for: [tab], organizer: organizer, edit: { [weak self] id in self?.edit(id) })
+        TabMenus.fill(menu, for: [tab], organizer: organizer, front: browser, edit: { [weak self] id in self?.edit(id) })
         return menu
     }
 
@@ -325,6 +326,15 @@ final class TabSidebarController: NSViewController, NSTableViewDataSource, NSTab
         let item = NSPasteboardItem()
         item.setString(id.description, forType: .sidebarTab)
         return item
+    }
+
+    /// A tab dragged out of the list can be dropped on the page's right edge, for split view.
+    func tableView(_ tableView: NSTableView, draggingSession session: NSDraggingSession, willBeginAt screenPoint: NSPoint, forRowIndexes rowIndexes: IndexSet) {
+        browser?.showSplitDropZone(true)
+    }
+
+    func tableView(_ tableView: NSTableView, draggingSession session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
+        browser?.showSplitDropZone(false)
     }
 
     func tableView(_ tableView: NSTableView, validateDrop info: any NSDraggingInfo, proposedRow row: Int,
@@ -560,10 +570,18 @@ final class ClosureMenuItem: NSMenuItem {
 /// and the Window menu.
 @MainActor
 enum TabMenus {
-    static func fill(_ menu: NSMenu, for tabs: [BrowserWindowController], organizer: TabOrganizer, edit: @escaping (TabGroupID) -> Void) {
+    static func fill(_ menu: NSMenu, for tabs: [BrowserWindowController], organizer: TabOrganizer, front: BrowserWindowController? = nil,
+                     edit: @escaping (TabGroupID) -> Void) {
         guard let first = tabs.first else { return }
         let count = tabs.count
         let plural = count == 1 ? "Tab" : "\(count) Tabs"
+        // Beside the tab in front: the one clicked, or the two chosen.
+        let pair: (BrowserWindowController, BrowserWindowController)? = count == 2 ? (tabs[0], tabs[1])
+            : count == 1 ? front.flatMap { $0 === first ? nil : ($0, first) } : nil
+        if let (left, right) = pair, !left.isInSplit, !right.isInSplit {
+            menu.addItem(ClosureMenuItem("Open in Split View") { left.openInSplitView(with: right) })
+            menu.addItem(.separator())
+        }
         menu.addItem(ClosureMenuItem("New Tab Group from \(plural)") {
             if let id = organizer.newGroup(with: tabs) { edit(id) }
         })

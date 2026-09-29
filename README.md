@@ -56,7 +56,7 @@ can be switched off; then nothing typed leaves the Mac until Return.
 
 ```sh
 scripts/test-ui.sh            # the app presses its own keys and buttons, then reports
-scripts/test-features.sh      # tabs, sessions, history, bookmarks, the address bar, blocking, Reader, private windows, downloads, the sidebar and ⌘K
+scripts/test-features.sh      # tabs, sessions, history, bookmarks, the address bar, blocking, Reader, private windows, downloads, the sidebar, ⌘K and split view
 scripts/test-downloads.sh     # downloads paused or under way at quit go on after a relaunch
 ```
 
@@ -108,6 +108,21 @@ nothing typed each tab shows its key, such as **G ⌘3**: G then ⌘3 opens
 it. So with a hundred tabs open, any of them is two keys away after ⌘K,
 which `BrowserKitChecks` measures against a hundred tabs as people have
 them, alike on purpose, and every menu command.
+
+### Split view
+
+Two tabs side by side in one window: **View → Open in Split View** (this
+tab and the next, or a new one), *Open in Split View* on a tab or two
+chosen in the sidebar, *Open Link in Split View* on a link, or a tab
+dragged from the sidebar onto the right edge of the page. Each side has a
+header with its site and a close button, and keeps its own address: the
+toolbar is the side in front's own, so the address bar, the buttons and
+the menus (⌘L, ⌘F, ⌘R…) act on that side. The side in front is underlined
+in the accent colour; a click, or ⌥⌘← and ⌥⌘→, changes it. The pair is one
+tab in the tab bar ("Left | Right"). Where the divider is left is where
+the next split starts. Closing a side (its ✕, or ⌘W on it) leaves the other
+as a whole tab; **Close Split View** leaves both. A split comes back with
+the session, and the page beside never sleeps while it is on screen.
 
 ## Find, zoom and Reader
 

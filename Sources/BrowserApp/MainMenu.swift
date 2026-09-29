@@ -97,6 +97,8 @@ enum MainMenu {
         let menu = NSMenu(title: "View")
         let sidebar = menu.addItem(withTitle: "Show Sidebar", action: #selector(BrowserWindowController.toggleBrowserSidebar(_:)), keyEquivalent: "s")
         sidebar.keyEquivalentModifierMask = [.command, .shift]
+        menu.addItem(withTitle: "Open in Split View", action: #selector(BrowserWindowController.openInSplitView(_:)), keyEquivalent: "")
+        menu.addItem(withTitle: "Close Split View", action: #selector(BrowserWindowController.closeSplitView(_:)), keyEquivalent: "")
         menu.addItem(.separator())
         menu.addItem(withTitle: "Reload Page",
                      action: #selector(BrowserWindowController.reload(_:)), keyEquivalent: "r")

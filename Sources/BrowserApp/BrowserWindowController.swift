@@ -293,6 +293,7 @@ final class BrowserWindowController: NSWindowController,
         contextMenu.viewSource = { [weak self] in self?.showDevTools(panel: "sources") }
         contextMenu.openInNewWindow = { [weak self] url in self?.openInNewWindow?(url) }
         contextMenu.openInNewTab = { [weak self] url in self?.openInNewTab?(url, false) }
+        contextMenu.openInSplitView = { [weak self] url in self?.openLinkInSplitView(url) }
         translator.webView = webView
         translator.onStateChange = { [weak self] in self?.syncTranslateItem() }
         downloads.webView = webView
@@ -348,6 +349,7 @@ final class BrowserWindowController: NSWindowController,
         configureTranslateButton()
 
         let toolbar = NSToolbar(identifier: "BrowserToolbar")
+        browserToolbar = toolbar
         toolbar.delegate = self
         toolbar.displayMode = .iconOnly
         toolbar.allowsUserCustomization = false
@@ -369,6 +371,10 @@ final class BrowserWindowController: NSWindowController,
             let key = event.charactersIgnoringModifiers ?? ""
             if modifiers == [.command, .shift], key == "{" || key == "[" || key == "}" || key == "]" {
                 self.stepTab(by: key == "{" || key == "[" ? -1 : 1)
+                return nil
+            }
+            if modifiers.contains([.command, .option]), event.keyCode == 123 || event.keyCode == 124,
+               self.focusSplitSide(left: event.keyCode == 123) {
                 return nil
             }
             if modifiers.contains([.command, .option]), !self.isEditingAddress, event.keyCode == 123 || event.keyCode == 124 {
@@ -472,6 +478,72 @@ final class BrowserWindowController: NSWindowController,
     @objc func closeWindowAndTabs(_ sender: Any?) {
         onWindowClosing?(self)
         for tab in window?.tabbedWindows ?? [window].compactMap({ $0 }) { tab.performClose(sender) }
+    }
+
+    // MARK: - Split view
+
+    /// On the tab whose window shows two pages: the split. On the tab shown
+    /// beside it: the tab whose window it is in. See `SplitViewController`.
+    var split: SplitViewController?
+    weak var splitHost: BrowserWindowController?
+    var isInSplit: Bool { split != nil || splitHost != nil }
+    /// This tab's own toolbar, wherever it is shown.
+    private(set) weak var browserToolbar: NSToolbar?
+
+    /// Where the page is: for what is laid over it.
+    var pageArea: NSView { pageContainer }
+
+    /// The window this tab's page is on screen in: its own, or, beside
+    /// another tab in a split, that tab's.
+    var shownWindow: NSWindow? { pageContainer.window ?? window }
+
+    /// Takes the page (and whatever is over it) out of this tab's window, for a split.
+    func detachPage() -> NSView {
+        splitView.removeArrangedSubview(pageContainer)
+        pageContainer.removeFromSuperview()
+        return pageContainer
+    }
+
+    /// Shows `view` where this tab's page was, with DevTools still beside it.
+    func showInPlaceOfPage(_ view: NSView) {
+        splitView.insertArrangedSubview(view, at: 0)
+        if splitView.arrangedSubviews.count > 1 { splitView.setHoldingPriority(.defaultLow, forSubviewAt: 0) }
+    }
+
+    /// Puts the page back where it was, replacing whatever stood in for it.
+    func reattachPage(replacing stand: NSView? = nil) {
+        if let stand, stand.superview === splitView {
+            splitView.removeArrangedSubview(stand)
+            stand.removeFromSuperview()
+        }
+        pageContainer.removeFromSuperview()
+        splitView.insertArrangedSubview(pageContainer, at: 0)
+        if splitView.arrangedSubviews.count > 1 { splitView.setHoldingPriority(.defaultLow, forSubviewAt: 0) }
+    }
+
+    /// Brings this tab to the front: its window, or the split it is in, on its side.
+    func show() {
+        if let host = splitHost {
+            host.window?.makeKeyAndOrderFront(nil)
+            host.split?.focus(self)
+        } else {
+            window?.makeKeyAndOrderFront(nil)
+        }
+    }
+
+    /// ⌘W with a split closes the side in front; the other stays, as a tab.
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        guard sender === window, let split else { return true }
+        split.close(split.focused)
+        return false
+    }
+
+    /// ⌥⌘← / ⌥⌘→ in a split: the side that way, if not there already.
+    private func focusSplitSide(left: Bool) -> Bool {
+        guard let split, !split.focused.isEditingAddress else { return false }
+        guard let target = left ? split.host : split.guest, split.focused !== target else { return false }
+        split.focus(target)
+        return true
     }
 
     // MARK: - Sidebar
@@ -625,6 +697,8 @@ final class BrowserWindowController: NSWindowController,
     /// inspected. Asked of the page, because only it knows.
     func mustStayLive() async -> Bool {
         if window?.isVisible == true && window?.tabGroup?.selectedWindow === window { return true }
+        // A tab beside another in a split is on screen whenever that one is.
+        if splitHost != nil { return true }
         if window?.tabGroup == nil && window?.isVisible == true { return true }
         if isDevToolsVisible { return true }
         if webView.cameraCaptureState != .none || webView.microphoneCaptureState != .none { return true }
@@ -759,7 +833,7 @@ final class BrowserWindowController: NSWindowController,
     /// This tab, as the session file keeps it.
     var sessionTab: SessionSnapshot.Tab {
         SessionSnapshot.Tab(url: currentURL, title: isHibernated ? hibernatedTitle : (window?.title ?? ""),
-                            state: interactionState as? Data, groupID: groupID, isPinned: isPinned)
+                            state: interactionState as? Data, groupID: groupID, isPinned: isPinned, besidePrevious: splitHost != nil)
     }
 
     /// A short message over the top of the page that goes away by itself.
@@ -823,7 +897,7 @@ final class BrowserWindowController: NSWindowController,
         suggestionsPanel.hide()
         typedNavigation = true
         load(url)
-        window?.makeFirstResponder(webView)
+        shownWindow?.makeFirstResponder(webView)
     }
 
     @objc func goBack(_ sender: Any?) { webView.goBack() }
@@ -848,7 +922,7 @@ final class BrowserWindowController: NSWindowController,
 
     @objc func goHome(_ sender: Any?) {
         load(BrowserSettings.homepageURL)
-        window?.makeFirstResponder(webView)
+        shownWindow?.makeFirstResponder(webView)
     }
 
     /// Developer aid: run a script in the page, as the page. The self-tests
@@ -858,7 +932,7 @@ final class BrowserWindowController: NSWindowController,
     }
 
     /// Developer aid: put keyboard focus in the page, as a click into it would.
-    func focusPage() { window?.makeFirstResponder(webView) }
+    func focusPage() { shownWindow?.makeFirstResponder(webView) }
 
     /// Developer aid, for the self-test to read the key button's state.
     var passwordsToolbarItem: NSToolbarItem? { passwordsItem }
@@ -952,7 +1026,7 @@ final class BrowserWindowController: NSWindowController,
     }
 
     @objc func focusAddressBar(_ sender: Any?) {
-        window?.makeFirstResponder(addressField)
+        shownWindow?.makeFirstResponder(addressField)
         addressField.selectText(nil)
     }
 
@@ -986,7 +1060,7 @@ final class BrowserWindowController: NSWindowController,
             tools.didShow()
         }
         if let panel { tools.showPanel(panel) }
-        if devToolsWindow == nil { window?.makeFirstResponder(tools.view) }
+        if devToolsWindow == nil { shownWindow?.makeFirstResponder(tools.view) }
     }
 
     private func hideDevTools() {
@@ -994,7 +1068,7 @@ final class BrowserWindowController: NSWindowController,
         detach(tools)
         isDevToolsVisible = false
         tools.didHide()
-        window?.makeFirstResponder(webView)
+        shownWindow?.makeFirstResponder(webView)
     }
 
     private func makeDevTools() -> DevToolsController {
@@ -1513,6 +1587,7 @@ final class BrowserWindowController: NSWindowController,
     private(set) weak var lastBookmarkPopover: AddBookmarkController?
     /// For the self-test.
     weak var lastGroupEditor: GroupEditorController?
+    weak var splitDropZone: SplitDropZone?
 
     /// Bookmarks → Add to Reading List (⇧⌘D): saved with an offline copy.
     @objc func addToReadingList(_ sender: Any?) {
@@ -1739,7 +1814,7 @@ final class BrowserWindowController: NSWindowController,
                 completionURL = nil
             } else {
                 addressField.stringValue = Self.displayAddress(shownURL)
-                window?.makeFirstResponder(webView)
+                shownWindow?.makeFirstResponder(webView)
             }
             return true
         case #selector(NSResponder.deleteBackward(_:)) where NSApp.currentEvent?.modifierFlags.contains(.shift) == true:
@@ -1764,15 +1839,15 @@ final class BrowserWindowController: NSWindowController,
         switch suggestion.kind {
         case .switchToTab(let id):
             addressField.stringValue = Self.displayAddress(shownURL)
-            window?.makeFirstResponder(webView)
+            shownWindow?.makeFirstResponder(webView)
             switchToTab?(id)
         case .search:
             load(suggestion.url)
-            window?.makeFirstResponder(webView)
+            shownWindow?.makeFirstResponder(webView)
         case .bookmark, .history:
             typedNavigation = true
             load(suggestion.url)
-            window?.makeFirstResponder(webView)
+            shownWindow?.makeFirstResponder(webView)
         }
     }
 
@@ -1785,13 +1860,13 @@ final class BrowserWindowController: NSWindowController,
         guard let text = pasteboard.string(forType: .string), let url = BrowserSettings.destination(for: text) else { return }
         typedNavigation = true
         load(url)
-        window?.makeFirstResponder(webView)
+        shownWindow?.makeFirstResponder(webView)
     }
 
     /// Developer aid: types into the address bar as a person would, one
     /// edit notification per call, with the field focused.
     func typeInAddressBar(_ text: String) {
-        window?.makeFirstResponder(addressField)
+        shownWindow?.makeFirstResponder(addressField)
         guard let editor = addressField.currentEditor() as? NSTextView else { return }
         editor.string = text
         editor.setSelectedRange(NSRange(location: (text as NSString).length, length: 0))
@@ -1845,7 +1920,8 @@ final class BrowserWindowController: NSWindowController,
     /// So the preferred width is what the other items leave, and it is the
     /// address that gives way when the window narrows or a button appears.
     func fitAddressField() {
-        guard let window, let toolbar = window.toolbar, let addressWidth else { return }
+        // Beside another tab in a split, the toolbar is in that tab's window.
+        guard let window = addressField.window ?? window, let toolbar = window.toolbar, let addressWidth else { return }
         var others: CGFloat = 0
         for item in toolbar.items where item.itemIdentifier != .address && item.itemIdentifier != .flexibleSpace && !item.isHidden {
             // Buttons made from an image have no view; they are as wide as a toolbar button.
@@ -1874,9 +1950,9 @@ final class BrowserWindowController: NSWindowController,
         return toolbar.items.filter { !$0.isHidden && !visible.contains($0.itemIdentifier) }.map(\.itemIdentifier.rawValue)
     }
 
-    private var isEditingAddress: Bool {
+    var isEditingAddress: Bool {
         guard let editor = addressField.currentEditor() else { return false }
-        return window?.firstResponder === editor
+        return shownWindow?.firstResponder === editor
     }
 
     private func syncChrome() {
@@ -2085,6 +2161,10 @@ final class BrowserWindowController: NSWindowController,
             menuItem.title = BrowserSettings.showFavoritesBar ? "Hide Favorites Bar" : "Show Favorites Bar"
         case #selector(toggleBrowserSidebar(_:)):
             menuItem.title = BrowserSettings.sidebarShown ? "Hide Sidebar" : "Show Sidebar"
+        case #selector(openInSplitView(_:)):
+            return !isInSplit
+        case #selector(closeSplitView(_:)):
+            return isInSplit
         case #selector(togglePinTab(_:)):
             menuItem.title = isPinned ? "Unpin Tab" : "Pin Tab"
         case #selector(removeTabFromGroup(_:)):

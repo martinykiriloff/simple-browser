@@ -36,6 +36,8 @@ final class PageContextMenu: NSObject, WKScriptMessageHandler {
     var openInNewWindow: ((URL) -> Void)?
     /// Opens a URL in a new tab beside this one, behind it.
     var openInNewTab: ((URL) -> Void)?
+    /// Beside the page, in split view.
+    var openInSplitView: ((URL) -> Void)?
     var inspect: ((CGPoint) -> Void)?
     var viewSource: (() -> Void)?
     /// For the self-test: the titles of the last menu shown, after rewriting.
@@ -133,6 +135,11 @@ final class PageContextMenu: NSObject, WKScriptMessageHandler {
             let tab = NSMenuItem(title: "Open Link in New Tab", action: #selector(openLinkInNewTab(_:)), keyEquivalent: "")
             tab.target = self
             menu.insertItem(tab, at: index)
+            if openInSplitView != nil {
+                let split = NSMenuItem(title: "Open Link in Split View", action: #selector(openLinkInSplitView(_:)), keyEquivalent: "")
+                split.target = self
+                menu.insertItem(split, at: index + 1)
+            }
         }
         replace(.downloadLinkedFile, in: menu, title: "Save Link As…", action: #selector(saveLinkAs(_:)))
 
@@ -222,6 +229,7 @@ final class PageContextMenu: NSObject, WKScriptMessageHandler {
 
     @objc func openLinkInNewWindow(_ sender: Any?) { context.link.map { openInNewWindow?($0) } }
     @objc func openLinkInNewTab(_ sender: Any?) { context.link.map { openInNewTab?($0) } }
+    @objc func openLinkInSplitView(_ sender: Any?) { context.link.map { openInSplitView?($0) } }
     @objc func openImageInNewWindow(_ sender: Any?) { context.image.map { openInNewWindow?($0) } }
     @objc func openMediaInNewWindow(_ sender: Any?) { context.media.map { openInNewWindow?($0) } }
 

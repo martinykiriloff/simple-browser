@@ -730,7 +730,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             entries.append(Entry(item: .init(id: "tab:\(tab.tab)", kind: .tab, title: title.isEmpty ? "New Tab" : title,
                                              detail: tab.currentURL?.absoluteString ?? "", lastUsed: tab.lastActive),
                                  icon: Favicons.shared.icon(for: tab.currentURL, title: title), shortcut: "") { [weak tab] in
-                tab?.window?.makeKeyAndOrderFront(nil)
+                tab?.show()
             })
         }
         let commandIcon = NSImage(systemSymbolName: "command", accessibilityDescription: nil)
@@ -772,7 +772,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         var windows: [SessionSnapshot.Window] = []
         let ordered = NSApp.orderedWindows.compactMap { window in controllers.first { $0.window === window } }
         // Private windows are never part of a session: not saved, not restored.
-        for controller in ordered + controllers where !controller.isPrivate {
+        // A tab shown beside another in a split is saved with that one's window.
+        for controller in ordered + controllers where !controller.isPrivate && controller.splitHost == nil {
             guard let window = controller.window else { continue }
             let key = window.tabGroup.map(ObjectIdentifier.init) ?? ObjectIdentifier(window)
             guard !seen.contains(key) else { continue }
@@ -786,6 +787,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let window = controller.window
         let tabWindows = window?.tabbedWindows ?? [window].compactMap { $0 }
         let tabs = tabWindows.compactMap { tabWindow in controllers.first { $0.window === tabWindow } }
+            .flatMap { tab in [tab] + [tab.split?.guest].compactMap { $0 } }
         let selectedWindow = window?.tabGroup?.selectedWindow ?? window
         let frame = window?.frame ?? .zero
         return SessionSnapshot.Window(
@@ -836,6 +838,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 created.append(controller)
             }
             tabOrganizer.restore(saved.groups)
+            for (index, tab) in saved.tabs.enumerated() where tab.besidePrevious && index > 0 {
+                created[index].wake()
+                SplitViewController.open(created[index], beside: created[index - 1])
+            }
             if created.indices.contains(saved.selected) {
                 created[saved.selected].window?.makeKeyAndOrderFront(nil)
                 fronts.append(created[saved.selected])
@@ -991,7 +997,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return sources
         }
         controller.switchToTab = { [weak self] id in
-            self?.controllers.first { $0.tab.description == id }?.window?.makeKeyAndOrderFront(nil)
+            self?.controllers.first { $0.tab.description == id }?.show()
         }
         controller.removeFromHistory = { [weak self] url in try? self?.history(for: profile)?.deletePage(url) }
         controller.onZoomChanged = { [weak self, weak controller] site, level in

@@ -11,12 +11,15 @@ public struct SessionSnapshot: Codable, Equatable, Sendable {
         /// The window's group this tab is in, if any: one of `Window.groups`.
         public var groupID: TabGroupID?
         public var isPinned: Bool
-        public init(url: URL?, title: String, state: Data?, groupID: TabGroupID? = nil, isPinned: Bool = false) {
+        /// Shown in split view beside the tab before it.
+        public var besidePrevious: Bool
+        public init(url: URL?, title: String, state: Data?, groupID: TabGroupID? = nil, isPinned: Bool = false, besidePrevious: Bool = false) {
             self.url = url
             self.title = title
             self.state = state
             self.groupID = groupID
             self.isPinned = isPinned
+            self.besidePrevious = besidePrevious
         }
 
         // Sessions written before groups and pins still read.
@@ -27,6 +30,7 @@ public struct SessionSnapshot: Codable, Equatable, Sendable {
             state = try container.decodeIfPresent(Data.self, forKey: .state)
             groupID = try container.decodeIfPresent(TabGroupID.self, forKey: .groupID)
             isPinned = try container.decodeIfPresent(Bool.self, forKey: .isPinned) ?? false
+            besidePrevious = try container.decodeIfPresent(Bool.self, forKey: .besidePrevious) ?? false
         }
     }
 
