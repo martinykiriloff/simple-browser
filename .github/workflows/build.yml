@@ -3,10 +3,21 @@
 #
 #   git tag v0.2.0 && git push origin v0.2.0
 #
-# builds the universal app, packages SimpleBrowser-0.2.0.dmg, signs it for the
-# in-app updater with the UPDATE_SIGNING_KEY secret, and creates the GitHub
-# Release the app's "Check for Updates" reads. Other builds upload the DMG as
-# a workflow artifact only.
+# builds the universal app, signs it with the Developer ID, notarizes and
+# staples the app and SimpleBrowser-0.2.0.dmg, signs the DMG for the in-app
+# updater with the UPDATE_SIGNING_KEY secret, and creates the GitHub Release
+# the app's "Check for Updates" reads. Other builds upload the DMG as a
+# workflow artifact only.
+#
+# Secrets for a release that opens with no Gatekeeper warning:
+#   DEVELOPER_ID_P12           the "Developer ID Application" certificate and
+#                              its private key, exported as .p12, base64
+#   DEVELOPER_ID_P12_PASSWORD  the password it was exported with
+#   NOTARY_KEY                 an App Store Connect API key (.p8), base64
+#   NOTARY_KEY_ID              its key ID
+#   NOTARY_ISSUER              its issuer ID
+# Without them a tag build fails, unless the repository variable
+# ALLOW_UNNOTARIZED_RELEASE is "true": then it is released ad-hoc signed.
 name: Build
 
 on:
@@ -70,6 +81,46 @@ jobs:
       - name: Unit tests
         run: swift test
 
+      # A keychain of its own for the run, with the Developer ID in it; gone with the runner.
+      - name: Import the Developer ID
+        if: steps.version.outputs.release == 'true'
+        env:
+          P12: ${{ secrets.DEVELOPER_ID_P12 }}
+          P12_PASSWORD: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
+          NOTARY_KEY_BASE64: ${{ secrets.NOTARY_KEY }}
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER: ${{ secrets.NOTARY_ISSUER }}
+          ALLOW_UNNOTARIZED: ${{ vars.ALLOW_UNNOTARIZED_RELEASE }}
+        run: |
+          if [ -z "$P12" ] || [ -z "$NOTARY_KEY_BASE64" ] || [ -z "$NOTARY_KEY_ID" ] || [ -z "$NOTARY_ISSUER" ]; then
+            if [ "$ALLOW_UNNOTARIZED" = "true" ]; then
+              echo "::warning::No Developer ID or notary key: this release is ad-hoc signed, and Gatekeeper will warn on first launch"
+              exit 0
+            fi
+            echo "::error::A release needs DEVELOPER_ID_P12, DEVELOPER_ID_P12_PASSWORD, NOTARY_KEY, NOTARY_KEY_ID and NOTARY_ISSUER (see the top of this file), or the variable ALLOW_UNNOTARIZED_RELEASE=true"
+            exit 1
+          fi
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          password="$(uuidgen)"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          printf '%s' "$P12" | base64 --decode > "$RUNNER_TEMP/developer-id.p12"
+          security import "$RUNNER_TEMP/developer-id.p12" -k "$keychain" -P "$P12_PASSWORD" -T /usr/bin/codesign
+          rm -f "$RUNNER_TEMP/developer-id.p12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain" >/dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          identity="$(security find-identity -v -p codesigning "$keychain" | awk -F'"' '/Developer ID Application/ { print $2; exit }')"
+          if [ -z "$identity" ]; then echo "::error::DEVELOPER_ID_P12 holds no Developer ID Application identity"; exit 1; fi
+          printf '%s' "$NOTARY_KEY_BASE64" | base64 --decode > "$RUNNER_TEMP/notary.p8"
+          {
+            echo "CODESIGN_IDENTITY=$identity"
+            echo "NOTARY_KEY=$RUNNER_TEMP/notary.p8"
+            echo "NOTARY_KEY_ID=$NOTARY_KEY_ID"
+            echo "NOTARY_ISSUER=$NOTARY_ISSUER"
+          } >> "$GITHUB_ENV"
+          echo "Signing as: $identity"
+
       - name: Package
         env:
           VERSION: ${{ steps.version.outputs.version }}
@@ -86,6 +137,15 @@ jobs:
       - name: Check the update signature
         if: steps.version.outputs.release == 'true'
         run: test -s "dist/SimpleBrowser-${{ steps.version.outputs.version }}.dmg.sig"
+
+      # As a downloaded copy will be judged: Gatekeeper, from the stapled ticket.
+      - name: Check Gatekeeper
+        if: steps.version.outputs.release == 'true' && env.NOTARY_KEY != ''
+        run: |
+          dmg="dist/SimpleBrowser-${{ steps.version.outputs.version }}.dmg"
+          xcrun stapler validate "$dmg"
+          spctl --assess --type open --context context:primary-signature --verbose "$dmg"
+          spctl --assess --type execute --verbose dist/SimpleBrowser.app
 
       - uses: actions/upload-artifact@v4
         with:

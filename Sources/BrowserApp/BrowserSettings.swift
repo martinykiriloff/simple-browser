@@ -227,6 +227,12 @@ enum BrowserSettings {
         set { store.set(newValue, forKey: "settings.firstRunDone") }
     }
 
+    /// "Don't ask again" to moving the app to the Applications folder.
+    static var neverOfferMove: Bool {
+        get { store.bool(forKey: "settings.neverOfferMove") }
+        set { store.set(newValue, forKey: "settings.neverOfferMove") }
+    }
+
     // MARK: Tabs
 
     private static let tabsInSidebarKey = "settings.tabs.inSidebar"

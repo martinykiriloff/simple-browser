@@ -508,5 +508,24 @@ do {
     check("extensions: an unknown .crx is refused", CRXPackage.zip(from: crx3) == nil && CRXPackage.zip(from: Data("hello".utf8)) == nil)
 }
 
+// MARK: Where the app runs from
+
+do {
+    let home = "/Users/ada"
+    check("location: /Applications needs no move", AppLocation.of(bundlePath: "/Applications/SimpleBrowser.app", home: home) == .applications
+          && !AppLocation.applications.shouldOfferMove)
+    check("location: ~/Applications neither", AppLocation.of(bundlePath: "/Users/ada/Applications/SimpleBrowser.app", home: home) == .userApplications)
+    check("location: macOS's temporary copy is told apart",
+          AppLocation.of(bundlePath: "/private/var/folders/x/T/AppTranslocation/6A1D/d/SimpleBrowser.app", home: home) == .translocated)
+    check("location: the disk image", AppLocation.of(bundlePath: "/Volumes/SimpleBrowser/SimpleBrowser.app", home: home) == .diskImage)
+    check("location: Downloads is elsewhere, and offered a move", AppLocation.of(bundlePath: "/Users/ada/Downloads/SimpleBrowser.app", home: home) == .elsewhere
+          && AppLocation.elsewhere.shouldOfferMove)
+    check("location: only a copy of its own goes to the Trash", AppLocation.elsewhere.removesOriginal && !AppLocation.diskImage.removesOriginal
+          && !AppLocation.translocated.removesOriginal)
+    check("location: a build or test copy in a temporary folder is not offered a move",
+          AppLocation.of(bundlePath: "/var/folders/x/T/tmp.abc/SimpleBrowser.app", home: home) == .temporary && !AppLocation.temporary.shouldOfferMove)
+    check("location: /Applications-something is not /Applications", AppLocation.of(bundlePath: "/Applications Old/SimpleBrowser.app", home: home) == .elsewhere)
+}
+
 print(failures == 0 ? "✔ \(passed) checks passed" : "\(failures) of \(passed + failures) checks failed")
 exit(failures == 0 ? 0 : 1)

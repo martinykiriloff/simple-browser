@@ -128,6 +128,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Pinned tabs and tab groups, for every window.
     let tabOrganizer = TabOrganizer()
+    /// "Move to Applications?" on a launch from anywhere else.
+    let mover = ApplicationMover()
+    private var relaunchingAfterMove = false
     private(set) lazy var tabGroupsMenuFiller = TabGroupsMenuFiller(organizer: tabOrganizer) { [weak self] in self?.frontmostBrowser }
     /// ⌘K, shown over whichever window asked for it.
     private(set) lazy var commandPalette = CommandPaletteController()
@@ -151,6 +154,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Before anything else, and before the session is read: moved, the
+        // app opens again from the Applications folder, and this one quits.
+        if launch.url == nil, !usesScratchData, mover.offerIfNeeded() != nil {
+            relaunchingAfterMove = true
+            return
+        }
         // Before any window: the rule lists compiled last time are looked
         // up while the first tab is being made.
         blocker.start()
@@ -448,12 +457,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        guard !relaunchingAfterMove else { return }
         // Before the windows close, or the session saved would be empty.
         session.end(currentSession())
         terminating = true
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // Quitting to open again from the Applications folder: nothing began, nothing to save.
+        if relaunchingAfterMove { return .terminateNow }
         session.end(currentSession())
         terminating = true
         // Downloads under way are paused first, keeping what they need to

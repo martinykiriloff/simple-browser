@@ -644,6 +644,27 @@ That builds the universal app as version 0.2.0, packages
 `SimpleBrowser-0.2.0.dmg`, signs it for the updater, and creates the GitHub
 Release with the DMG and its `.sig` attached.
 
+**Opening with no warning.** A release is signed with the Developer ID and
+notarized: the app and the DMG are sent to Apple, and the ticket is stapled
+to both, so a downloaded DMG opens with no Gatekeeper warning, online or
+not, and CI checks it the way Gatekeeper will (`spctl`, `stapler validate`).
+The secrets it needs are listed at the top of `build.yml`: the Developer ID
+certificate as a `.p12`, and an App Store Connect API key for `notarytool`.
+A tag build without them fails, unless the repository variable
+`ALLOW_UNNOTARIZED_RELEASE` is `true`. By hand:
+
+```sh
+CODESIGN_IDENTITY="Developer ID Application: …" NOTARY_KEYCHAIN_PROFILE=simplebrowser scripts/make-dmg.sh
+```
+
+The DMG's window shows the app and the Applications folder with an arrow
+between them (`packaging/render-dmg-background.swift`, laid out through the
+Finder; `DMG_LAYOUT=0` makes a plain one). Opened from anywhere but an
+Applications folder (the DMG itself, Downloads), the app offers **Move to
+Applications**: it copies itself there without the download's quarantine,
+so macOS does not run it from a temporary place, where it could not
+update, puts a copy in Downloads in the Trash, and opens again from there.
+
 **Updating.** The app checks the latest GitHub Release a few seconds after
 launch and then at most once a day (App menu → **Check for Updates…** checks
 now). A newer version is offered with **Install Update**, **Remind Me Later**
