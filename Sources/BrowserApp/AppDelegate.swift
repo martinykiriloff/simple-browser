@@ -67,6 +67,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return (profile?.id.description ?? "", profile?.name ?? "")
         }
         controller.currentPageURL = { [weak self] in self?.frontmostBrowser?.currentURL }
+        controller.autofillPane.service = { [weak self] in
+            guard let self else { return nil }
+            return self.passwords(for: self.frontmostBrowser?.profile ?? self.currentProfile)
+        }
         controller.extensionsPane.store = { [weak self] in self?.extensionStore }
         controller.extensionsPane.profile = { [weak self] in self?.frontmostBrowser?.profile ?? self?.currentProfile }
         controller.extensionsPane.running = { [weak self] profile in self?.extensions(for: profile) }
@@ -115,6 +119,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { await running.sync() }
         return running
     }
+
+    /// Settings → AutoFill, from the list under a form's field.
+    @objc func showAutofillSettings(_ sender: Any?) { settingsWindow.show(.autofill) }
 
     /// Settings → Extensions, from an extension's button.
     @objc func showExtensionsSettings(_ sender: Any?) { settingsWindow.show(.extensions) }

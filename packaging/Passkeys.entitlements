@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<!--
+  Passkeys in web pages. Apple grants this to browsers on request; a build
+  signed with it and no provisioning profile that grants it will not launch.
+  scripts/make-dmg.sh uses it only when PASSKEYS_PROVISIONING_PROFILE is set.
+-->
+<dict>
+	<key>com.apple.developer.web-browser.public-key-credential</key>
+	<true/>
+</dict>
+</plist>

@@ -33,13 +33,14 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate, N
     let memorySaverCheckbox = NSButton(checkboxWithTitle: "Put inactive tabs to sleep to save memory", target: nil, action: nil)
     let keepActiveField = NSTextField()
 
-    enum Pane: Int { case general, passwords, privacy, websites, extensions }
+    enum Pane: Int { case general, passwords, autofill, privacy, websites, extensions }
 
     private let tabs = SettingsTabViewController()
     let passwordsPane: PasswordsSettingsPane
     let privacyPane: PrivacySettingsPane
     let websitesPane = WebsitesSettingsPane()
     let extensionsPane = ExtensionsSettingsPane()
+    let autofillPane = AutofillSettingsPane()
 
     init(passwords: PasswordService, blocker: ContentBlocker) {
         passwordsPane = PasswordsSettingsPane(service: passwords)
@@ -61,6 +62,7 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate, N
         tabs.tabStyle = .segmentedControlOnTop
         tabs.addChild(general)
         tabs.addChild(passwordsPane)
+        tabs.addChild(autofillPane)
         tabs.addChild(privacyPane)
         tabs.addChild(websitesPane)
         tabs.addChild(extensionsPane)

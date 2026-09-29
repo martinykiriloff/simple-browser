@@ -354,6 +354,28 @@ function ask() { window.asked = 'asking'; Notification.requestPermission().then(
             self.send(200, json.dumps(filter_requests), "application/json")
         elif path == "/pixel.png":
             self.send(200, PIXEL, "image/png")
+        elif path == "/checkout":
+            # A shop that labels its fields (autocomplete), as Shopify's checkout does.
+            countries = "".join(f"<option value={c}>{n}</option>" for c, n in [("", "Choose…"), ("US", "United States"), ("GB", "United Kingdom"), ("FR", "France")])
+            months = "".join(f"<option value={m:02d}>{m:02d}</option>" for m in range(1, 13))
+            years = "".join(f"<option value={y}>{y}</option>" for y in range(2026, 2036))
+            self.send(200, f"""<!doctype html><title>Checkout</title><form id=checkout method=post action=/checkout>
+<input id=given autocomplete="shipping given-name" placeholder="First name"><input id=family autocomplete="shipping family-name" placeholder="Last name">
+<input id=line1 autocomplete="shipping address-line1"><input id=line2 autocomplete="shipping address-line2"><input id=city autocomplete="shipping address-level2">
+<select id=country autocomplete="shipping country">{countries}</select><input id=zip autocomplete="shipping postal-code"><input id=email type=email autocomplete=email>
+<input id=ccname autocomplete=cc-name><input id=ccnumber autocomplete=cc-number inputmode=numeric>
+<select id=ccmonth autocomplete=cc-exp-month>{months}</select><select id=ccyear autocomplete=cc-exp-year>{years}</select>
+<input id=csc autocomplete=cc-csc><button id=pay>Pay</button></form>""")
+        elif path == "/checkout-legacy":
+            self.send(200, """<!doctype html><title>Old shop</title><form method=post action=/checkout>
+<label>First name <input name=fname id=fname></label><label>Last name <input name=lname id=lname></label>
+<label>Street address <input name=address1 id=address1></label><label>City <input name=city id=city></label>
+<label>ZIP code <input name=zip id=zip></label><label>Card number <input name=ccnum id=ccnum></label>
+<label>Expiration (MM/YY) <input name=ccexp id=ccexp></label><label>CVV <input name=cvv id=cvv></label><button id=buy>Buy</button></form>""")
+        elif path == "/otp":
+            self.send(200, "<!doctype html><title>Verify</title><form><input id=code autocomplete=one-time-code inputmode=numeric><button>Verify</button></form>")
+        elif path == "/webauthn":
+            self.send(200, """<!doctype html><title>Passkey</title><button id=passkey onclick="navigator.credentials.get({publicKey: {challenge: new Uint8Array(32)}}).catch(e => document.title = 'Passkey: ' + e.name)">Sign in with a passkey</button>""")
         elif path == "/page":
             # Any title, for tests that need many tabs told apart; with an icon.
             from urllib.parse import parse_qs, urlparse

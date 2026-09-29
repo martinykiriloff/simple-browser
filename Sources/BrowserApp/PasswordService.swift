@@ -37,22 +37,26 @@ final class PasswordService {
     static let didChange = Notification.Name("SimpleBrowser.passwordsDidChange")
 
     let store: any CredentialStore
+    /// Addresses and cards, beside the passwords and sealed with their key.
+    let autofill: AutofillVault?
     var authenticator: any PasswordAuthenticator
     /// Replaced by the self-test, so it never calls the real service.
     var breachChecker = PwnedPasswords()
 
-    init(store: any CredentialStore, authenticator: any PasswordAuthenticator = DeviceOwnerAuthenticator()) {
+    init(store: any CredentialStore, autofill: AutofillVault? = nil, authenticator: any PasswordAuthenticator = DeviceOwnerAuthenticator()) {
         self.store = store
+        self.autofill = autofill
         self.authenticator = authenticator
     }
 
     /// The real thing: an encrypted file in Application Support, its key in
     /// the login Keychain.
     static func forProfile(_ profile: Profile) -> PasswordService {
-        PasswordService(store: VaultCredentialStore(
-            fileURL: directory(of: profile).appendingPathComponent("Passwords.sbvault"),
-            keyProvider: KeychainVaultKeyProvider(account: profile.id.description)
-        ))
+        let keys = KeychainVaultKeyProvider(account: profile.id.description)
+        let passwords = directory(of: profile).appendingPathComponent("Passwords.sbvault")
+        return PasswordService(store: VaultCredentialStore(fileURL: passwords, keyProvider: keys),
+                               autofill: AutofillVault(fileURL: directory(of: profile).appendingPathComponent("Autofill.sbvault"),
+                                                       keyProvider: keys, passwordVault: passwords))
     }
 
     /// For a deleted profile: the vault file and the Keychain key that opens it.
@@ -69,10 +73,11 @@ final class PasswordService {
     /// For the self-test: a vault and its key in a scratch directory, so a test
     /// run can never read, write or prompt for the user's own passwords.
     static func scratch(in directory: URL) -> PasswordService {
-        PasswordService(store: VaultCredentialStore(
-            fileURL: directory.appendingPathComponent("Passwords.sbvault"),
-            keyProvider: FileVaultKeyProvider(url: directory.appendingPathComponent("key"))
-        ))
+        let keys = FileVaultKeyProvider(url: directory.appendingPathComponent("key"))
+        let passwords = directory.appendingPathComponent("Passwords.sbvault")
+        return PasswordService(store: VaultCredentialStore(fileURL: passwords, keyProvider: keys),
+                               autofill: AutofillVault(fileURL: directory.appendingPathComponent("Autofill.sbvault"),
+                                                       keyProvider: keys, passwordVault: passwords))
     }
 
     func changed() {

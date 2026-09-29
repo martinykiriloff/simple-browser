@@ -38,6 +38,8 @@
 	<string>public.app-category.productivity</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>15.4</string>
+	<key>NSContactsUsageDescription</key>
+	<string>SimpleBrowser fills forms with your own card from Contacts, when you ask it to in Settings → AutoFill.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Websites you allow can use the camera, for video calls and the like. SimpleBrowser asks you first, site by site.</string>
 	<key>NSMicrophoneUsageDescription</key>

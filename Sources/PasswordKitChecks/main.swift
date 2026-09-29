@@ -8,8 +8,8 @@ import PasswordKit
 nonisolated(unsafe) var failures = 0
 nonisolated(unsafe) var passed = 0
 
-func check(_ name: String, _ ok: Bool) {
-    if ok { passed += 1 } else { failures += 1; print("✘ \(name)") }
+func check(_ name: String, _ ok: Bool, _ detail: Any? = nil) {
+    if ok { passed += 1 } else { failures += 1; print("✘ \(name)" + (detail.map { ": \($0)" } ?? "")) }
 }
 
 func expectThrow(_ name: String, _ expected: CredentialStoreError? = nil, _ body: () async throws -> Void) async {
@@ -320,6 +320,84 @@ do {
     check("chromium: …and one written here reads back the same", key.flatMap { k in ChromiumPasswords.encrypt("pässwörd ✓", key: k).flatMap { ChromiumPasswords.decrypt($0, key: k) } } == "pässwörd ✓")
     check("chromium: the wrong secret reads nothing", ChromiumPasswords.key(from: "almonds").flatMap { ChromiumPasswords.decrypt(fromOpenSSL, key: $0) } == nil)
     check("chromium: a value without v10 is not taken", key.flatMap { ChromiumPasswords.decrypt(Data(fromOpenSSL.dropFirst(3)), key: $0) } == nil)
+}
+
+// MARK: AutoFill: addresses and cards
+
+do {
+    typealias F = AutofillFieldDescriptor
+    // A shop that says what each field is (autocomplete), as Shopify's checkout does.
+    let tagged = [F(autocomplete: "shipping given-name"), F(autocomplete: "shipping family-name"), F(autocomplete: "shipping address-line1"),
+                  F(autocomplete: "shipping address-line2"), F(autocomplete: "shipping address-level2"), F(tag: "select", autocomplete: "shipping country"),
+                  F(autocomplete: "shipping postal-code"), F(type: "email", autocomplete: "email"), F(autocomplete: "cc-number"),
+                  F(autocomplete: "cc-exp"), F(autocomplete: "cc-csc"), F(autocomplete: "cc-name")]
+    check("autofill: autocomplete tokens say what a field is", AutofillClassifier.kinds(of: tagged).map { $0?.rawValue ?? "-" } == [
+        "givenName", "familyName", "addressLine1", "addressLine2", "city", "country", "postalCode", "email", "cardNumber", "cardExpiry", "cardSecurityCode", "cardName"])
+    // One that does not: names, ids and labels, as many older shops.
+    let untagged = [F(name: "fname", label: "First name"), F(name: "lname", label: "Last name"), F(name: "address1", label: "Street address"),
+                    F(name: "address2", label: "Apartment, suite, etc."), F(name: "city"), F(tag: "select", name: "state", label: "State"),
+                    F(name: "zip", label: "ZIP code"), F(type: "tel", name: "phone"), F(name: "ccnum", label: "Card number"),
+                    F(tag: "select", name: "exp_month", label: "Expiration month"), F(tag: "select", name: "exp_year", label: "Expiration year"),
+                    F(name: "cvv", label: "Security code"), F(type: "password", name: "password"), F(type: "hidden", name: "token"),
+                    F(name: "search_query", placeholder: "Search")]
+    check("autofill: names and labels, when nothing says", AutofillClassifier.kinds(of: untagged).map { $0?.rawValue ?? "-" } == [
+        "givenName", "familyName", "addressLine1", "addressLine2", "city", "region", "postalCode", "phone", "cardNumber",
+        "cardExpiryMonth", "cardExpiryYear", "cardSecurityCode", "-", "-", "-"], AutofillClassifier.kinds(of: untagged).map { $0?.rawValue ?? "-" })
+    check("autofill: other languages", AutofillClassifier.kind(of: F(name: "plz")) == .postalCode && AutofillClassifier.kind(of: F(label: "Nachname")) == .familyName
+          && AutofillClassifier.kind(of: F(label: "Numéro de carte")) == .cardNumber)
+    check("autofill: a one-time code", AutofillClassifier.kind(of: F(autocomplete: "one-time-code")) == .oneTimeCode)
+
+    let home = AutofillAddress(label: "Home", fullName: "Ada King Lovelace", street: "12 St James's Square\nFlat 3", city: "London", region: "",
+                               postalCode: "SW1Y 4JH", country: "GB", email: "ada@example.com", phone: "+44 20 7946 0000")
+    let visa = AutofillCard(nameOnCard: "A K Lovelace", number: "4242 4242 4242 4242", expiryMonth: 7, expiryYear: 29)
+    check("cards: brand, last four, expiry", visa.brand == .visa && visa.masked == "Visa •••• 4242" && visa.expiry == "07/29" && visa.expiryYear == 2029)
+    check("cards: brands", AutofillCard.brand(of: "5555555555554444") == .mastercard && AutofillCard.brand(of: "378282246310005") == .amex
+          && AutofillCard.brand(of: "2223003122003222") == .mastercard && AutofillCard.brand(of: "6011111111111117") == .discover)
+    check("cards: a mistyped number is not a card", AutofillCard.isPlausible("4242424242424242") && !AutofillCard.isPlausible("4242424242424241") && !AutofillCard.isPlausible("1234"))
+    check("addresses: shown as a line", home.summary == "Home — 12 St James's Square, London")
+
+    let values = AutofillFill.values(for: AutofillClassifier.kinds(of: tagged), address: home, card: visa)
+    check("autofill: name, address and card, in one go", values == [0: "Ada King", 1: "Lovelace", 2: "12 St James's Square", 3: "Flat 3", 4: "London", 5: "GB",
+                                                                      6: "SW1Y 4JH", 7: "ada@example.com", 8: "4242424242424242", 9: "07/29", 11: "A K Lovelace"], values)
+    check("autofill: the security code is never filled", values[10] == nil)
+    let split = AutofillFill.values(for: AutofillClassifier.kinds(of: untagged), address: home, card: visa)
+    check("autofill: month and year apart", split[9] == "07" && split[10] == "2029" && split[2] == "12 St James's Square")
+    check("autofill: an address alone fills no card field", AutofillFill.values(for: AutofillClassifier.kinds(of: tagged), address: home, card: nil)[8] == nil)
+
+    let typed = AutofillFill.captured(kinds: AutofillClassifier.kinds(of: untagged),
+                                      values: ["Grace", "Hopper", "1 Navy Way", "", "Arlington", "VA", "22201", "555-0100", "5555 5555 5555 4444", "12", "2031", "123", "secret", "x", ""])
+    check("autofill: what was typed becomes an address and a card, to save", typed.address?.fullName == "Grace Hopper" && typed.address?.city == "Arlington"
+          && typed.card?.number == "5555555555554444" && typed.card?.expiryYear == 2031 && typed.card?.nameOnCard == "Grace Hopper", typed)
+    check("autofill: …never its security code", !(String(describing: typed).contains("123\"")))
+    let nothing = AutofillFill.captured(kinds: AutofillClassifier.kinds(of: untagged), values: Array(repeating: "", count: untagged.count))
+    check("autofill: an empty form is nothing to save", nothing.address == nil && nothing.card == nil)
+    check("addresses: the same one typed again is the same", home.isSame(as: AutofillAddress(fullName: "ada king lovelace", street: "12 St James's Square", postalCode: "sw1y 4jh")))
+    check("addresses: …and another is another", !home.isSame(as: AutofillAddress(fullName: "Ada King Lovelace", street: "1 Other Road", postalCode: "SW1Y 4JH")))
+
+    let folder = FileManager.default.temporaryDirectory.appendingPathComponent("autofill-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let keys = FileVaultKeyProvider(url: folder.appendingPathComponent("key"))
+    let vault = AutofillVault(fileURL: folder.appendingPathComponent("Autofill.vault"), keyProvider: keys)
+    try await vault.save(home)
+    try await vault.save(visa)
+    let reopened = AutofillVault(fileURL: folder.appendingPathComponent("Autofill.vault"), keyProvider: keys)
+    let back = try await reopened.contents()
+    check("autofill vault: addresses and cards come back", back.addresses == [home] && back.cards == [visa])
+    let raw = try Data(contentsOf: folder.appendingPathComponent("Autofill.vault"))
+    check("autofill vault: nothing readable on disk", raw.range(of: Data("4242".utf8)) == nil && raw.range(of: Data("Lovelace".utf8)) == nil)
+    try await reopened.deleteCard(visa.id)
+    check("autofill vault: a card can go", try await reopened.contents().cards.isEmpty)
+
+    // A missing key, with the passwords' file still there, is never replaced.
+    let passwords = folder.appendingPathComponent("Passwords.vault")
+    try Data("x".utf8).write(to: passwords)
+    let keyless = AutofillVault(fileURL: folder.appendingPathComponent("Other.vault"), keyProvider: FileVaultKeyProvider(url: folder.appendingPathComponent("nokey")),
+                                passwordVault: passwords)
+    var refused = false
+    do { try await keyless.save(home) } catch { refused = true }
+    check("autofill vault: a lost key is reported, not remade over the passwords", refused && !FileManager.default.fileExists(atPath: folder.appendingPathComponent("nokey").path))
+} catch {
+    check("autofill checks", false, error)
 }
 
 print(failures == 0 ? "✔ all \(passed) PasswordKit checks passed" : "✘ \(failures) of \(passed + failures) checks failed")

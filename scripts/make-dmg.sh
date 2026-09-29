@@ -87,6 +87,14 @@ sign_flags=(--force --deep --sign "$CODESIGN_IDENTITY")
 if [ "$CODESIGN_IDENTITY" != "-" ]; then
   sign_flags+=(--options runtime --timestamp)
 fi
+# Passkeys need Apple's browser passkey entitlement, and the provisioning
+# profile that grants it: without the profile the app would not launch, so
+# the entitlement is only added with one.
+if [ -n "${PASSKEYS_PROVISIONING_PROFILE:-}" ]; then
+  echo "▸ With the passkey entitlement ($PASSKEYS_PROVISIONING_PROFILE)"
+  cp "$PASSKEYS_PROVISIONING_PROFILE" "$APP/Contents/embedded.provisionprofile"
+  sign_flags+=(--entitlements "$ROOT/packaging/Passkeys.entitlements")
+fi
 codesign "${sign_flags[@]}" "$APP"
 codesign --verify --deep --strict "$APP"
 

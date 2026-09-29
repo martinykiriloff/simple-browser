@@ -17,7 +17,7 @@ let package = Package(
         .executableTarget(
             name: "BrowserApp",
             dependencies: ["BrowserKit", "InspectKit", "PasswordKit", "TranslateKit", "UpdateKit", "DataKit", "BlockKit"],
-            resources: [.copy("DevToolsUI"), .copy("PasswordAgent"), .copy("TranslateAgent"), .copy("PageMenuAgent"), .copy("ReaderAgent"), .copy("AppIcon")],
+            resources: [.copy("DevToolsUI"), .copy("PasswordAgent"), .copy("TranslateAgent"), .copy("PageMenuAgent"), .copy("ReaderAgent"), .copy("AutofillAgent"), .copy("AppIcon")],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         // Pure Foundation. No WebKit, no AppKit. Buildable and testable on any

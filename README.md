@@ -56,7 +56,7 @@ can be switched off; then nothing typed leaves the Mac until Return.
 
 ```sh
 scripts/test-ui.sh            # the app presses its own keys and buttons, then reports
-scripts/test-features.sh      # tabs, sessions, history, bookmarks, the address bar, blocking, Reader, private windows, downloads, the sidebar, ⌘K, split view, importing and extensions
+scripts/test-features.sh      # tabs, sessions, history, bookmarks, the address bar, blocking, Reader, private windows, downloads, the sidebar, ⌘K, split view, importing, extensions and AutoFill
 scripts/test-downloads.sh     # downloads paused or under way at quit go on after a relaunch
 ```
 
@@ -456,6 +456,37 @@ Chrome's CSV, which Chrome, Edge, Brave and Firefox use.
 swift run PasswordKitChecks   # vault, origins, rules, generator, checkup, leak check
 scripts/test-passwords.sh     # signs in to a fixture site as a person would (takes focus)
 ```
+
+## AutoFill: addresses, cards, codes and passkeys
+
+**Settings → AutoFill** keeps addresses and cards, in an encrypted file
+beside the passwords and sealed with the same Keychain key. A card's
+security code is never kept, and never filled. *Add My Card from Contacts*
+takes your own card from Contacts.
+
+In a form, the fields are recognised by what the page says they are
+(`autocomplete`), and failing that by their names and labels, in English
+and the languages of the largest shops. The list under the field offers
+the whole form first, **Home · Visa •••• 4242**: one choice, confirmed with
+Touch ID or your Mac's password when there is a card in it, fills name,
+address and card, and the page's own code sees each field change as if it
+had been typed. Countries, months and years in drop-downs are matched
+however the shop writes them. An address or card typed into a form is
+offered to be kept; a private window keeps nothing.
+
+**One-time codes**: a field for a code sent by text message or email
+(`autocomplete="one-time-code"`) opens a small field of the Mac's own,
+where macOS AutoFill offers the code that just arrived in Messages or
+Mail; it goes into the page.
+
+**Passkeys**: WebKit signs in with passkeys, from iCloud Keychain or any
+passkey app, once the browser holds Apple's browser passkey entitlement
+and you have allowed it (Settings → AutoFill, or the first time a site asks
+for one). The entitlement is granted by Apple on request; `scripts/make-dmg.sh`
+adds it only when `PASSKEYS_PROVISIONING_PROFILE` points at the profile
+that grants it, since an app signed with it and without the profile does
+not launch. Builds without it say so in Settings, and sites fall back to
+their other ways of signing in.
 
 ## Developer Tools
 

@@ -88,6 +88,8 @@ final class BrowserWindowController: NSWindowController,
     /// Saved sign-ins for this web view: filling, the list under a field, and
     /// the "Save password?" question.
     let passwordCoordinator: PasswordCoordinator
+    /// Addresses, cards and one-time codes in forms.
+    let autofill: AutofillCoordinator
     private weak var passwordsItem: NSToolbarItem?
     /// Google Translate for this page, and the toolbar button that offers it.
     let translator = PageTranslator()
@@ -186,6 +188,7 @@ final class BrowserWindowController: NSWindowController,
         self.recorder = recorder
         self.bridge = InspectorBridge(recorder: recorder, tab: tab)
         self.passwordCoordinator = PasswordCoordinator(service: passwords)
+        self.autofill = AutofillCoordinator(service: passwords)
         self.contextMenu = PageContextMenu(translator: translator, downloads: downloads)
 
         let configuration: WKWebViewConfiguration
@@ -211,6 +214,7 @@ final class BrowserWindowController: NSWindowController,
         // Agent scripts and message handlers must exist before the first document.
         bridge.install(into: configuration)
         passwordCoordinator.install(into: configuration)
+        autofill.install(into: configuration)
         translator.install(into: configuration)
         contextMenu.install(into: configuration)
         reader.install(into: configuration)
@@ -260,6 +264,7 @@ final class BrowserWindowController: NSWindowController,
                 DispatchQueue.main.async { self?.webView.appearance = app.effectiveAppearance }
             }
             passwordCoordinator.allowsSaving = false
+            autofill.allowsSaving = false
         }
         window.minSize = NSSize(width: 480, height: 320)
         window.center()
@@ -345,6 +350,8 @@ final class BrowserWindowController: NSWindowController,
         blocking.showSettings = { NSApp.sendAction(#selector(AppDelegate.showPrivacySettings(_:)), to: nil, from: nil) }
 
         passwordCoordinator.webView = webView
+        autofill.webView = webView
+        autofill.onManage = { NSApp.sendAction(#selector(AppDelegate.showAutofillSettings(_:)), to: nil, from: nil) }
         passwordCoordinator.anchorItem = { [weak self] in self?.passwordsItem }
         passwordCoordinator.onStateChange = { [weak self] in self?.syncPasswordsItem() }
         passwordCoordinator.onManage = {
@@ -803,6 +810,7 @@ final class BrowserWindowController: NSWindowController,
         translator.webView = fresh
         downloads.webView = fresh
         passwordCoordinator.webView = fresh
+        autofill.webView = fresh
         // The inspector and recording panel were bound to the old page.
         madeProtocolBridge = nil
         devTools?.tearDown()
@@ -2130,6 +2138,7 @@ final class BrowserWindowController: NSWindowController,
         devToolsWindow?.close()
         devTools?.tearDown()
         passwordCoordinator.uninstall()
+        autofill.uninstall()
         blocking.tearDown()
         if let downloadsObserver { NotificationCenter.default.removeObserver(downloadsObserver) }
         if let sidebarObserver { NotificationCenter.default.removeObserver(sidebarObserver) }

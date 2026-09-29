@@ -51,6 +51,12 @@ enum BrowserSettings {
         set { store.set(newValue, forKey: offerToSaveKey) }
     }
 
+    /// Offer saved addresses and cards in forms, and to save new ones.
+    static var autofillForms: Bool {
+        get { store.object(forKey: "settings.autofill.forms") as? Bool ?? true }
+        set { store.set(newValue, forKey: "settings.autofill.forms") }
+    }
+
     /// Fill a saved sign-in when the page loads, without being asked. Off
     /// still leaves the list under the field and the key button.
     static var autofillPasswords: Bool {
