@@ -5,7 +5,8 @@ import AppKit
 /// the app delegate.
 @MainActor
 enum MainMenu {
-    static func install(profilesMenuDelegate: NSMenuDelegate, historyMenuDelegate: NSMenuDelegate, bookmarksMenuDelegate: NSMenuDelegate) {
+    static func install(profilesMenuDelegate: NSMenuDelegate, historyMenuDelegate: NSMenuDelegate, bookmarksMenuDelegate: NSMenuDelegate,
+                        tabGroupsMenuDelegate: NSMenuDelegate) {
         let mainMenu = NSMenu()
         mainMenu.addItem(appMenuItem())
         mainMenu.addItem(fileMenuItem())
@@ -15,7 +16,7 @@ enum MainMenu {
         mainMenu.addItem(bookmarksMenuItem(delegate: bookmarksMenuDelegate))
         mainMenu.addItem(profilesMenuItem(delegate: profilesMenuDelegate))
         mainMenu.addItem(developMenuItem())
-        mainMenu.addItem(windowMenuItem())
+        mainMenu.addItem(windowMenuItem(tabGroupsDelegate: tabGroupsMenuDelegate))
         NSApp.mainMenu = mainMenu
     }
 
@@ -54,6 +55,8 @@ enum MainMenu {
                      action: #selector(NSResponder.newWindowForTab(_:)), keyEquivalent: "t")
         menu.addItem(withTitle: "Open Location…",
                      action: #selector(BrowserWindowController.focusAddressBar(_:)), keyEquivalent: "l")
+        menu.addItem(withTitle: "Command Palette…",
+                     action: #selector(BrowserWindowController.showCommandPalette(_:)), keyEquivalent: "k")
         menu.addItem(.separator())
         menu.addItem(withTitle: "Close Tab",
                      action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
@@ -92,6 +95,9 @@ enum MainMenu {
 
     private static func viewMenuItem() -> NSMenuItem {
         let menu = NSMenu(title: "View")
+        let sidebar = menu.addItem(withTitle: "Show Sidebar", action: #selector(BrowserWindowController.toggleBrowserSidebar(_:)), keyEquivalent: "s")
+        sidebar.keyEquivalentModifierMask = [.command, .shift]
+        menu.addItem(.separator())
         menu.addItem(withTitle: "Reload Page",
                      action: #selector(BrowserWindowController.reload(_:)), keyEquivalent: "r")
         let hardReload = menu.addItem(withTitle: "Reload Page From Origin",
@@ -232,11 +238,19 @@ enum MainMenu {
         return wrap(menu)
     }
 
-    private static func windowMenuItem() -> NSMenuItem {
+    private static func windowMenuItem(tabGroupsDelegate: NSMenuDelegate) -> NSMenuItem {
         let menu = NSMenu(title: "Window")
         menu.addItem(withTitle: "Minimize",
                      action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
         menu.addItem(withTitle: "Zoom", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
+        menu.addItem(.separator())
+        menu.addItem(withTitle: "Pin Tab", action: #selector(BrowserWindowController.togglePinTab(_:)), keyEquivalent: "")
+        menu.addItem(withTitle: "New Tab Group", action: #selector(BrowserWindowController.newTabGroup(_:)), keyEquivalent: "")
+        let groups = NSMenu(title: "Move Tab to Group")
+        groups.delegate = tabGroupsDelegate
+        let groupsItem = menu.addItem(withTitle: "Move Tab to Group", action: nil, keyEquivalent: "")
+        groupsItem.submenu = groups
+        menu.addItem(withTitle: "Remove Tab from Group", action: #selector(BrowserWindowController.removeTabFromGroup(_:)), keyEquivalent: "")
         menu.addItem(.separator())
         let downloads = menu.addItem(withTitle: "Downloads", action: #selector(AppDelegate.showDownloadsWindow(_:)), keyEquivalent: "l")
         downloads.keyEquivalentModifierMask = [.command, .option]
@@ -272,4 +286,28 @@ struct UserAgentPreset {
         UserAgentPreset(title: "Safari — iPad",
                         value: "Mozilla/5.0 (iPad; CPU OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"),
     ]
+}
+
+/// Window → Move Tab to Group: the front window's groups, filled as it opens.
+@MainActor
+final class TabGroupsMenuFiller: NSObject, NSMenuDelegate {
+    let organizer: TabOrganizer
+    let front: () -> BrowserWindowController?
+
+    init(organizer: TabOrganizer, front: @escaping () -> BrowserWindowController?) {
+        self.organizer = organizer
+        self.front = front
+    }
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        menu.removeAllItems()
+        guard let browser = front() else { return }
+        for group in organizer.groups(besides: browser) {
+            let name = group.displayName(firstTab: organizer.tabs(in: group.id).first?.window?.title)
+            menu.addItem(ClosureMenuItem(name, state: browser.groupID == group.id ? .on : .off,
+                                         image: TabSidebarController.dot(group.color)) { [organizer] in organizer.add([browser], to: group.id) })
+        }
+        if !menu.items.isEmpty { menu.addItem(.separator()) }
+        menu.addItem(ClosureMenuItem("New Group") { browser.newTabGroup(nil) })
+    }
 }

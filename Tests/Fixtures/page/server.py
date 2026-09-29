@@ -354,6 +354,12 @@ function ask() { window.asked = 'asking'; Notification.requestPermission().then(
             self.send(200, json.dumps(filter_requests), "application/json")
         elif path == "/pixel.png":
             self.send(200, PIXEL, "image/png")
+        elif path == "/page":
+            # Any title, for tests that need many tabs told apart; with an icon.
+            from urllib.parse import parse_qs, urlparse
+            from html import escape
+            title = escape(parse_qs(urlparse(self.path).query).get("title", ["Page"])[0])
+            self.send(200, f"<!doctype html><title>{title}</title><link rel=icon href=/pixel.png><h1>{title}</h1>")
         elif path == "/report.zip":
             self.send(200, b"PK\x05\x06" + b"\x00" * 18, "application/zip",
                       {"Content-Disposition": 'attachment; filename="rapport.zip"'})

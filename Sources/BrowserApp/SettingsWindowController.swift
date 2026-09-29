@@ -29,6 +29,7 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate, N
     let askWhereCheckbox = NSButton(checkboxWithTitle: "Ask where to save each file", target: nil, action: nil)
     /// Replaces the folder panel, for the self-test.
     var chooseDownloadFolder: (() -> URL?)?
+    let tabsPopUp = NSPopUpButton(frame: .zero, pullsDown: false)
     let memorySaverCheckbox = NSButton(checkboxWithTitle: "Put inactive tabs to sleep to save memory", target: nil, action: nil)
     let keepActiveField = NSTextField()
 
@@ -132,6 +133,13 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate, N
         startupPopUp.action = #selector(startupChanged(_:))
         startupPopUp.setAccessibilityLabel("SimpleBrowser opens with")
 
+        let tabsTitle = NSTextField(labelWithString: "Tabs:")
+        tabsTitle.alignment = .right
+        tabsPopUp.addItems(withTitles: ["In a bar above the page", "In the sidebar"])
+        tabsPopUp.target = self
+        tabsPopUp.action = #selector(tabsLayoutChanged(_:))
+        tabsPopUp.setAccessibilityLabel("Tabs")
+
         let engineTitle = NSTextField(labelWithString: "Search engine:")
         engineTitle.alignment = .right
         enginePopUp.addItems(withTitles: SearchEngine.all.map(\.name) + ["Custom…"])
@@ -172,6 +180,7 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate, N
             [NSGridCell.emptyContentView, buttons],
             [NSGridCell.emptyContentView, help],
             [newWindowTitle, newWindowPopUp],
+            [tabsTitle, tabsPopUp],
             [engineTitle, enginePopUp],
             [NSGridCell.emptyContentView, customEngineField],
             [NSGridCell.emptyContentView, suggestionsCheckbox],
@@ -197,15 +206,17 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate, N
         grid.row(at: 5).topPadding = 10
         grid.row(at: 5).yPlacement = .center
         grid.cell(for: newWindowPopUp)?.xPlacement = .leading
-        grid.cell(for: enginePopUp)?.xPlacement = .leading
-        grid.row(at: 6).topPadding = 12
+        grid.cell(for: tabsPopUp)?.xPlacement = .leading
         grid.row(at: 6).yPlacement = .center
+        grid.cell(for: enginePopUp)?.xPlacement = .leading
+        grid.row(at: 7).topPadding = 12
+        grid.row(at: 7).yPlacement = .center
         grid.cell(for: suggestionsCheckbox)?.xPlacement = .leading
-        grid.row(at: 9).topPadding = 12
-        grid.row(at: 9).yPlacement = .center
+        grid.row(at: 10).topPadding = 12
+        grid.row(at: 10).yPlacement = .center
         grid.cell(for: downloadFolderPopUp)?.xPlacement = .leading
         grid.cell(for: askWhereCheckbox)?.xPlacement = .leading
-        grid.row(at: 11).topPadding = 12
+        grid.row(at: 12).topPadding = 12
         grid.cell(for: memorySaverCheckbox)?.xPlacement = .leading
         grid.translatesAutoresizingMaskIntoConstraints = false
 
@@ -308,6 +319,7 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate, N
         homepageField.stringValue = BrowserSettings.homepage
         let contents = BrowserSettings.NewWindowContent.allCases
         newWindowPopUp.selectItem(at: contents.firstIndex(of: BrowserSettings.newWindowContent) ?? 0)
+        tabsPopUp.selectItem(at: BrowserSettings.tabsInSidebar ? 1 : 0)
         updateResolved()
     }
 
@@ -353,6 +365,16 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate, N
         homepageField.stringValue = url.absoluteString
         BrowserSettings.homepage = url.absoluteString
         updateResolved()
+    }
+
+    /// Tabs in the sidebar show it, and hide the bar; back in the bar, the
+    /// sidebar goes too, until ⇧⌘S brings it back.
+    @objc private func tabsLayoutChanged(_ sender: Any?) {
+        let inSidebar = tabsPopUp.indexOfSelectedItem == 1
+        guard inSidebar != BrowserSettings.tabsInSidebar else { return }
+        BrowserSettings.tabsInSidebar = inSidebar
+        BrowserSettings.sidebarShown = inSidebar
+        NotificationCenter.default.post(name: BrowserWindowController.sidebarDidChange, object: nil)
     }
 
     @objc private func newWindowContentChanged(_ sender: Any?) {

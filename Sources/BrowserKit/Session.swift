@@ -8,10 +8,25 @@ public struct SessionSnapshot: Codable, Equatable, Sendable {
         public var title: String
         /// `WKWebView.interactionState`: back/forward list, scroll, form state.
         public var state: Data?
-        public init(url: URL?, title: String, state: Data?) {
+        /// The window's group this tab is in, if any: one of `Window.groups`.
+        public var groupID: TabGroupID?
+        public var isPinned: Bool
+        public init(url: URL?, title: String, state: Data?, groupID: TabGroupID? = nil, isPinned: Bool = false) {
             self.url = url
             self.title = title
             self.state = state
+            self.groupID = groupID
+            self.isPinned = isPinned
+        }
+
+        // Sessions written before groups and pins still read.
+        public init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            url = try container.decodeIfPresent(URL.self, forKey: .url)
+            title = try container.decode(String.self, forKey: .title)
+            state = try container.decodeIfPresent(Data.self, forKey: .state)
+            groupID = try container.decodeIfPresent(TabGroupID.self, forKey: .groupID)
+            isPinned = try container.decodeIfPresent(Bool.self, forKey: .isPinned) ?? false
         }
     }
 
@@ -20,11 +35,23 @@ public struct SessionSnapshot: Codable, Equatable, Sendable {
         public var frame: CodableRect
         public var tabs: [Tab]
         public var selected: Int
-        public init(profileID: ProfileID, frame: CodableRect, tabs: [Tab], selected: Int) {
+        /// Names, colours and whether each is collapsed, for the tabs' `groupID`s.
+        public var groups: [TabGroup]
+        public init(profileID: ProfileID, frame: CodableRect, tabs: [Tab], selected: Int, groups: [TabGroup] = []) {
             self.profileID = profileID
             self.frame = frame
             self.tabs = tabs
             self.selected = selected
+            self.groups = groups
+        }
+
+        public init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            profileID = try container.decode(ProfileID.self, forKey: .profileID)
+            frame = try container.decode(CodableRect.self, forKey: .frame)
+            tabs = try container.decode([Tab].self, forKey: .tabs)
+            selected = try container.decode(Int.self, forKey: .selected)
+            groups = try container.decodeIfPresent([TabGroup].self, forKey: .groups) ?? []
         }
     }
 

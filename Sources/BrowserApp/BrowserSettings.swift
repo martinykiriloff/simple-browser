@@ -212,6 +212,46 @@ enum BrowserSettings {
         set { store.set(newValue, forKey: favoritesBarKey) }
     }
 
+    // MARK: Tabs
+
+    private static let tabsInSidebarKey = "settings.tabs.inSidebar"
+    private static let sidebarShownKey = "settings.sidebar.shown"
+    private static let sidebarWidthKey = "settings.sidebar.width"
+    private static let savedGroupsKey = "settings.tabs.savedGroups"
+
+    /// Tabs down the side of the window rather than in a bar above the page.
+    static var tabsInSidebar: Bool {
+        get { store.bool(forKey: tabsInSidebarKey) }
+        set { store.set(newValue, forKey: tabsInSidebarKey) }
+    }
+
+    /// The sidebar (⇧⌘S). With tabs in the sidebar it is shown unless hidden.
+    static var sidebarShown: Bool {
+        get { store.object(forKey: sidebarShownKey) as? Bool ?? tabsInSidebar }
+        set { store.set(newValue, forKey: sidebarShownKey) }
+    }
+
+    static var sidebarWidth: Double {
+        get { store.object(forKey: sidebarWidthKey) as? Double ?? 250 }
+        set { store.set(min(max(newValue, SidebarWidth.minimum), SidebarWidth.maximum), forKey: sidebarWidthKey) }
+    }
+
+    enum SidebarWidth {
+        static let minimum = 180.0
+        static let maximum = 420.0
+    }
+
+    /// Groups kept after their tabs are closed, to open again: per profile.
+    static func savedGroups(profile: String) -> [SavedTabGroup] {
+        guard let data = store.data(forKey: savedGroupsKey + "." + profile) else { return [] }
+        return (try? JSONDecoder().decode([SavedTabGroup].self, from: data)) ?? []
+    }
+
+    static func setSavedGroups(_ groups: [SavedTabGroup], profile: String) {
+        if groups.isEmpty { store.removeObject(forKey: savedGroupsKey + "." + profile); return }
+        store.set(try? JSONEncoder().encode(groups), forKey: savedGroupsKey + "." + profile)
+    }
+
     // MARK: Startup
 
     private static let startupKey = "settings.startup"
@@ -282,4 +322,16 @@ enum BrowserSettings {
             else { store.set(newValue.rawValue, forKey: newWindowKey) }
         }
     }
+}
+
+/// A group saved to open again: its name, colour and pages.
+struct SavedTabGroup: Codable, Equatable {
+    struct Page: Codable, Equatable {
+        var url: URL
+        var title: String
+    }
+    let id: TabGroupID
+    var name: String
+    var color: GroupColor
+    var pages: [Page]
 }

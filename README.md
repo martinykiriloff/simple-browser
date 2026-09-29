@@ -56,7 +56,7 @@ can be switched off; then nothing typed leaves the Mac until Return.
 
 ```sh
 scripts/test-ui.sh            # the app presses its own keys and buttons, then reports
-scripts/test-features.sh      # tabs, sessions, history, bookmarks, the address bar, blocking, Reader, private windows, downloads
+scripts/test-features.sh      # tabs, sessions, history, bookmarks, the address bar, blocking, Reader, private windows, downloads, the sidebar and ⌘K
 scripts/test-downloads.sh     # downloads paused or under way at quit go on after a relaunch
 ```
 
@@ -77,6 +77,37 @@ It uses a scratch settings suite, so your own homepage is never touched. The
 app takes focus for about half a minute, and the screen has to be unlocked:
 macOS will not make a window key behind the lock screen, which the test
 reports as an environment problem rather than a failure.
+
+## Tabs, groups and the sidebar
+
+**View → Show Sidebar** (⇧⌘S, or the sidebar button at the left of the
+toolbar) opens a sidebar beside the page: pinned tabs as icons at the top,
+then the window's tabs with their groups, then saved groups, favorites and
+the reading list. A click shows a tab, ⌘- and ⇧-clicks choose several, and
+tabs are dragged to reorder them, into a group or out of it. The divider
+sets the width for every window. **Settings → General → Tabs** puts the
+tabs *In the sidebar* instead of in a bar above the page: the tab bar goes,
+and comes back whenever the sidebar is hidden, so tabs are never out of
+reach.
+
+**Tab groups**: *New Tab Group* (Window menu, or right-click tabs in the
+sidebar) asks for a name and a colour at once. A group's tabs stay side by
+side, and carry its colour in the tab bar; in the sidebar a group
+collapses to its name, keeping the tab in front in sight. A page opened
+from a grouped tab joins the group; ⌘T opens a tab of its own. *Save
+Group* keeps a group after its tabs are closed, under *Saved Groups*, to
+open again as it was. **Pin Tab** puts a tab first, as an icon in the
+sidebar. Groups and pins come back with the session.
+
+**File → Command Palette** (⌘K) is one box for everything: open tabs,
+every command in the menu bar ("Translate Page", "Clear History…", "New
+Private Window", "Switch to Profile “Work”"), saved groups, bookmarks and
+history, found by fuzzy search (`np w` finds *New Private Window*). ↑ ↓
+move, Return opens, ⌘1–⌘9 open the first nine results, Esc closes. With
+nothing typed each tab shows its key, such as **G ⌘3**: G then ⌘3 opens
+it. So with a hundred tabs open, any of them is two keys away after ⌘K,
+which `BrowserKitChecks` measures against a hundred tabs as people have
+them, alike on purpose, and every menu command.
 
 ## Find, zoom and Reader
 

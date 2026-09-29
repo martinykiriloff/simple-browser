@@ -71,6 +71,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return controller
     }()
 
+    /// Pinned tabs and tab groups, for every window.
+    let tabOrganizer = TabOrganizer()
+    private(set) lazy var tabGroupsMenuFiller = TabGroupsMenuFiller(organizer: tabOrganizer) { [weak self] in self?.frontmostBrowser }
+    /// ⌘K, shown over whichever window asked for it.
+    private(set) lazy var commandPalette = CommandPaletteController()
+
     /// The profile of the browser window in front, or the one used last.
     var currentProfile: Profile { frontmostBrowser?.profile ?? profiles.lastUsed }
 
@@ -84,8 +90,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Before any window: the rule lists compiled last time are looked
         // up while the first tab is being made.
         blocker.start()
+        tabOrganizer.controllers = { [weak self] in self?.controllers ?? [] }
+        tabOrganizer.openTabs = { [weak self] browser, urls in
+            guard let self else { return [] }
+            if urls.isEmpty { return [self.newTab(beside: browser)] }
+            var previous = browser
+            return urls.map { url in
+                previous = self.newTab(beside: previous, url: url, inFront: false)
+                return previous
+            }
+        }
         MainMenu.install(profilesMenuDelegate: profilesMenuFiller, historyMenuDelegate: historyMenuFiller,
-                         bookmarksMenuDelegate: bookmarksMenuFiller)
+                         bookmarksMenuDelegate: bookmarksMenuFiller, tabGroupsMenuDelegate: tabGroupsMenuFiller)
         NotificationCenter.default.addObserver(forName: .bookmarksDidChange, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
@@ -320,6 +336,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             tab.showWindow(nil)
         }
+        // A page opened from a tab in a group joins the group, as in Chrome;
+        // ⌘T opens a tab of its own, after the group.
+        if let browser, let group = browser.groupID, url != nil || configuration != nil {
+            tab.groupID = group
+        }
+        if let browser { tabOrganizer.arrange(besides: browser) }
+        tabOrganizer.changed()
         if let state {
             tab.interactionState = state
         } else if let url {
@@ -680,6 +703,67 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if newTab || browser == nil { self.newTab(beside: browser, url: url) } else { browser?.load(url); browser?.showWindow(nil) }
     }
 
+    // MARK: - Command palette
+
+    /// ⌘K over `browser`'s window; ⌘K again puts it away.
+    func showCommandPalette(over browser: BrowserWindowController) {
+        if commandPalette.isShown {
+            commandPalette.close(returningTo: browser)
+            return
+        }
+        commandPalette.source = { [weak self, weak browser] query in
+            guard let self, let browser else { return [] }
+            return self.paletteEntries(query, for: browser)
+        }
+        commandPalette.show(over: browser)
+    }
+
+    /// The tabs of the window's profile (private with private), every
+    /// command the menu bar would allow for it, saved groups, and the
+    /// bookmarks and history that match what is typed.
+    func paletteEntries(_ query: String, for browser: BrowserWindowController) -> [CommandPaletteController.Entry] {
+        typealias Entry = CommandPaletteController.Entry
+        let profile = browser.profile
+        var entries: [Entry] = []
+        for tab in controllers where tab.profile.id == profile.id && tab.isPrivate == browser.isPrivate {
+            let title = tab.window?.title ?? ""
+            entries.append(Entry(item: .init(id: "tab:\(tab.tab)", kind: .tab, title: title.isEmpty ? "New Tab" : title,
+                                             detail: tab.currentURL?.absoluteString ?? "", lastUsed: tab.lastActive),
+                                 icon: Favicons.shared.icon(for: tab.currentURL, title: title), shortcut: "") { [weak tab] in
+                tab?.window?.makeKeyAndOrderFront(nil)
+            })
+        }
+        let commandIcon = NSImage(systemSymbolName: "command", accessibilityDescription: nil)
+        for command in MenuCommands.all(validatingFor: browser) {
+            entries.append(Entry(item: .init(id: "command:\(command.path)›\(command.title)", kind: .command, title: command.title, detail: command.path),
+                                 icon: commandIcon, shortcut: command.shortcut) { [weak browser] in MenuCommands.run(command, for: browser) })
+        }
+        if !browser.isPrivate {
+            for group in tabOrganizer.savedGroups(profile: profile) where tabOrganizer.groups[group.id] == nil {
+                let title = group.name.isEmpty ? (group.pages.first?.title ?? "Group") : group.name
+                entries.append(Entry(item: .init(id: "saved:\(group.id)", kind: .savedGroup, title: title),
+                                     icon: TabSidebarController.dot(group.color, hollow: true), shortcut: "") { [weak self, weak browser] in
+                    guard let browser else { return }
+                    self?.tabOrganizer.openSaved(group, besides: browser)
+                })
+            }
+        }
+        let trimmed = query.trimmingCharacters(in: .whitespaces)
+        guard trimmed.count > 1 else { return entries }
+        let open = { [weak browser] (url: URL) in browser?.load(url) }
+        for node in (try? bookmarks(for: profile)?.search(trimmed, limit: 20)) ?? [] {
+            guard let url = node.url else { continue }
+            entries.append(Entry(item: .init(id: "bookmark:\(node.id)", kind: .bookmark, title: node.title, detail: url.absoluteString),
+                                 icon: Favicons.shared.icon(for: url, title: node.title), shortcut: "") { open(url) })
+        }
+        for page in (try? history(for: profile)?.pages(matching: trimmed, limit: 20)) ?? [] {
+            entries.append(Entry(item: .init(id: "history:\(page.url.absoluteString)", kind: .history, title: page.title.isEmpty ? page.url.absoluteString : page.title,
+                                             detail: page.url.absoluteString),
+                                 icon: Favicons.shared.icon(for: page.url, title: page.title), shortcut: "") { open(page.url) })
+        }
+        return entries
+    }
+
     // MARK: - Session
 
     /// Every window and its tabs, in tab-bar order.
@@ -708,7 +792,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             profileID: controller.profile.id,
             frame: CodableRect(x: frame.minX, y: frame.minY, width: frame.width, height: frame.height),
             tabs: tabs.map(\.sessionTab),
-            selected: tabs.firstIndex { $0.window === selectedWindow } ?? 0)
+            selected: tabs.firstIndex { $0.window === selectedWindow } ?? 0,
+            groups: tabs.first.map(tabOrganizer.groups(besides:)) ?? [])
     }
 
     /// Brings windows back as they were: same profile, same frame, same tabs
@@ -746,8 +831,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 } else {
                     controller.restoreAsleep(url: tab.url, title: tab.title, state: tab.state)
                 }
+                controller.isPinned = tab.isPinned
+                controller.groupID = tab.groupID.flatMap { id in saved.groups.contains { $0.id == id } ? id : nil }
                 created.append(controller)
             }
+            tabOrganizer.restore(saved.groups)
             if created.indices.contains(saved.selected) {
                 created[saved.selected].window?.makeKeyAndOrderFront(nil)
                 fronts.append(created[saved.selected])
@@ -939,6 +1027,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return self.newTab(beside: controller, configuration: configuration).pageWebView
         }
         controller.onWindowClosing = { [weak self] controller in self?.rememberClosedWindow(controller) }
+        controller.organizer = tabOrganizer
+        controller.onCommandPalette = { [weak self, weak controller] in
+            guard let self, let controller else { return }
+            self.showCommandPalette(over: controller)
+        }
+        controller.makeSidebar = { [weak self, weak controller] in
+            guard let self else { return TabSidebarController(organizer: TabOrganizer()) }
+            let sidebar = TabSidebarController(organizer: self.tabOrganizer)
+            sidebar.browser = controller
+            sidebar.bookmarks = { [weak self] in isPrivate ? nil : self?.bookmarks(for: profile) }
+            sidebar.open = { [weak self, weak controller] url, newTab in
+                if newTab { self?.newTab(beside: controller, url: url, inFront: false) } else { controller?.load(url) }
+            }
+            sidebar.newTab = { [weak self, weak controller] in self?.newTab(beside: controller) }
+            sidebar.editGroup = { [weak controller] id, anchor in controller?.editGroup(id, from: anchor) }
+            return sidebar
+        }
         // A private window writes no history, and its closed tabs and
         // windows cannot be reopened: they are gone.
         if !isPrivate {

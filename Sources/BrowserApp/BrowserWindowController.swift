@@ -18,6 +18,7 @@ final class BrowserWindowController: NSWindowController,
                                      NSToolbarItemValidation,
                                      NSMenuItemValidation,
                                      NSTextFieldDelegate,
+                                     NSSplitViewDelegate,
                                      WKNavigationDelegate,
                                      WKUIDelegate {
 
@@ -151,6 +152,22 @@ final class BrowserWindowController: NSWindowController,
     /// Called as the tab closes, with what "Reopen Closed Tab" needs.
     var onTabClosed: ((URL?, Data?, String) -> Void)?
 
+    /// The group this tab is in, and whether it is pinned: see `TabOrganizer`.
+    var groupID: TabGroupID?
+    var isPinned = false
+    weak var organizer: TabOrganizer?
+    /// ⌘K, which the app delegate shows over this window.
+    var onCommandPalette: (() -> Void)?
+    /// Makes this window's sidebar, the first time it is shown.
+    var makeSidebar: (() -> TabSidebarController)?
+    private(set) var sidebar: TabSidebarController?
+    /// Holds the sidebar beside the page and its DevTools.
+    private let sidebarSplit = NSSplitView()
+    private var tabAccessoryKey = ""
+    private var sidebarObserver: NSObjectProtocol?
+    /// What the sidebar last showed for this tab, so it reloads only on a change.
+    private var listedAs = ""
+
     init(profile: Profile, recorder: InspectorRecorder, passwords: PasswordService,
          configuration popupConfiguration: WKWebViewConfiguration? = nil, startPage: StartPageSchemeHandler? = nil,
          blocker: ContentBlocker? = nil, privateSession: PrivateSession? = nil, downloads manager: DownloadManager? = nil) {
@@ -255,7 +272,11 @@ final class BrowserWindowController: NSWindowController,
         splitView.isVertical = false
         splitView.dividerStyle = .thin
         splitView.addArrangedSubview(pageContainer)
-        window.contentView = splitView
+        sidebarSplit.isVertical = true
+        sidebarSplit.dividerStyle = .thin
+        sidebarSplit.delegate = self
+        sidebarSplit.addArrangedSubview(splitView)
+        window.contentView = sidebarSplit
 
         webView.navigationDelegate = self
         webView.uiDelegate = self
@@ -357,6 +378,10 @@ final class BrowserWindowController: NSWindowController,
             return event
         }
 
+        sidebarObserver = NotificationCenter.default.addObserver(forName: Self.sidebarDidChange, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.syncSidebar() }
+        }
+
         if let error = passwordCoordinator.installError {
             recorder.record(.console(ConsoleEntry(level: .error, message: "Password manager is off for this window: \(error).")), tab: tab)
         }
@@ -385,11 +410,12 @@ final class BrowserWindowController: NSWindowController,
     func acceptTabs() {
         guard let window else { return }
         window.tabbingMode = .automatic
-        if window.tabGroup?.isTabBarVisible == false { window.toggleTabBar(nil) }
+        syncSidebar()
         observeSelection()
     }
 
     private var selectionObservation: NSKeyValueObservation?
+    private var orderObservation: NSKeyValueObservation?
     private weak var observedGroup: NSWindowTabGroup?
 
     /// Wakes the tab the moment its group selects it: the one signal that is
@@ -404,6 +430,17 @@ final class BrowserWindowController: NSWindowController,
                 guard let self, selected === self.window else { return }
                 self.lastActive = Date()
                 self.wake()
+                self.sidebar?.reloadIfStale()
+                self.syncTabBar()
+                self.organizer?.changed()
+            }
+        }
+        // Tabs dragged in the strip: the sidebar follows, and groups stay together.
+        orderObservation = group.observe(\.windows, options: [.new]) { [weak self] _, _ in
+            DispatchQueue.main.async {
+                guard let self, let organizer = self.organizer else { return }
+                organizer.arrange(besides: self)
+                organizer.changed()
             }
         }
     }
@@ -435,6 +472,142 @@ final class BrowserWindowController: NSWindowController,
     @objc func closeWindowAndTabs(_ sender: Any?) {
         onWindowClosing?(self)
         for tab in window?.tabbedWindows ?? [window].compactMap({ $0 }) { tab.performClose(sender) }
+    }
+
+    // MARK: - Sidebar
+
+    /// The sidebar was shown or hidden, resized, or tabs moved to or from it.
+    static let sidebarDidChange = Notification.Name("BrowserWindowController.sidebarDidChange")
+
+    /// Shows or hides the sidebar as the settings say, and the tab bar with
+    /// it: the bar is hidden only while the tabs are in the sidebar.
+    func syncSidebar() {
+        if BrowserSettings.sidebarShown {
+            if sidebar == nil { sidebar = makeSidebar?() }
+            if let view = sidebar?.view, view.superview !== sidebarSplit {
+                sidebarSplit.insertArrangedSubview(view, at: 0)
+                sidebarSplit.setHoldingPriority(.defaultHigh, forSubviewAt: 0)
+                sidebarSplit.setHoldingPriority(.defaultLow, forSubviewAt: 1)
+            }
+            applySidebarWidth()
+            sidebar?.reload()
+        } else if let view = sidebar?.view, view.superview === sidebarSplit {
+            sidebarSplit.removeArrangedSubview(view)
+            view.removeFromSuperview()
+        }
+        syncTabBar()
+    }
+
+    var isSidebarShown: Bool { sidebar?.view.superview === sidebarSplit }
+
+    /// The tab bar shows unless the tabs are in the sidebar. macOS keeps a
+    /// window's tab bar up while it has more than one tab, whatever
+    /// `toggleTabBar` is told, so the bar's own title bar accessory is
+    /// hidden instead: each tab window has one.
+    func syncTabBar() {
+        guard let window, window.tabbingMode != .disallowed else { return }
+        let inSidebar = BrowserSettings.tabsInSidebar && BrowserSettings.sidebarShown
+        // The bar of a window with one tab is shown by toggling, once for
+        // the group: each tab toggling in turn would undo the other.
+        if !inSidebar, let group = window.tabGroup, (group.selectedWindow ?? group.windows.first) === window, !group.isTabBarVisible {
+            window.toggleTabBar(nil)
+        }
+        for accessory in window.titlebarAccessoryViewControllers where Self.isTabBar(accessory) && accessory.isHidden != inSidebar {
+            accessory.isHidden = inSidebar
+        }
+    }
+
+    /// Whether the tab bar is on screen above this tab.
+    var isTabBarShown: Bool {
+        guard window?.tabGroup?.isTabBarVisible == true else { return false }
+        return window?.titlebarAccessoryViewControllers.contains { Self.isTabBar($0) && !$0.isHidden } ?? false
+    }
+
+    /// The favorites bar is the app's only accessory; any other is AppKit's,
+    /// for the tabs. Not told by what it holds: hidden, it lets go of it.
+    private static func isTabBar(_ accessory: NSTitlebarAccessoryViewController) -> Bool {
+        !(accessory is FavoritesBarController)
+    }
+
+    private var applyingWidth = false
+
+    private func applySidebarWidth() {
+        guard isSidebarShown else { return }
+        applyingWidth = true
+        sidebarSplit.layoutSubtreeIfNeeded()
+        sidebarSplit.setPosition(BrowserSettings.sidebarWidth, ofDividerAt: 0)
+        applyingWidth = false
+    }
+
+    func splitView(_ splitView: NSSplitView, constrainMinCoordinate proposedMinimumPosition: CGFloat, ofSubviewAt dividerIndex: Int) -> CGFloat {
+        splitView === sidebarSplit ? BrowserSettings.SidebarWidth.minimum : proposedMinimumPosition
+    }
+
+    func splitView(_ splitView: NSSplitView, constrainMaxCoordinate proposedMaximumPosition: CGFloat, ofSubviewAt dividerIndex: Int) -> CGFloat {
+        splitView === sidebarSplit ? min(BrowserSettings.SidebarWidth.maximum, splitView.bounds.width - 300) : proposedMaximumPosition
+    }
+
+    func splitView(_ splitView: NSSplitView, canCollapseSubview subview: NSView) -> Bool { false }
+
+    /// The divider dragged: every window's sidebar takes the new width, so
+    /// switching tabs does not move the page.
+    func splitViewDidResizeSubviews(_ notification: Notification) {
+        guard (notification.object as? NSSplitView) === sidebarSplit, !applyingWidth, isSidebarShown,
+              window?.isKeyWindow == true, let width = sidebar?.view.frame.width,
+              width >= BrowserSettings.SidebarWidth.minimum, abs(width - BrowserSettings.sidebarWidth) > 0.5 else { return }
+        BrowserSettings.sidebarWidth = width
+        NotificationCenter.default.post(name: Self.sidebarDidChange, object: self)
+    }
+
+    /// View → Show Sidebar (⇧⌘S), and the toolbar button.
+    @objc func toggleBrowserSidebar(_ sender: Any?) {
+        BrowserSettings.sidebarShown.toggle()
+        NotificationCenter.default.post(name: Self.sidebarDidChange, object: self)
+    }
+
+    /// File → Command Palette (⌘K).
+    @objc func showCommandPalette(_ sender: Any?) { onCommandPalette?() }
+
+    /// The group's colour, or a pin, on the tab in the strip.
+    func syncTabAccessory() {
+        guard let window else { return }
+        let group = organizer?.group(groupID)
+        let key = isPinned ? "pin" : group.map { "group.\($0.color.rawValue)" } ?? ""
+        guard key != tabAccessoryKey else { return }
+        tabAccessoryKey = key
+        if isPinned {
+            let pin = NSImageView(image: NSImage(systemSymbolName: "pin.fill", accessibilityDescription: "Pinned") ?? NSImage())
+            pin.symbolConfiguration = .init(pointSize: 9, weight: .regular)
+            pin.contentTintColor = .secondaryLabelColor
+            window.tab.accessoryView = pin
+        } else if let group {
+            // A layer, not an image: the tab bar draws images in its own grey.
+            let dot = NSView(frame: NSRect(x: 0, y: 0, width: 8, height: 8))
+            dot.wantsLayer = true
+            dot.layer?.backgroundColor = group.color.nsColor.cgColor
+            dot.layer?.cornerRadius = 4
+            dot.widthAnchor.constraint(equalToConstant: 8).isActive = true
+            dot.heightAnchor.constraint(equalToConstant: 8).isActive = true
+            dot.setAccessibilityLabel("In group \(group.name)")
+            window.tab.accessoryView = dot
+        } else {
+            window.tab.accessoryView = nil
+        }
+    }
+
+    /// For the self-test: what the tab in the strip carries.
+    var tabAccessory: String { tabAccessoryKey }
+
+    /// The page's icon, for the sidebar and ⌘K.
+    private func loadFavicon() {
+        guard let url = webView.url, url.scheme?.hasPrefix("http") == true else { return }
+        let webView = webView
+        Task {
+            let href = try? await webView.callAsyncJavaScript(
+                "const link = document.querySelector('link[rel~=\"icon\" i]'); return link ? link.href : null",
+                arguments: [:], in: nil, contentWorld: .defaultClient) as? String
+            Favicons.shared.load(href.flatMap(URL.init(string:)), for: url)
+        }
     }
 
     // MARK: - Hibernation
@@ -586,7 +759,7 @@ final class BrowserWindowController: NSWindowController,
     /// This tab, as the session file keeps it.
     var sessionTab: SessionSnapshot.Tab {
         SessionSnapshot.Tab(url: currentURL, title: isHibernated ? hibernatedTitle : (window?.title ?? ""),
-                            state: interactionState as? Data)
+                            state: interactionState as? Data, groupID: groupID, isPinned: isPinned)
     }
 
     /// A short message over the top of the page that goes away by itself.
@@ -1338,6 +1511,8 @@ final class BrowserWindowController: NSWindowController,
     }
     /// For the self-test.
     private(set) weak var lastBookmarkPopover: AddBookmarkController?
+    /// For the self-test.
+    weak var lastGroupEditor: GroupEditorController?
 
     /// Bookmarks → Add to Reading List (⇧⌘D): saved with an offline copy.
     @objc func addToReadingList(_ sender: Any?) {
@@ -1658,7 +1833,7 @@ final class BrowserWindowController: NSWindowController,
         preferredWidth.priority = .defaultLow
         addressWidth = preferredWidth
         NSLayoutConstraint.activate([
-            addressField.widthAnchor.constraint(greaterThanOrEqualToConstant: 240),
+            addressField.widthAnchor.constraint(greaterThanOrEqualToConstant: 196),
             preferredWidth,
         ])
     }
@@ -1678,7 +1853,7 @@ final class BrowserWindowController: NSWindowController,
         }
         // The window's own buttons, and the margins at both ends.
         let available = window.frame.width - others - 110
-        let width = max(240, min(860, available))
+        let width = max(196, min(860, available))
         if abs(addressWidth.constant - width) > 0.5 { addressWidth.constant = width }
     }
 
@@ -1722,6 +1897,11 @@ final class BrowserWindowController: NSWindowController,
         devToolsWindow?.title = "DevTools — \(resolved)"
         fitAddressField()
         window?.toolbar?.validateVisibleItems()
+        let listed = resolved + (currentURL?.absoluteString ?? "")
+        if listed != listedAs {
+            listedAs = listed
+            organizer?.changed()
+        }
     }
 
     // MARK: - Translate
@@ -1826,6 +2006,7 @@ final class BrowserWindowController: NSWindowController,
         lastActive = Date()
         wake()
         onBecomeKey?()
+        sidebar?.reloadIfStale()
     }
 
     /// A tab shown by any means (selected, merged, its window brought
@@ -1856,6 +2037,8 @@ final class BrowserWindowController: NSWindowController,
         passwordCoordinator.uninstall()
         blocking.tearDown()
         if let downloadsObserver { NotificationCenter.default.removeObserver(downloadsObserver) }
+        if let sidebarObserver { NotificationCenter.default.removeObserver(sidebarObserver) }
+        organizer?.changed()
         downloadsPopover?.close()
         permissions.tearDown()
         reader.uninstall()
@@ -1900,6 +2083,12 @@ final class BrowserWindowController: NSWindowController,
             return !text.isEmpty
         case #selector(toggleFavoritesBar(_:)):
             menuItem.title = BrowserSettings.showFavoritesBar ? "Hide Favorites Bar" : "Show Favorites Bar"
+        case #selector(toggleBrowserSidebar(_:)):
+            menuItem.title = BrowserSettings.sidebarShown ? "Hide Sidebar" : "Show Sidebar"
+        case #selector(togglePinTab(_:)):
+            menuItem.title = isPinned ? "Unpin Tab" : "Pin Tab"
+        case #selector(removeTabFromGroup(_:)):
+            return groupID != nil
         case #selector(addBookmark(_:)), #selector(addToReadingList(_:)):
             return currentURL.map { $0.scheme?.hasPrefix("http") == true } ?? false
         default:
@@ -1911,7 +2100,7 @@ final class BrowserWindowController: NSWindowController,
     // MARK: - NSToolbarDelegate
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.back, .forward, .reload, .home, .address, .capture, .reader, .readerAppearance, .zoom, .shield, .star, .translate, .passwords, .downloads, .flexibleSpace, .devTools]
+        [.sidebar, .back, .forward, .reload, .home, .address, .capture, .reader, .readerAppearance, .zoom, .shield, .star, .translate, .passwords, .downloads, .flexibleSpace, .devTools]
             + (isPrivate ? [.privateBadge] : []) + [.profile]
     }
 
@@ -1925,6 +2114,10 @@ final class BrowserWindowController: NSWindowController,
         willBeInsertedIntoToolbar flag: Bool
     ) -> NSToolbarItem? {
         switch identifier {
+        case .sidebar:
+            let item = button(identifier, symbol: "sidebar.left", label: "Sidebar", action: #selector(toggleBrowserSidebar(_:)))
+            item.toolTip = "Show or hide the sidebar (⇧⌘S)"
+            return item
         case .back:
             let item = NSToolbarItem(itemIdentifier: identifier)
             item.view = backButton
@@ -2088,6 +2281,7 @@ final class BrowserWindowController: NSWindowController,
         reader.didFinishNavigation()
         passwordCoordinator.didFinishNavigation()
         syncChrome()
+        loadFavicon()
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: any Error) {
@@ -2316,6 +2510,7 @@ private extension NSToolbarItem.Identifier {
     static let reader = NSToolbarItem.Identifier("reader")
     static let capture = NSToolbarItem.Identifier("capture")
     static let downloads = NSToolbarItem.Identifier("downloads")
+    static let sidebar = NSToolbarItem.Identifier("sidebar")
     static let privateBadge = NSToolbarItem.Identifier("private")
     static let readerAppearance = NSToolbarItem.Identifier("readerAppearance")
 }

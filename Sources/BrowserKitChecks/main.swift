@@ -344,5 +344,144 @@ do {
           && PageSecurity.notSecure.label == "Not Secure" && PageSecurity.mixed.label == "Not Secure")
 }
 
+// MARK: Tab groups and pins
+
+do {
+    let a = TabID(), b = TabID(), c = TabID(), d = TabID(), e = TabID()
+    let g = TabGroupID(), h = TabGroupID()
+    typealias E = TabArrangement.Entry
+    let order = TabArrangement.arranged([E(id: a), E(id: b, groupID: g), E(id: c), E(id: d, groupID: g), E(id: e, isPinned: true)])
+    check("pinned tabs come first", order.first?.id == e, order.map(\.id))
+    check("a group's tabs are side by side, where its first tab was", order.map(\.id) == [e, a, b, d, c], order.map(\.id))
+    let settled = [E(id: e, isPinned: true), E(id: a), E(id: b, groupID: g), E(id: d, groupID: g), E(id: c)]
+    check("tabs already in order stay put", TabArrangement.arranged(settled) == settled)
+    check("a pinned tab is in no group", TabArrangement.arranged([E(id: a, groupID: g, isPinned: true), E(id: b, groupID: g)]).map(\.id) == [a, b])
+
+    check("a tab joining a group goes after its last tab", TabArrangement.insertionIndex(for: c, joining: g, in: settled) == 4)
+    check("…and a new group starts where the tab is", TabArrangement.insertionIndex(for: c, joining: h, in: settled) == 4)
+    check("…never among the pinned tabs", TabArrangement.insertionIndex(for: a, joining: h, in: [E(id: e, isPinned: true), E(id: a)]) == 1)
+
+    var groups = [g: TabGroup(id: g, name: "Work", color: .blue), h: TabGroup(id: h, name: "Empty")]
+    let sidebar = TabArrangement.sidebar(settled, groups: groups)
+    check("the sidebar: pinned tabs as icons, then rows", sidebar.pinned == [e]
+          && sidebar.rows == [.tab(a, inGroup: false), .group(g), .tab(b, inGroup: true), .tab(d, inGroup: true), .tab(c, inGroup: false)], sidebar.rows)
+    groups[g]?.isCollapsed = true
+    check("a collapsed group shows its name only", TabArrangement.sidebar(settled, groups: groups).rows == [.tab(a, inGroup: false), .group(g), .tab(c, inGroup: false)])
+    check("…but not hiding the tab in front", TabArrangement.sidebar(settled, groups: groups, selected: d).rows.contains(.tab(d, inGroup: true)))
+    check("a group with no tabs is forgotten", TabArrangement.emptyGroups([g, h], in: settled) == [h])
+    check("a new group takes a colour not yet used", TabArrangement.nextColor(after: [.blue, .red]) == .yellow && TabArrangement.nextColor(after: []) == .blue)
+
+    let old = #"{"url":"https://example.com/","title":"A"}"#
+    let tab = try? JSONDecoder().decode(SessionSnapshot.Tab.self, from: Data(old.utf8))
+    check("a session tab written before groups still reads", tab?.title == "A" && tab?.isPinned == false && tab?.groupID == nil)
+    let window = SessionSnapshot.Window(profileID: ProfileID(), frame: .init(x: 0, y: 0, width: 1, height: 1),
+                                        tabs: [.init(url: nil, title: "B", state: nil, groupID: g, isPinned: false)], selected: 0,
+                                        groups: [TabGroup(id: g, name: "Work", color: .green, isCollapsed: true)])
+    let round = (try? JSONEncoder().encode(window)).flatMap { try? JSONDecoder().decode(SessionSnapshot.Window.self, from: $0) }
+    check("groups and pins survive the session file", round == window)
+}
+
+// MARK: Command palette
+
+do {
+    check("fuzzy: the letters in order", FuzzyMatch.score("gh", in: "GitHub") != nil && FuzzyMatch.score("hg", in: "GitHub") == nil)
+    check("fuzzy: case and accents do not matter", FuzzyMatch.score("cafe", in: "Café Olé") != nil)
+    check("fuzzy: word starts beat letters inside words",
+          FuzzyMatch.score("np", in: "New Private Window")! > FuzzyMatch.score("np", in: "Snapshot Panel")!)
+    check("fuzzy: a run beats scattered letters", FuzzyMatch.score("tab", in: "Reopen Closed Tab")! > FuzzyMatch.score("tab", in: "Tomato sandwich crab")!)
+    check("fuzzy: a prefix beats the same letters later", FuzzyMatch.score("clear", in: "Clear History…")! > FuzzyMatch.score("clear", in: "Nuclear Reactors")!)
+    check("fuzzy: nothing typed matches everything", FuzzyMatch.score("", in: "x") == 0)
+
+    typealias I = CommandPalette.Item
+    let now = Date()
+    let items = [
+        I(id: "t1", kind: .tab, title: "Pull requests · simple-browser", detail: "https://github.com/pulls", lastUsed: now),
+        I(id: "t2", kind: .tab, title: "Inbox (3) - Mail", detail: "https://mail.example.com/", lastUsed: now.addingTimeInterval(-60)),
+        I(id: "c1", kind: .command, title: "Translate Page", detail: "View"),
+        I(id: "c2", kind: .command, title: "Clear History…", detail: "History"),
+        I(id: "b1", kind: .bookmark, title: "Swift Forums", detail: "https://forums.swift.org/"),
+        I(id: "h1", kind: .history, title: "Translate a page in Safari", detail: "https://support.apple.com/translate"),
+    ]
+    check("nothing typed: open tabs, the most recent first", CommandPalette.rank("", items).map(\.id) == ["t1", "t2"])
+    check("a command is found by its words", CommandPalette.rank("transl", items).first?.id == "c1", CommandPalette.rank("transl", items).map(\.id))
+    check("…and history that matches as well comes after it", CommandPalette.rank("transl", items).map(\.id).contains("h1"))
+    check("a tab is found by its site", CommandPalette.rank("github", items).first?.id == "t1")
+    check("bookmarks are searched", CommandPalette.rank("forums", items).first?.id == "b1")
+    check("what does not match is left out", !CommandPalette.rank("clear", items).map(\.id).contains("t2"))
+
+    // #13's promise: with a hundred tabs open, any of them is under three
+    // keys away after ⌘K, against every menu command as well. Titles as
+    // people have them: sites with many tabs of their own, alike on purpose.
+    let sites: [(String, [String])] = [
+        ("github.com", ["Pull requests", "Issues · simple-browser", "Actions · simple-browser", "swift-nio: Event-driven network framework", "apple/swift: The Swift Programming Language",
+                        "Notifications", "Release v1.4 · simple-browser", "Settings · Branches", "Compare changes", "Insights · Contributors"]),
+        ("mail.google.com", ["Inbox (12) - Gmail", "Starred - Gmail", "Sent Mail - Gmail", "Drafts (2) - Gmail", "Invoice for September - Gmail"]),
+        ("docs.google.com", ["Q4 planning - Google Docs", "Roadmap 2027 - Google Sheets", "Team offsite notes - Google Docs", "Budget - Google Sheets", "Hiring plan - Google Docs"]),
+        ("developer.apple.com", ["WKWebView | Apple Developer Documentation", "NSWindowTab | Apple Developer Documentation", "WKWebExtension | Apple Developer Documentation",
+                                 "Human Interface Guidelines: Sidebars", "WWDC25 videos", "Notarizing macOS software", "App Sandbox", "NSSplitViewController"]),
+        ("stackoverflow.com", ["swift - How to reorder NSWindow tabs", "macos - NSOutlineView drag and drop", "javascript - fetch with credentials", "css - flexbox gap not working in Safari",
+                               "git - undo last commit", "python - list comprehension with two loops"]),
+        ("en.wikipedia.org", ["Tasmanian tiger - Wikipedia", "Byzantine Empire - Wikipedia", "Fourier transform - Wikipedia", "Great Barrier Reef - Wikipedia", "Ada Lovelace - Wikipedia",
+                              "Quantum entanglement - Wikipedia", "Mount Kilimanjaro - Wikipedia"]),
+        ("youtube.com", ["Lo-fi beats to code to - YouTube", "How WebKit renders a page - YouTube", "Sourdough for beginners - YouTube", "F1 Monza highlights - YouTube", "Home - YouTube"]),
+        ("news.ycombinator.com", ["Hacker News", "Show HN: A native macOS browser | Hacker News", "Ask HN: Who is hiring? | Hacker News"]),
+        ("linear.app", ["SB-120 Sidebar with vertical tabs", "SB-121 Split view", "SB-130 Passkeys", "My issues", "Cycle 14"]),
+        ("figma.com", ["Browser chrome – Figma", "Icons – Figma", "Onboarding flow – Figma"]),
+        ("amazon.com", ["Amazon.com: USB-C hub", "Your Orders", "Amazon.com: mechanical keyboard", "Shopping Cart"]),
+        ("maps.apple.com", ["Coffee near me - Maps", "Sofia Airport - Maps"]),
+        ("nytimes.com", ["The Morning: Election results", "Wordle — The New York Times", "Cooking: Weeknight pasta"]),
+        ("slack.com", ["#general - Acme - Slack", "#browser-team - Acme - Slack", "Threads - Acme - Slack"]),
+        ("notion.so", ["Engineering wiki", "Meeting notes 29 Sep", "Reading list", "OKRs"]),
+        ("reddit.com", ["r/macapps", "r/swift", "r/MechanicalKeyboards", "r/AskHistorians"]),
+        ("calendar.google.com", ["Google Calendar - Week of 28 September"]),
+        ("booking.com", ["Hotels in Lisbon", "Your booking: Porto"]),
+        ("spotify.com", ["Discover Weekly - Spotify"]),
+        ("weather.com", ["Sofia 10-day forecast"]),
+        ("mdn.dev", ["Array.prototype.flatMap() - MDN", "Fetch API - MDN", "CSS Grid Layout - MDN", "IntersectionObserver - MDN"]),
+        ("swift.org", ["Swift Evolution", "Swift 6 migration guide"]),
+        ("vercel.com", ["Deployments – Vercel"]),
+        ("figjam.com", ["Retro board"]),
+        ("zoom.us", ["Zoom Meeting"]),
+        ("translate.google.com", ["Google Translate"]),
+        ("duckduckgo.com", ["best trackpad gestures at DuckDuckGo"]),
+        ("apple.com", ["MacBook Pro - Apple", "Apple Support"]),
+        ("localhost:3000", ["Dashboard – Local", "Login – Local", "Storybook"]),
+        ("figma.com", ["Design system – Figma", "Marketing site – Figma"]),
+    ]
+    var tabs: [I] = []
+    for (host, titles) in sites {
+        for (index, title) in titles.enumerated() {
+            tabs.append(I(id: "tab\(tabs.count)", kind: .tab, title: title, detail: "https://\(host)/\(index)",
+                          lastUsed: now.addingTimeInterval(-Double(tabs.count) * 97)))
+        }
+    }
+    let commands = ["New Window", "New Private Window", "New Tab", "Open Location…", "Close Tab", "Close Window", "Reopen Closed Tab", "Undo", "Redo", "Cut", "Copy", "Paste",
+                    "Paste and Go", "Select All", "Find…", "Find Next", "Find Previous", "Use Selection for Find", "Reload Page", "Reload Page From Origin", "Stop",
+                    "Actual Size", "Zoom In", "Zoom Out", "Show Reader", "Translate Page", "Show Original", "Enter Full Screen", "Show Sidebar", "Back", "Forward", "Home",
+                    "Reopen Last Closed Window", "Reopen All Windows from Last Session", "Show All History", "Clear History…", "Add Bookmark…", "Add to Reading List",
+                    "Show Bookmarks", "Hide Favorites Bar", "New Profile…", "Rename Profile…", "Delete Profile…", "Show Developer Tools", "JavaScript Console",
+                    "Inspect Elements", "Network", "Sources", "Dock to Bottom", "Dock to Right", "Separate Window", "Show Recording Log", "WebKit Web Inspector",
+                    "Debug in Safari…", "Minimize", "Zoom", "Downloads", "Bring All to Front", "Settings…", "Passwords…", "Check for Updates…", "Pin Tab",
+                    "New Tab Group", "Remove Tab from Group", "Switch to Profile Work", "Switch to Profile Default"]
+        .enumerated().map { I(id: "cmd\($0.offset)", kind: .command, title: $0.element, detail: "Menu") }
+    let everything = tabs + commands
+    check("a hundred tabs to test against", tabs.count == 100, tabs.count)
+    var worst = 0
+    var far: [String] = []
+    for tab in tabs {
+        let keys = CommandPalette.keystrokes(toReach: tab.id, in: everything) ?? 99
+        worst = max(worst, keys)
+        if keys >= 3 { far.append("\(tab.title) (\(keys))") }
+    }
+    check("with 100 tabs, every tab is under three keys away after ⌘K", worst < 3, far)
+    let hints = CommandPalette.hints(everything)
+    check("every tab has a hint, and no two the same", hints.count == 100 && Set(hints.values.map { "\($0.letter)\($0.number)" }).count == 100)
+    check("…a letter from its title where it can", tabs.filter { tab in hints[tab.id].map { h in tab.title.lowercased().contains(h.letter) } ?? false }.count >= 95)
+    check("commands have none", commands.allSatisfy { hints[$0.id] == nil })
+    let first = tabs[0], hint = hints[first.id]!
+    check("typing the hint's letter puts the tab at its number", CommandPalette.rank(String(hint.letter), everything).firstIndex { $0.id == first.id } == hint.number - 1)
+    check("two letters search as usual", CommandPalette.rank("pu", everything).first?.id == first.id)
+}
+
 print(failures == 0 ? "✔ \(passed) checks passed" : "\(failures) of \(passed + failures) checks failed")
 exit(failures == 0 ? 0 : 1)
