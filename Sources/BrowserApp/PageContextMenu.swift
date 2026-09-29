@@ -265,7 +265,7 @@ final class PageContextMenu: NSObject, WKScriptMessageHandler {
         guard let webView, let window = webView.window else { return }
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.webArchive]
-        panel.nameFieldStringValue = DownloadController.safeFileName(webView.title ?? webView.url?.host() ?? "Page") + ".webarchive"
+        panel.nameFieldStringValue = DownloadManager.safeFileName(webView.title ?? webView.url?.host() ?? "Page") + ".webarchive"
         panel.beginSheetModal(for: window) { response in
             guard response == .OK, let url = panel.url else { return }
             webView.createWebArchiveData { result in

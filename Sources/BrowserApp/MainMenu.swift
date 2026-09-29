@@ -209,7 +209,8 @@ enum MainMenu {
         let recorder = menu.addItem(withTitle: "Show Recording Log",
                                     action: #selector(BrowserWindowController.showRecorder(_:)),
                                     keyEquivalent: "l")
-        recorder.keyEquivalentModifierMask = [.command, .option]
+        // ⌥⌘L is Downloads, as in Safari.
+        recorder.keyEquivalentModifierMask = [.command, .option, .control]
 
         let userAgents = NSMenu(title: "User Agent")
         for (index, preset) in UserAgentPreset.all.enumerated() {
@@ -236,6 +237,9 @@ enum MainMenu {
         menu.addItem(withTitle: "Minimize",
                      action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
         menu.addItem(withTitle: "Zoom", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
+        menu.addItem(.separator())
+        let downloads = menu.addItem(withTitle: "Downloads", action: #selector(AppDelegate.showDownloadsWindow(_:)), keyEquivalent: "l")
+        downloads.keyEquivalentModifierMask = [.command, .option]
         menu.addItem(.separator())
         menu.addItem(withTitle: "Bring All to Front",
                      action: #selector(NSApplication.arrangeInFront(_:)), keyEquivalent: "")

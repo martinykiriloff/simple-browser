@@ -142,6 +142,30 @@ enum BrowserSettings {
         else { store.set(Array(Set(sites)).sorted(), forKey: blockingOffKey + profile) }
     }
 
+    // MARK: Downloads
+
+    private static let downloadFolderKey = "settings.downloads.folder"
+    private static let askWhereKey = "settings.downloads.ask"
+
+    /// Where downloads go: the Downloads folder unless another was chosen.
+    static var downloadFolder: URL {
+        get {
+            if let path = store.string(forKey: downloadFolderKey), !path.isEmpty { return URL(fileURLWithPath: path, isDirectory: true) }
+            return FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask)[0]
+        }
+        set {
+            let standard = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask)[0]
+            if newValue.standardizedFileURL == standard.standardizedFileURL { store.removeObject(forKey: downloadFolderKey) }
+            else { store.set(newValue.path, forKey: downloadFolderKey) }
+        }
+    }
+
+    /// Ask where to save each file, rather than saving to the folder.
+    static var askWhereToSave: Bool {
+        get { store.object(forKey: askWhereKey) as? Bool ?? false }
+        set { store.set(newValue, forKey: askWhereKey) }
+    }
+
     // MARK: Site permissions
 
     private static let permissionsKey = "settings.permissions."

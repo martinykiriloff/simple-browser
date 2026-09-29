@@ -129,7 +129,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             if let out = launch.featureSelfTestOutput {
                 FeatureSelfTest.run(app: self, browser: controller, output: out, snapshots: launch.snapshotDirectory,
-                                    only: Set(launch.featureSections))
+                                    only: Set(launch.featureSections), quitWhenDone: launch.quitWhenDone)
             }
             if let out = launch.pageSelfTestOutput {
                 PageSelfTest.run(app: self, browser: controller, output: out, snapshots: launch.snapshotDirectory)
@@ -368,8 +368,65 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         session.end(currentSession())
         terminating = true
-        return .terminateNow
+        // Downloads under way are paused first, keeping what they need to
+        // go on next time. It takes a moment, and is given two seconds.
+        let busy = downloadManagers.values.filter { !$0.list.active.isEmpty }
+        guard !busy.isEmpty else { return .terminateNow }
+        var replied = false
+        func reply() {
+            guard !replied else { return }
+            replied = true
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        Task { @MainActor in
+            for manager in busy { await manager.pauseAll() }
+            reply()
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { MainActor.assumeIsolated { reply() } }
+        return .terminateLater
     }
+
+    // MARK: - Downloads
+
+    private var downloadManagers: [ProfileID: DownloadManager] = [:]
+    private var downloadsWindows: [ProfileID: DownloadsWindowController] = [:]
+
+    /// The profile's downloads, kept in its folder. A test run keeps them
+    /// in memory, or where `--downloads-dir` says.
+    func downloads(for profile: Profile) -> DownloadManager {
+        if let manager = downloadManagers[profile.id] { return manager }
+        let directory: URL?
+        if let path = launch.downloadsDirectory { directory = URL(fileURLWithPath: path, isDirectory: true) }
+        else if usesScratchData || launch.devToolsScript != nil { directory = nil }
+        else { directory = profileDirectory(profile).appendingPathComponent("Downloads", isDirectory: true) }
+        let manager = DownloadManager(directory: directory)
+        downloadManagers[profile.id] = manager
+        return manager
+    }
+
+    /// Window → Downloads (⌥⌘L): the downloads of the profile in front.
+    @objc func showDownloadsWindow(_ sender: Any?) {
+        let browser = frontmostBrowser
+        let profile = browser?.profile ?? currentProfile
+        let manager = browser?.downloads.manager ?? downloads(for: profile)
+        if browser?.isPrivate == true {
+            // A private window's list is its own, shown for as long as it is asked for.
+            let window = DownloadsWindowController(manager: manager, profileName: "Private") { [weak browser] in browser?.pageWebView }
+            privateDownloadsWindow = window
+            window.showWindow(sender)
+            return
+        }
+        let window = downloadsWindows[profile.id] ?? DownloadsWindowController(manager: manager, profileName: profile.name) { [weak self] in
+            (self?.controllers.first { $0.profile.id == profile.id && !$0.isPrivate })?.pageWebView
+        }
+        downloadsWindows[profile.id] = window
+        window.showWindow(sender)
+        window.window?.makeKeyAndOrderFront(sender)
+    }
+
+    private var privateDownloadsWindow: DownloadsWindowController?
+    /// For the self-test.
+    func downloadsWindow(for profile: Profile) -> DownloadsWindowController? { downloadsWindows[profile.id] }
 
     // MARK: - Content blocking
 
@@ -821,7 +878,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         session?.tabs += 1
         let controller = BrowserWindowController(profile: profile, recorder: recorder, passwords: passwords(for: profile),
                                                  configuration: configuration, startPage: isPrivate ? privateStartPage : startPage(for: profile),
-                                                 blocker: blocker, privateSession: session)
+                                                 blocker: blocker, privateSession: session, downloads: downloads(for: profile))
+        controller.showAllDownloads = { [weak self] in self?.showDownloadsWindow(nil) }
         controller.bookmarks = { [weak self] in self?.bookmarks(for: profile) }
         controller.onBookmarksChanged = { [weak self] in self?.bookmarksChanged() }
         controller.readingListArchive = { [weak self] item in
@@ -977,7 +1035,9 @@ struct LaunchOptions {
     var blockingProbeLists: [String] = []
     var blockingProbeSites: [String] = []
     var sessionDirectory: String?
+    var downloadsDirectory: String?
     var featureSections: [String] = []
+    var quitWhenDone = false
     var updateFeed: URL?
     var updateSelfTestOutput: String?
     var showPasswords = false
@@ -1019,6 +1079,10 @@ struct LaunchOptions {
                 options.featureSelfTestOutput = iterator.next()
             case "--session-dir":
                 options.sessionDirectory = iterator.next()
+            case "--downloads-dir":
+                options.downloadsDirectory = iterator.next()
+            case "--quit-when-done":
+                options.quitWhenDone = true
             case "--only":
                 options.featureSections = (iterator.next() ?? "").split(separator: ",").map(String.init)
             case "--page-selftest":

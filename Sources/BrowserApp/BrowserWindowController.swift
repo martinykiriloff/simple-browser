@@ -91,7 +91,13 @@ final class BrowserWindowController: NSWindowController,
     /// Google Translate for this page, and the toolbar button that offers it.
     let translator = PageTranslator()
     private let translateButton = NSButton()
-    let downloads = DownloadController()
+    let downloads: DownloadController
+    private let downloadsButton = DownloadsButton()
+    private weak var downloadsItem: NSToolbarItem?
+    private(set) var downloadsPopover: NSPopover?
+    private(set) var downloadsList: DownloadsListController?
+    private var downloadsObserver: NSObjectProtocol?
+    var showAllDownloads: (() -> Void)?
     /// The right-click menu. Set by the app delegate's `openInNewWindow`.
     let contextMenu: PageContextMenu
     /// Opens a URL in a new window of this window's profile. Set by the app delegate.
@@ -147,9 +153,11 @@ final class BrowserWindowController: NSWindowController,
 
     init(profile: Profile, recorder: InspectorRecorder, passwords: PasswordService,
          configuration popupConfiguration: WKWebViewConfiguration? = nil, startPage: StartPageSchemeHandler? = nil,
-         blocker: ContentBlocker? = nil, privateSession: PrivateSession? = nil) {
+         blocker: ContentBlocker? = nil, privateSession: PrivateSession? = nil, downloads manager: DownloadManager? = nil) {
         self.profile = profile
         self.privateSession = privateSession
+        // A private window's downloads are listed with the private session.
+        self.downloads = DownloadController(manager: privateSession?.downloads ?? manager ?? DownloadManager(directory: nil))
         self.recorder = recorder
         self.bridge = InspectorBridge(recorder: recorder, tab: tab)
         self.passwordCoordinator = PasswordCoordinator(service: passwords)
@@ -267,6 +275,8 @@ final class BrowserWindowController: NSWindowController,
         translator.webView = webView
         translator.onStateChange = { [weak self] in self?.syncTranslateItem() }
         downloads.webView = webView
+        downloads.page = { [weak self] in self?.currentURL }
+        configureDownloadsButton()
         bridge.onAuxiliaryMessage = { [weak self] kind, body, _ in
             self?.devTools?.handleAuxiliary(kind: kind, body: body)
         }
@@ -1046,6 +1056,53 @@ final class BrowserWindowController: NSWindowController,
         syncStar()
     }
 
+    // MARK: - The downloads button
+
+    private func configureDownloadsButton() {
+        downloadsButton.bezelStyle = .toolbar
+        downloadsButton.target = self
+        downloadsButton.action = #selector(showDownloads(_:))
+        downloadsButton.setAccessibilityLabel("Downloads")
+        downloadsObserver = NotificationCenter.default.addObserver(forName: DownloadManager.didChange, object: downloads.manager, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.syncDownloads() }
+        }
+        syncDownloads()
+    }
+
+    /// There from the first download of this launch: before that there is
+    /// nothing it could show that the Downloads window does not.
+    private func syncDownloads() {
+        let manager = downloads.manager
+        let active = manager.list.active
+        downloadsButton.isBusy = !active.isEmpty
+        downloadsButton.fraction = manager.list.fraction
+        downloadsButton.image = NSImage(systemSymbolName: active.isEmpty ? "arrow.down.circle" : "arrow.down", accessibilityDescription: "Downloads")
+        downloadsButton.toolTip = active.isEmpty ? "Downloads" : active.count == 1 ? "Downloading \(active[0].fileName)" : "Downloading \(active.count) files"
+        let show = manager.startedThisLaunch > 0 || !active.isEmpty || manager.list.items.contains { $0.state == .paused }
+        if downloadsItem?.isHidden == show {
+            downloadsItem?.isHidden = !show
+            fitAddressField()
+        }
+    }
+
+    /// The button: the recent downloads, in a popover.
+    @objc func showDownloads(_ sender: Any?) {
+        if let downloadsPopover, downloadsPopover.isShown { downloadsPopover.close(); return }
+        guard downloadsButton.window != nil, downloadsItem?.isHidden == false else { showAllDownloads?(); return }
+        let list = DownloadsListController(manager: downloads.manager, limit: 6, showsPage: false,
+                                           webView: { [weak self] in self?.webView }, window: { [weak self] in self?.window })
+        list.showAll = { [weak self] in
+            self?.downloadsPopover?.close()
+            self?.showAllDownloads?()
+        }
+        let popover = NSPopover()
+        popover.behavior = .transient
+        popover.contentViewController = list
+        popover.show(relativeTo: downloadsButton.bounds, of: downloadsButton, preferredEdge: .maxY)
+        downloadsPopover = popover
+        downloadsList = list
+    }
+
     // MARK: - Downloads a page starts by itself
 
     private var downloadsFromPage = 0
@@ -1798,6 +1855,8 @@ final class BrowserWindowController: NSWindowController,
         devTools?.tearDown()
         passwordCoordinator.uninstall()
         blocking.tearDown()
+        if let downloadsObserver { NotificationCenter.default.removeObserver(downloadsObserver) }
+        downloadsPopover?.close()
         permissions.tearDown()
         reader.uninstall()
         translator.uninstall()
@@ -1852,7 +1911,7 @@ final class BrowserWindowController: NSWindowController,
     // MARK: - NSToolbarDelegate
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.back, .forward, .reload, .home, .address, .capture, .reader, .readerAppearance, .zoom, .shield, .star, .translate, .passwords, .flexibleSpace, .devTools]
+        [.back, .forward, .reload, .home, .address, .capture, .reader, .readerAppearance, .zoom, .shield, .star, .translate, .passwords, .downloads, .flexibleSpace, .devTools]
             + (isPrivate ? [.privateBadge] : []) + [.profile]
     }
 
@@ -1904,6 +1963,14 @@ final class BrowserWindowController: NSWindowController,
             item.view = profileButton
             item.label = "Profile"
             item.visibilityPriority = .high
+            return item
+        case .downloads:
+            let item = NSToolbarItem(itemIdentifier: identifier)
+            item.view = downloadsButton
+            item.label = "Downloads"
+            item.isHidden = true
+            downloadsItem = item
+            syncDownloads()
             return item
         case .capture:
             let item = NSToolbarItem(itemIdentifier: identifier)
@@ -2248,6 +2315,7 @@ private extension NSToolbarItem.Identifier {
     static let zoom = NSToolbarItem.Identifier("zoom")
     static let reader = NSToolbarItem.Identifier("reader")
     static let capture = NSToolbarItem.Identifier("capture")
+    static let downloads = NSToolbarItem.Identifier("downloads")
     static let privateBadge = NSToolbarItem.Identifier("private")
     static let readerAppearance = NSToolbarItem.Identifier("readerAppearance")
 }

@@ -27,7 +27,7 @@ final class FeatureSelfTest {
         self.snapshots = snapshots
     }
 
-    static func run(app: AppDelegate, browser: BrowserWindowController, output: String, snapshots: String?, only: Set<String>) {
+    static func run(app: AppDelegate, browser: BrowserWindowController, output: String, snapshots: String?, only: Set<String>, quitWhenDone: Bool = false) {
         let test = FeatureSelfTest(app: app, browser: browser, snapshots: snapshots)
         Task { @MainActor in
             let suite = "SimpleBrowser.feature-selftest"
@@ -53,14 +53,19 @@ final class FeatureSelfTest {
             if let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]) {
                 try? data.write(to: URL(fileURLWithPath: output), options: .atomic)
             }
+            // Quits as a person would, so what quitting does (pausing downloads) happens.
+            // From the run loop, not this task: a terminate that waits (.terminateLater)
+            // runs a nested loop that cannot service the main queue this task is on.
+            if quitWhenDone { RunLoop.main.perform { NSApp.terminate(nil) } }
         }
     }
 
     /// One entry per ticket, in the order they were built.
     var sections: [(String, () async -> Void)] {
         [("tabs", tabs), ("hibernation", hibernation), ("session", sessionRoundTrip), ("history", history), ("bookmarks", bookmarks), ("address-bar", addressBar),
-         ("blocking", blocking), ("find", find), ("zoom", zoom), ("reader", reader), ("private", privateWindows), ("permissions", permissions), ("certificates", certificates),
-         ("session-seed", sessionSeed), ("session-verify", sessionVerify)]
+         ("blocking", blocking), ("find", find), ("zoom", zoom), ("reader", reader), ("private", privateWindows), ("permissions", permissions), ("certificates", certificates), ("downloads", downloads),
+         ("session-seed", sessionSeed), ("session-verify", sessionVerify),
+         ("session-downloads-seed", downloadsSeed), ("session-downloads-verify", downloadsVerify)]
     }
 
     // MARK: - Helpers

@@ -56,10 +56,11 @@ can be switched off; then nothing typed leaves the Mac until Return.
 
 ```sh
 scripts/test-ui.sh            # the app presses its own keys and buttons, then reports
-scripts/test-features.sh      # tabs, sessions, history, bookmarks, the address bar, blocking, Reader, private windows
+scripts/test-features.sh      # tabs, sessions, history, bookmarks, the address bar, blocking, Reader, private windows, downloads
+scripts/test-downloads.sh     # downloads paused or under way at quit go on after a relaunch
 ```
 
-`test-features.sh` and `test-page.sh` run **quietly**: the app is given
+`test-features.sh`, `test-downloads.sh` and `test-page.sh` run **quietly**: the app is given
 `--quiet`, never becomes active, and keeps its windows beneath yours, so you
 can go on working while they run. That is not only politeness. A test that
 takes the keyboard also takes whatever you type meanwhile, and fails for it.
@@ -250,6 +251,30 @@ Not offered: **notifications**. Measured, a page in an app can be granted
 the permission, and the notification it then shows goes nowhere: WebKit
 hands page notifications to a provider that only its C API can set. Pages
 are given no Notification API, rather than one that does nothing.
+
+## Downloads
+
+A file a page hands over (`Content-Disposition: attachment`, `<a download>`,
+a type WebKit cannot show) or **Download Linked File** in the right-click
+menu goes to the download folder, with the profile's cookies. A downloads
+button appears in the toolbar with the first download of a launch; it
+shows how far downloads under way have got and opens their list, with
+speed and time left, **Pause**, **Resume** and **Cancel**. A download
+goes on from where it stopped, not from the start, and one that loses its
+connection is marked as failed, saying why, with **Try Again**.
+
+A file of the same name never replaces another; it is saved beside it with
+a number. Every download is marked as coming from the web, so macOS checks
+it when it is opened, and a file that can run (an app, a script, an
+installer) is asked about the first time it is opened from the list.
+
+**Window → Downloads** (⌥⌘L) lists every download in the profile, each
+with the page it came from, **Download Again** for what was cancelled, and
+**Clear** for what is over (the files stay where they are).
+**Settings → General** chooses the folder, or *Ask where to save each
+file*. Downloads under way when the app quits are paused, and are there to
+go on with at the next launch. A private window's downloads are listed in
+the private session only and kept nowhere.
 
 ## Private windows
 

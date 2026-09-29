@@ -267,6 +267,68 @@ do {
     check("…and runs no script", warningHTML.contains("default-src 'none'") && !warningHTML.contains("<script"))
     check("a page on an accepted certificate is Not Secure, whatever else", PageSecurity.of(site443, hasOnlySecureContent: true, certificateAccepted: true) == .untrusted
           && PageSecurity.untrusted.label == "Not Secure")
+    var item = DownloadItem(url: u("https://files.example/big.zip"), page: u("https://www.example.com/downloads"), path: "/Users/x/Downloads/big.zip", total: 10_000_000)
+    item.received = 3_200_000
+    check("a download knows how far it is", item.fraction == 0.32 && item.fileName == "big.zip" && item.isActive)
+    check("…and where it came from: the page, not the file's server", item.source == "example.com")
+    // Sizes are written for the Mac's region (3.2 MB here, 3,2 MB there),
+    // so what is expected is put together from the same parts.
+    let some = DownloadFormat.size(3_200_000), all = DownloadFormat.size(10_000_000)
+    check("sizes are in Finder's units", some.hasSuffix(" MB") && some.hasPrefix("3") && all == "10 MB", [some, all])
+    check("under way: how much, how fast, how long", DownloadFormat.status(item, speed: 1_200_000, secondsLeft: 5.6) == "\(some) of \(all) · \(DownloadFormat.size(1_200_000))/s · 6 seconds left",
+          DownloadFormat.status(item, speed: 1_200_000, secondsLeft: 5.6))
+    check("…without a guess while there is nothing to go by", DownloadFormat.status(item) == "\(some) of \(all)", DownloadFormat.status(item))
+    item.total = nil
+    check("…and without a total the server never gave", DownloadFormat.status(item, speed: 500_000) == "\(some) · 500 KB/s", DownloadFormat.status(item, speed: 500_000))
+    item.total = 10_000_000
+    item.state = .paused
+    check("paused", DownloadFormat.status(item) == "Paused · \(some) of \(all)", DownloadFormat.status(item))
+    item.state = .finished
+    check("finished: its size and where from", DownloadFormat.status(item) == "10 MB · example.com")
+    item.state = .failed
+    item.failure = "The network connection was lost."
+    check("failed: why", DownloadFormat.status(item) == "Failed: The network connection was lost.")
+    check("time left is said as a person would", DownloadFormat.duration(0.2) == "1 second" && DownloadFormat.duration(7) == "7 seconds" && DownloadFormat.duration(42) == "45 seconds"
+          && DownloadFormat.duration(95) == "2 minutes" && DownloadFormat.duration(3600) == "1 hour" && DownloadFormat.duration(4200) == "1 hour 10 minutes",
+          [0.2, 7, 42, 95, 3600, 4200].map(DownloadFormat.duration))
+    check("small sizes are bytes", DownloadFormat.size(512) == "512 bytes")
+
+    var meter = DownloadMeter()
+    meter.record(bytes: 0, at: 0)
+    check("no speed from one reading", meter.speed == nil && meter.secondsLeft(total: 1000) == nil)
+    meter.record(bytes: 500_000, at: 1)
+    meter.record(bytes: 1_000_000, at: 2)
+    check("speed from recent readings", meter.speed == 500_000)
+    check("time left from speed", meter.secondsLeft(total: 3_000_000) == 4)
+    meter.record(bytes: 1_100_000, at: 8)
+    check("old readings are forgotten: a download that slowed is slow", (meter.speed ?? 0) < 20_000, meter.speed as Any)
+    meter.record(bytes: 200, at: 9)
+    check("starting again starts the measure again", meter.speed == nil)
+
+    check("files that run are dangerous", ["Installer.dmg", "setup.PKG", "run.command", "tool.sh", "Thing.app", "payload.jar", "x.scpt", "invoice.pdf.exe"].allSatisfy(DownloadRisk.isDangerous))
+    check("…documents, pictures and archives are not", ["report.pdf", "photo.jpeg", "notes.txt", "archive.zip", "song.mp3", "sheet.xlsx", "README"].allSatisfy { !DownloadRisk.isDangerous(fileName: $0) })
+    check("…and a trailing dot or space hides nothing", DownloadRisk.isDangerous(fileName: "evil.command. "))
+
+    var list = DownloadList()
+    let first = DownloadItem(url: u("https://a.example/1.zip"), path: "/d/1.zip", state: .finished)
+    let second = DownloadItem(url: u("https://a.example/2.zip"), path: "/d/2.zip", received: 50, total: 100)
+    let third = DownloadItem(url: u("https://a.example/3.zip"), path: "/d/3.zip", received: 10, total: 300)
+    list.add(first); list.add(second); list.add(third)
+    check("the newest download is first", list.items.map(\.fileName) == ["3.zip", "2.zip", "1.zip"])
+    check("overall progress is of what is under way", list.fraction == 0.15, list.fraction as Any)
+    let saved = try JSONEncoder().encode(list)
+    var relaunched = try JSONDecoder().decode(DownloadList.self, from: saved)
+    relaunched.markInterrupted { $0 == second.id }
+    check("after a relaunch, what was under way is paused if it can go on", relaunched[second.id]?.state == .paused && relaunched[second.id]?.canResume == true)
+    check("…and failed, saying why, if it cannot", relaunched[third.id]?.state == .failed && relaunched[third.id]?.failure?.contains("quit") == true)
+    check("…what had finished is as it was", relaunched[first.id] == first)
+    relaunched.clearFinished()
+    check("Clear removes what is over, and keeps what is paused", relaunched.items.map(\.fileName) == ["2.zip"])
+    var full = DownloadList()
+    let running = DownloadItem(url: u("https://a.example/run.zip"), path: "/d/run.zip")
+    full.add(running)
+    for n in 0..<(DownloadList.limit + 20) { full.add(DownloadItem(url: u("https://a.example/\(n)"), path: "/d/\(n)", state: .finished)) }
+    check("the list is kept to a length, never at the cost of a download under way", full.items.count == DownloadList.limit && full[running.id] != nil)
     check("zoom steps up", PageZoom.larger(than: 1) == 1.1 && PageZoom.larger(than: 1.1) == 1.25 && PageZoom.larger(than: 5) == 5)
     check("zoom steps down", PageZoom.smaller(than: 1) == 0.9 && PageZoom.smaller(than: 0.25) == 0.25)
     check("zoom between steps moves to the next step", PageZoom.larger(than: 1.2) == 1.25 && PageZoom.smaller(than: 1.2) == 1.1)

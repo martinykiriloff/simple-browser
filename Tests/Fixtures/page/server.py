@@ -129,6 +129,14 @@ example.com##+js(nowif)
 """
     ],
 }
+download_requests = []
+
+
+def slow_bytes(start, end):
+    """The file every /slow.bin is a prefix of: byte i is (i * 31) % 251."""
+    return bytes((i * 31) % 251 for i in range(start, end))
+
+
 filter_version = {"ads": 0, "privacy": 0}
 filter_requests = {"ads": [], "privacy": []}
 
@@ -163,6 +171,38 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header(key, value)
         self.end_headers()
         self.wfile.write(data)
+
+    def slow(self):
+        """A file that arrives slowly and can be taken up where it stopped."""
+        import time
+        from urllib.parse import parse_qs, urlparse
+        query = parse_qs(urlparse(self.path).query)
+        size = int(query.get("size", ["3000000"])[0])
+        rate = int(query.get("rate", ["600000"])[0])
+        name = query.get("name", ["slow.bin"])[0]
+        etag = f'"slow-{size}"'
+        start = 0
+        asked = self.headers.get("Range")
+        if asked and asked.startswith("bytes=") and self.headers.get("If-Range", etag) == etag:
+            start = int(asked[6:].split("-")[0] or 0)
+        download_requests.append({"path": self.path, "range": asked, "start": start})
+        self.send_response(206 if start else 200)
+        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Content-Disposition", f'attachment; filename="{name}"')
+        self.send_header("Content-Length", str(size - start))
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("ETag", etag)
+        if start:
+            self.send_header("Content-Range", f"bytes {start}-{size - 1}/{size}")
+        self.end_headers()
+        step = max(1, rate // 10)
+        try:
+            for position in range(start, size, step):
+                self.wfile.write(slow_bytes(position, min(size, position + step)))
+                self.wfile.flush()
+                time.sleep(0.1)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
     def do_POST(self):
         self.rfile.read(int(self.headers.get("Content-Length") or 0))
@@ -252,6 +292,27 @@ function locate() {
 window.notify = typeof Notification === 'undefined' ? 'no API' : 'permission:' + Notification.permission;
 function ask() { window.asked = 'asking'; Notification.requestPermission().then(r => { window.asked = r; }, e => { window.asked = 'error:' + e; }); }
 </script>""")
+        elif path == "/slow.bin":
+            self.slow()
+        elif path == "/broken.bin":
+            # Promises a megabyte, sends a tenth, and hangs up.
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Disposition", 'attachment; filename="broken.bin"')
+            self.send_header("Content-Length", "1000000")
+            self.end_headers()
+            self.wfile.write(slow_bytes(0, 100000))
+            self.wfile.flush()
+            self.connection.close()
+        elif path == "/setup.command":
+            self.send(200, "#!/bin/sh\necho this must never run\n", "application/octet-stream",
+                      {"Content-Disposition": 'attachment; filename="setup.command"'})
+        elif path == "/downloads/requests":
+            import json
+            self.send(200, json.dumps(download_requests), "application/json")
+        elif path == "/downloads/reset":
+            download_requests.clear()
+            self.send(200, "{}", "application/json")
         elif path == "/article":
             self.send(200, NEWS_ARTICLE)
         elif path == "/webapp":

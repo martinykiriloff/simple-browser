@@ -25,6 +25,10 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate, N
     let enginePopUp = NSPopUpButton(frame: .zero, pullsDown: false)
     let customEngineField = NSTextField()
     let suggestionsCheckbox = NSButton(checkboxWithTitle: "Show search suggestions as you type", target: nil, action: nil)
+    let downloadFolderPopUp = NSPopUpButton(frame: .zero, pullsDown: false)
+    let askWhereCheckbox = NSButton(checkboxWithTitle: "Ask where to save each file", target: nil, action: nil)
+    /// Replaces the folder panel, for the self-test.
+    var chooseDownloadFolder: (() -> URL?)?
     let memorySaverCheckbox = NSButton(checkboxWithTitle: "Put inactive tabs to sleep to save memory", target: nil, action: nil)
     let keepActiveField = NSTextField()
 
@@ -153,6 +157,14 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate, N
         memoryHelp.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         memoryHelp.textColor = .secondaryLabelColor
 
+        let downloadsTitle = NSTextField(labelWithString: "Save downloads to:")
+        downloadsTitle.alignment = .right
+        downloadFolderPopUp.target = self
+        downloadFolderPopUp.action = #selector(downloadFolderChanged(_:))
+        downloadFolderPopUp.setAccessibilityLabel("Save downloads to")
+        askWhereCheckbox.target = self
+        askWhereCheckbox.action = #selector(askWhereChanged(_:))
+
         let grid = NSGridView(views: [
             [startupTitle, startupPopUp],
             [title, homepageField],
@@ -163,6 +175,8 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate, N
             [engineTitle, enginePopUp],
             [NSGridCell.emptyContentView, customEngineField],
             [NSGridCell.emptyContentView, suggestionsCheckbox],
+            [downloadsTitle, downloadFolderPopUp],
+            [NSGridCell.emptyContentView, askWhereCheckbox],
             [memoryTitle, memorySaverCheckbox],
             [NSGridCell.emptyContentView, keepActiveField],
             [NSGridCell.emptyContentView, memoryHelp],
@@ -171,6 +185,10 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate, N
         grid.columnSpacing = 10
         grid.column(at: 0).xPlacement = .trailing
         grid.column(at: 1).xPlacement = .fill
+        // The longest title is shown whole; the fields take what is left.
+        for row in 0..<grid.numberOfRows {
+            grid.cell(atColumnIndex: 0, rowIndex: row).contentView?.setContentCompressionResistancePriority(.required, for: .horizontal)
+        }
         grid.cell(for: startupPopUp)?.xPlacement = .leading
         grid.row(at: 1).topPadding = 12
         grid.row(at: 1).yPlacement = .center
@@ -184,6 +202,10 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate, N
         grid.row(at: 6).yPlacement = .center
         grid.cell(for: suggestionsCheckbox)?.xPlacement = .leading
         grid.row(at: 9).topPadding = 12
+        grid.row(at: 9).yPlacement = .center
+        grid.cell(for: downloadFolderPopUp)?.xPlacement = .leading
+        grid.cell(for: askWhereCheckbox)?.xPlacement = .leading
+        grid.row(at: 11).topPadding = 12
         grid.cell(for: memorySaverCheckbox)?.xPlacement = .leading
         grid.translatesAutoresizingMaskIntoConstraints = false
 
@@ -194,7 +216,7 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate, N
             grid.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -24),
             grid.topAnchor.constraint(equalTo: root.topAnchor, constant: 24),
             grid.bottomAnchor.constraint(lessThanOrEqualTo: root.bottomAnchor, constant: -20),
-            homepageField.widthAnchor.constraint(greaterThanOrEqualToConstant: 360),
+            homepageField.widthAnchor.constraint(greaterThanOrEqualToConstant: 300),
             root.widthAnchor.constraint(equalToConstant: 560),
             root.heightAnchor.constraint(greaterThanOrEqualToConstant: 170),
         ])
@@ -211,7 +233,51 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate, N
             BrowserSettings.searchEngine = SearchEngine(id: "custom", name: "Custom", searchTemplate: "", suggestTemplate: nil)
             window?.makeFirstResponder(customEngineField)
         }
-        customEngineField.isHidden = BrowserSettings.searchEngine.id != "custom" && index < SearchEngine.all.count
+        showCustomEngine(BrowserSettings.searchEngine.id == "custom" || index >= SearchEngine.all.count)
+    }
+
+    /// The field has a row of its own, which closes up when there is nothing in it to show.
+    private func showCustomEngine(_ shown: Bool) {
+        customEngineField.isHidden = !shown
+        guard let row = (customEngineField.superview as? NSGridView)?.cell(for: customEngineField)?.row, row.isHidden == shown else { return }
+        row.isHidden = !shown
+        tabs.fitWindowToSelectedPane(animated: true)
+    }
+
+    /// The folder chosen, then "Choose…": as the Finder's own folder menus are.
+    private func fillDownloadFolders() {
+        let folder = BrowserSettings.downloadFolder
+        downloadFolderPopUp.removeAllItems()
+        downloadFolderPopUp.addItem(withTitle: FileManager.default.displayName(atPath: folder.path))
+        let icon = NSWorkspace.shared.icon(forFile: folder.path)
+        icon.size = NSSize(width: 16, height: 16)
+        downloadFolderPopUp.lastItem?.image = icon
+        downloadFolderPopUp.lastItem?.toolTip = folder.path
+        downloadFolderPopUp.menu?.addItem(.separator())
+        downloadFolderPopUp.addItem(withTitle: "Choose…")
+        downloadFolderPopUp.selectItem(at: 0)
+        downloadFolderPopUp.isEnabled = !BrowserSettings.askWhereToSave
+    }
+
+    @objc private func downloadFolderChanged(_ sender: Any?) {
+        defer { fillDownloadFolders() }
+        guard downloadFolderPopUp.titleOfSelectedItem == "Choose…" else { return }
+        if let chooseDownloadFolder {
+            if let folder = chooseDownloadFolder() { BrowserSettings.downloadFolder = folder }
+            return
+        }
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.prompt = "Choose"
+        panel.directoryURL = BrowserSettings.downloadFolder
+        if panel.runModal() == .OK, let folder = panel.url { BrowserSettings.downloadFolder = folder }
+    }
+
+    @objc private func askWhereChanged(_ sender: Any?) {
+        BrowserSettings.askWhereToSave = askWhereCheckbox.state == .on
+        fillDownloadFolders()
     }
 
     @objc private func suggestionsChanged(_ sender: Any?) {
@@ -232,8 +298,10 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate, N
         let stored = BrowserSettings.store.string(forKey: "settings.search.engine") ?? SearchEngine.default.id
         enginePopUp.selectItem(at: stored == "custom" ? SearchEngine.all.count : SearchEngine.all.firstIndex { $0.id == stored } ?? 0)
         customEngineField.stringValue = BrowserSettings.customSearchTemplate
-        customEngineField.isHidden = stored != "custom"
+        showCustomEngine(stored == "custom")
         suggestionsCheckbox.state = BrowserSettings.searchSuggestions ? .on : .off
+        askWhereCheckbox.state = BrowserSettings.askWhereToSave ? .on : .off
+        fillDownloadFolders()
         memorySaverCheckbox.state = BrowserSettings.memorySaver ? .on : .off
         keepActiveField.stringValue = BrowserSettings.keepActiveSites.joined(separator: ", ")
         keepActiveField.isEnabled = BrowserSettings.memorySaver

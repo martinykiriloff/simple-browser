@@ -17,6 +17,8 @@ final class PrivateSession {
     var blockingOffSites: [String] = []
     var permissions = SitePermissions()
     var certificateExceptions = CertificateExceptions()
+    /// Listed while the private session lasts; the files themselves stay.
+    let downloads = DownloadManager(directory: nil)
     /// Open private tabs.
     var tabs = 0
 }
