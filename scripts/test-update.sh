@@ -41,7 +41,7 @@ cat > "$FEED/latest" <<JSON
  {"name":"SimpleBrowser-0.0.2.dmg","browser_download_url":"http://127.0.0.1:$PORT/SimpleBrowser-0.0.2.dmg"},
  {"name":"SimpleBrowser-0.0.2.dmg.sig","browser_download_url":"http://127.0.0.1:$PORT/SIG"}]}
 JSON
-(cd "$FEED" && python3 -m http.server "$PORT" --bind 127.0.0.1 >/dev/null 2>&1) &
+(cd "$FEED" && exec python3 -m http.server "$PORT" --bind 127.0.0.1 >/dev/null 2>&1) &
 SERVER_PID=$!
 sleep 1
 

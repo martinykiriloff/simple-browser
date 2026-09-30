@@ -56,7 +56,7 @@ can be switched off; then nothing typed leaves the Mac until Return.
 
 ```sh
 scripts/test-ui.sh            # the app presses its own keys and buttons, then reports
-scripts/test-features.sh      # tabs, sessions, history, bookmarks, the address bar, blocking, Reader, private windows, downloads, the sidebar, ⌘K, split view, importing, extensions and AutoFill
+scripts/test-features.sh      # tabs, sessions, history, bookmarks, the address bar, blocking, Reader, private windows, downloads, the sidebar, ⌘K, split view, importing, extensions, AutoFill and media
 scripts/test-downloads.sh     # downloads paused or under way at quit go on after a relaunch
 ```
 
@@ -390,6 +390,30 @@ with the page it came from, **Download Again** for what was cancelled, and
 file*. Downloads under way when the app quits are paused, and are there to
 go on with at the next launch. A private window's downloads are listed in
 the private session only and kept nowhere.
+
+## Media
+
+A tab playing sound shows a speaker on its tab; a click on it mutes the
+tab, WebKit's own mute, which the page cannot undo. **Window → Mute Tab**
+does the same, and **Mute Background Tabs** quietens every tab but the one
+in front.
+
+Whatever is playing, in whichever tab, is in the toolbar of every window
+as a **now-playing** control: its title (the page's Media Session
+metadata, or the tab's title), play/pause, and next where the page offers
+it; a click on the title shows the tab. The Mac's own controls follow it:
+the media keys and the Now Playing panel in Control Center see the tab
+playing, and the keys go to the tab that started playing last, wherever
+it is, not to the tab in front. A page's own next and previous handlers
+are called for the next and previous keys.
+
+**View → Enter Picture in Picture**, or the button that appears in the
+toolbar when a page has a video, takes the video out of the page into a
+window of its own, over everything; again puts it back. With
+**Settings → General → Picture in Picture when you leave a tab playing a
+video** on, a playing video goes out by itself as another tab is chosen,
+and comes back into its page when the tab is chosen again. Pages may go
+full screen.
 
 ## Private windows
 

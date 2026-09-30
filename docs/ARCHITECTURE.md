@@ -107,6 +107,31 @@ Measured WebKit behaviour:
   as the cause and neither was. The feature self-test reports the camera as
   not tested when this happens.
 
+## Media
+
+`MediaAgent/media-agent.js` runs in its own isolated world and reports what
+a page plays (sound, video, Picture in Picture, the Media Session title)
+whenever a media event passes the document; `TabMedia` holds that for one
+tab and carries out play, pause, mute and Picture in Picture; `MediaCenter`
+chooses which tab the media keys and the Now Playing panel control (the
+one that started playing last) and publishes it through `MPNowPlayingInfoCenter`.
+A page's own `nexttrack` and `previoustrack` handlers are kept by a small
+hook in the page world and called for the keys. Muting is WebKit's page
+mute (`_setPageMuted:`, probed by name), which the page cannot undo.
+
+Measured WebKit behaviour:
+
+- **Picture in Picture needs a gap after leaving.** Asked back within a
+  second or two of leaving it (measured on 2026-09-30), WebKit either
+  ignores the request or puts the video straight back in the page, and how
+  long depends on how far the last window had got. `TabMedia` waits 1.5 s
+  after leaving before asking, watches that the video is out and stays out
+  for a moment, and asks again up to three times.
+- **A hidden tab can take a video out.** A request made after the tab was
+  left works as well as one made before, so automatic Picture in Picture
+  is asked for once the other tab is chosen, and is undone when the tab is
+  chosen again, whether or not the request had gone through by then.
+
 ## Reader
 
 `ReaderAgent/reader-agent.js` runs in its own isolated world, main frame

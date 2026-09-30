@@ -99,6 +99,7 @@ enum MainMenu {
         let menu = NSMenu(title: "View")
         let sidebar = menu.addItem(withTitle: "Show Sidebar", action: #selector(BrowserWindowController.toggleBrowserSidebar(_:)), keyEquivalent: "s")
         sidebar.keyEquivalentModifierMask = [.command, .shift]
+        menu.addItem(withTitle: "Enter Picture in Picture", action: #selector(BrowserWindowController.togglePictureInPicture(_:)), keyEquivalent: "")
         menu.addItem(withTitle: "Open in Split View", action: #selector(BrowserWindowController.openInSplitView(_:)), keyEquivalent: "")
         menu.addItem(withTitle: "Close Split View", action: #selector(BrowserWindowController.closeSplitView(_:)), keyEquivalent: "")
         menu.addItem(.separator())
@@ -255,6 +256,9 @@ enum MainMenu {
         let groupsItem = menu.addItem(withTitle: "Move Tab to Group", action: nil, keyEquivalent: "")
         groupsItem.submenu = groups
         menu.addItem(withTitle: "Remove Tab from Group", action: #selector(BrowserWindowController.removeTabFromGroup(_:)), keyEquivalent: "")
+        menu.addItem(.separator())
+        menu.addItem(withTitle: "Mute Tab", action: #selector(BrowserWindowController.toggleMuteTab(_:)), keyEquivalent: "")
+        menu.addItem(withTitle: "Mute Background Tabs", action: #selector(AppDelegate.muteBackgroundTabs(_:)), keyEquivalent: "")
         menu.addItem(.separator())
         let downloads = menu.addItem(withTitle: "Downloads", action: #selector(AppDelegate.showDownloadsWindow(_:)), keyEquivalent: "l")
         downloads.keyEquivalentModifierMask = [.command, .option]

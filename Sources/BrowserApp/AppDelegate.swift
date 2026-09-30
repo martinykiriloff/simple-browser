@@ -128,6 +128,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Pinned tabs and tab groups, for every window.
     let tabOrganizer = TabOrganizer()
+    /// Every tab's sound and video, the now-playing control and the media keys.
+    let mediaCenter = MediaCenter()
+    private var mediaSync = false
+
+    /// Window → Mute Background Tabs.
+    @objc func muteBackgroundTabs(_ sender: Any?) { mediaCenter.muteBackgroundTabs(except: frontmostBrowser) }
+
+    /// Once per turn of the run loop: every window's now-playing control.
+    private func mediaChanged() {
+        guard !mediaSync else { return }
+        mediaSync = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.mediaSync = false
+            self.mediaCenter.changed()
+            let current = self.mediaCenter.current
+            for tab in self.controllers { tab.syncNowPlaying(current) }
+        }
+    }
+
     /// "Move to Applications?" on a launch from anywhere else.
     let mover = ApplicationMover()
     private var relaunchingAfterMove = false
@@ -164,6 +184,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // up while the first tab is being made.
         blocker.start()
         tabOrganizer.controllers = { [weak self] in self?.controllers ?? [] }
+        mediaCenter.tabs = { [weak self] in self?.controllers ?? [] }
         tabOrganizer.openTabs = { [weak self] browser, urls in
             guard let self else { return [] }
             if urls.isEmpty { return [self.newTab(beside: browser)] }
@@ -1150,6 +1171,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         controller.onWindowClosing = { [weak self] controller in self?.rememberClosedWindow(controller) }
         controller.organizer = tabOrganizer
+        controller.onMediaChange = { [weak self] in self?.mediaChanged() }
         controller.onCommandPalette = { [weak self, weak controller] in
             guard let self, let controller else { return }
             self.showCommandPalette(over: controller)
@@ -1187,6 +1209,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         controller.extensions?.didOpen(controller)
         controller.onClose = { [weak self, weak controller] in
             self?.controllers.removeAll { $0 === controller }
+            self?.mediaChanged()
             if let controller { self?.privateTabClosed(controller) }
         }
         controller.onBecomeKey = { [weak self, weak controller] in

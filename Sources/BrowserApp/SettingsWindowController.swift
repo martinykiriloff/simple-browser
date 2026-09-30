@@ -30,6 +30,7 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate, N
     /// Replaces the folder panel, for the self-test.
     var chooseDownloadFolder: (() -> URL?)?
     let tabsPopUp = NSPopUpButton(frame: .zero, pullsDown: false)
+    let autoPictureInPictureCheckbox = NSButton(checkboxWithTitle: "Picture in Picture when you leave a tab playing a video", target: nil, action: nil)
     let memorySaverCheckbox = NSButton(checkboxWithTitle: "Put inactive tabs to sleep to save memory", target: nil, action: nil)
     let keepActiveField = NSTextField()
 
@@ -143,6 +144,8 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate, N
         tabsPopUp.target = self
         tabsPopUp.action = #selector(tabsLayoutChanged(_:))
         tabsPopUp.setAccessibilityLabel("Tabs")
+        autoPictureInPictureCheckbox.target = self
+        autoPictureInPictureCheckbox.action = #selector(autoPictureInPictureChanged(_:))
 
         let engineTitle = NSTextField(labelWithString: "Search engine:")
         engineTitle.alignment = .right
@@ -185,6 +188,7 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate, N
             [NSGridCell.emptyContentView, help],
             [newWindowTitle, newWindowPopUp],
             [tabsTitle, tabsPopUp],
+            [NSGridCell.emptyContentView, autoPictureInPictureCheckbox],
             [engineTitle, enginePopUp],
             [NSGridCell.emptyContentView, customEngineField],
             [NSGridCell.emptyContentView, suggestionsCheckbox],
@@ -213,14 +217,15 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate, N
         grid.cell(for: tabsPopUp)?.xPlacement = .leading
         grid.row(at: 6).yPlacement = .center
         grid.cell(for: enginePopUp)?.xPlacement = .leading
-        grid.row(at: 7).topPadding = 12
-        grid.row(at: 7).yPlacement = .center
+        grid.cell(for: autoPictureInPictureCheckbox)?.xPlacement = .leading
+        grid.row(at: 8).topPadding = 12
+        grid.row(at: 8).yPlacement = .center
         grid.cell(for: suggestionsCheckbox)?.xPlacement = .leading
-        grid.row(at: 10).topPadding = 12
-        grid.row(at: 10).yPlacement = .center
+        grid.row(at: 11).topPadding = 12
+        grid.row(at: 11).yPlacement = .center
         grid.cell(for: downloadFolderPopUp)?.xPlacement = .leading
         grid.cell(for: askWhereCheckbox)?.xPlacement = .leading
-        grid.row(at: 12).topPadding = 12
+        grid.row(at: 13).topPadding = 12
         grid.cell(for: memorySaverCheckbox)?.xPlacement = .leading
         grid.translatesAutoresizingMaskIntoConstraints = false
 
@@ -324,6 +329,7 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate, N
         let contents = BrowserSettings.NewWindowContent.allCases
         newWindowPopUp.selectItem(at: contents.firstIndex(of: BrowserSettings.newWindowContent) ?? 0)
         tabsPopUp.selectItem(at: BrowserSettings.tabsInSidebar ? 1 : 0)
+        autoPictureInPictureCheckbox.state = BrowserSettings.automaticPictureInPicture ? .on : .off
         updateResolved()
     }
 
@@ -379,6 +385,10 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate, N
         BrowserSettings.tabsInSidebar = inSidebar
         BrowserSettings.sidebarShown = inSidebar
         NotificationCenter.default.post(name: BrowserWindowController.sidebarDidChange, object: nil)
+    }
+
+    @objc private func autoPictureInPictureChanged(_ sender: Any?) {
+        BrowserSettings.automaticPictureInPicture = autoPictureInPictureCheckbox.state == .on
     }
 
     @objc private func newWindowContentChanged(_ sender: Any?) {

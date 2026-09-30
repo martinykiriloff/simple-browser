@@ -227,6 +227,12 @@ enum BrowserSettings {
         set { store.set(newValue, forKey: "settings.firstRunDone") }
     }
 
+    /// A video playing goes into Picture in Picture when another tab is chosen.
+    static var automaticPictureInPicture: Bool {
+        get { store.bool(forKey: "settings.media.autoPictureInPicture") }
+        set { store.set(newValue, forKey: "settings.media.autoPictureInPicture") }
+    }
+
     /// "Don't ask again" to moving the app to the Applications folder.
     static var neverOfferMove: Bool {
         get { store.bool(forKey: "settings.neverOfferMove") }

@@ -90,6 +90,18 @@ final class BrowserWindowController: NSWindowController,
     let passwordCoordinator: PasswordCoordinator
     /// Addresses, cards and one-time codes in forms.
     let autofill: AutofillCoordinator
+    /// What the tab plays: its sound, video, Picture in Picture.
+    let media = TabMedia()
+    /// Told when what the tab plays changes, for the now-playing control.
+    var onMediaChange: (() -> Void)?
+    let nowPlaying = NowPlayingControl()
+    private(set) var pictureInPictureItem: NSToolbarItem?
+    private(set) var nowPlayingItem: NSToolbarItem?
+    private var mediaObserver: NSObjectProtocol?
+    /// Went into Picture in Picture by itself as another tab was chosen.
+    var autoPictureInPictureActive = false
+    var autoPictureInPictureTask: Task<Void, Never>?
+    var wasSelected = false
     private weak var passwordsItem: NSToolbarItem?
     /// Google Translate for this page, and the toolbar button that offers it.
     let translator = PageTranslator()
@@ -215,6 +227,7 @@ final class BrowserWindowController: NSWindowController,
         bridge.install(into: configuration)
         passwordCoordinator.install(into: configuration)
         autofill.install(into: configuration)
+        media.install(into: configuration)
         translator.install(into: configuration)
         contextMenu.install(into: configuration)
         reader.install(into: configuration)
@@ -351,6 +364,13 @@ final class BrowserWindowController: NSWindowController,
 
         passwordCoordinator.webView = webView
         autofill.webView = webView
+        media.webView = webView
+        media.onChange = { [weak self] in
+            guard let self else { return }
+            self.syncTabAccessory()
+            self.pictureInPictureItem?.isHidden = !self.media.hasVideo
+            self.onMediaChange?()
+        }
         autofill.onManage = { NSApp.sendAction(#selector(AppDelegate.showAutofillSettings(_:)), to: nil, from: nil) }
         passwordCoordinator.anchorItem = { [weak self] in self?.passwordsItem }
         passwordCoordinator.onStateChange = { [weak self] in self?.syncPasswordsItem() }
@@ -463,7 +483,13 @@ final class BrowserWindowController: NSWindowController,
                 self.sidebar?.reloadIfStale()
                 self.syncTabBar()
                 self.extensions?.didActivate(self)
+                self.selectionChanged(selected: true)
                 self.organizer?.changed()
+            }
+            // Every tab of the group hears it: the one that was in front is left.
+            DispatchQueue.main.async {
+                guard let self, selected !== self.window else { return }
+                self.selectionChanged(selected: false)
             }
         }
         // Tabs dragged in the strip: the sidebar follows, and groups stay together.
@@ -666,17 +692,21 @@ final class BrowserWindowController: NSWindowController,
     @objc func showCommandPalette(_ sender: Any?) { onCommandPalette?() }
 
     /// The group's colour, or a pin, on the tab in the strip.
+    /// On the tab in the strip: a pin, or its group's colour, and a speaker
+    /// while it plays sound, which mutes it when clicked.
     func syncTabAccessory() {
         guard let window else { return }
         let group = organizer?.group(groupID)
-        let key = isPinned ? "pin" : group.map { "group.\($0.color.rawValue)" } ?? ""
+        let sound = media.isMuted ? "muted" : media.isAudible ? "sound" : ""
+        let key = (isPinned ? "pin" : group.map { "group.\($0.color.rawValue)" } ?? "") + (sound.isEmpty ? "" : "+" + sound)
         guard key != tabAccessoryKey else { return }
         tabAccessoryKey = key
+        var views: [NSView] = []
         if isPinned {
             let pin = NSImageView(image: NSImage(systemSymbolName: "pin.fill", accessibilityDescription: "Pinned") ?? NSImage())
             pin.symbolConfiguration = .init(pointSize: 9, weight: .regular)
             pin.contentTintColor = .secondaryLabelColor
-            window.tab.accessoryView = pin
+            views.append(pin)
         } else if let group {
             // A layer, not an image: the tab bar draws images in its own grey.
             let dot = NSView(frame: NSRect(x: 0, y: 0, width: 8, height: 8))
@@ -686,9 +716,23 @@ final class BrowserWindowController: NSWindowController,
             dot.widthAnchor.constraint(equalToConstant: 8).isActive = true
             dot.heightAnchor.constraint(equalToConstant: 8).isActive = true
             dot.setAccessibilityLabel("In group \(group.name)")
-            window.tab.accessoryView = dot
+            views.append(dot)
+        }
+        if !sound.isEmpty {
+            let speaker = NSButton(image: NSImage(systemSymbolName: sound == "muted" ? "speaker.slash.fill" : "speaker.wave.2.fill",
+                                                  accessibilityDescription: sound == "muted" ? "Unmute Tab" : "Mute Tab") ?? NSImage(),
+                                   target: self, action: #selector(toggleMuteTab(_:)))
+            speaker.isBordered = false
+            speaker.symbolConfiguration = .init(pointSize: 10, weight: .regular)
+            speaker.toolTip = sound == "muted" ? "Unmute this tab" : "Mute this tab"
+            views.append(speaker)
+        }
+        if views.count > 1 {
+            let stack = NSStackView(views: views)
+            stack.spacing = 4
+            window.tab.accessoryView = stack
         } else {
-            window.tab.accessoryView = nil
+            window.tab.accessoryView = views.first
         }
     }
 
@@ -811,6 +855,7 @@ final class BrowserWindowController: NSWindowController,
         downloads.webView = fresh
         passwordCoordinator.webView = fresh
         autofill.webView = fresh
+        media.webView = fresh
         // The inspector and recording panel were bound to the old page.
         madeProtocolBridge = nil
         devTools?.tearDown()
@@ -2139,6 +2184,8 @@ final class BrowserWindowController: NSWindowController,
         devTools?.tearDown()
         passwordCoordinator.uninstall()
         autofill.uninstall()
+        media.uninstall()
+        if let mediaObserver { NotificationCenter.default.removeObserver(mediaObserver) }
         blocking.tearDown()
         if let downloadsObserver { NotificationCenter.default.removeObserver(downloadsObserver) }
         if let sidebarObserver { NotificationCenter.default.removeObserver(sidebarObserver) }
@@ -2199,6 +2246,12 @@ final class BrowserWindowController: NSWindowController,
             menuItem.title = isPinned ? "Unpin Tab" : "Pin Tab"
         case #selector(removeTabFromGroup(_:)):
             return groupID != nil
+        case #selector(toggleMuteTab(_:)):
+            menuItem.title = media.isMuted ? "Unmute Tab" : "Mute Tab"
+            return media.isAudible || media.isMuted
+        case #selector(togglePictureInPicture(_:)):
+            menuItem.title = media.isPictureInPicture ? "Exit Picture in Picture" : "Enter Picture in Picture"
+            return media.hasVideo
         case #selector(addBookmark(_:)), #selector(addToReadingList(_:)):
             return currentURL.map { $0.scheme?.hasPrefix("http") == true } ?? false
         default:
@@ -2210,7 +2263,7 @@ final class BrowserWindowController: NSWindowController,
     // MARK: - NSToolbarDelegate
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.sidebar, .back, .forward, .reload, .home, .address, .capture, .reader, .readerAppearance, .zoom, .shield, .star, .translate, .extensions, .passwords, .downloads, .flexibleSpace, .devTools]
+        [.sidebar, .back, .forward, .reload, .home, .address, .capture, .reader, .readerAppearance, .zoom, .shield, .star, .translate, .pictureInPicture, .extensions, .passwords, .downloads, .nowPlaying, .flexibleSpace, .devTools]
             + (isPrivate ? [.privateBadge] : []) + [.profile]
     }
 
@@ -2224,6 +2277,19 @@ final class BrowserWindowController: NSWindowController,
         willBeInsertedIntoToolbar flag: Bool
     ) -> NSToolbarItem? {
         switch identifier {
+        case .pictureInPicture:
+            let item = button(identifier, symbol: "pip.enter", label: "Picture in Picture", action: #selector(togglePictureInPicture(_:)))
+            item.toolTip = "Play the video in a window of its own, over everything"
+            item.isHidden = !media.hasVideo
+            pictureInPictureItem = item
+            return item
+        case .nowPlaying:
+            let item = NSToolbarItem(itemIdentifier: identifier)
+            item.view = nowPlaying
+            item.label = "Now Playing"
+            nowPlayingItem = item
+            item.isHidden = true
+            return item
         case .extensions:
             let item = NSToolbarItem(itemIdentifier: identifier)
             item.view = extensionButtons
@@ -2376,6 +2442,7 @@ final class BrowserWindowController: NSWindowController,
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         recordNavigation(.committed)
+        media.didCommitNavigation()
         applyZoomForPage()
         downloadsFromPage = 0
         permissions.didCommitNavigation()
@@ -2629,6 +2696,8 @@ private extension NSToolbarItem.Identifier {
     static let downloads = NSToolbarItem.Identifier("downloads")
     static let sidebar = NSToolbarItem.Identifier("sidebar")
     static let extensions = NSToolbarItem.Identifier("extensions")
+    static let pictureInPicture = NSToolbarItem.Identifier("pictureInPicture")
+    static let nowPlaying = NSToolbarItem.Identifier("nowPlaying")
     static let privateBadge = NSToolbarItem.Identifier("private")
     static let readerAppearance = NSToolbarItem.Identifier("readerAppearance")
 }

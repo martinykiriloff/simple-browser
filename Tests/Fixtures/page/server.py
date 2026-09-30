@@ -4,6 +4,7 @@ downloads, tabs, history, content blocking).
 
     python3 Tests/Fixtures/page/server.py      # http://127.0.0.1:8767/
 """
+import os
 import struct
 import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -19,6 +20,14 @@ def png(width, height, rgb):
 
 
 PIXEL = png(8, 8, (200, 30, 30))
+
+
+def tone_wav(seconds=3, rate=8000, frequency=440):
+    """A quiet sine tone, as a WAV file: something for a tab to be playing."""
+    import math
+    frames = b"".join(struct.pack("<h", int(3000 * math.sin(2 * math.pi * frequency * i / rate))) for i in range(seconds * rate))
+    return (b"RIFF" + struct.pack("<I", 36 + len(frames)) + b"WAVEfmt " + struct.pack("<IHHIIHH", 16, 1, 1, rate, rate * 2, 2, 16)
+            + b"data" + struct.pack("<I", len(frames)) + frames)
 
 STYLE = "<style>body{font:16px -apple-system,system-ui;margin:40px;max-width:40em} img{width:80px;height:80px}</style>"
 
@@ -161,6 +170,24 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             return
         self.send(200, FILTERS[name][version], "text/plain; charset=utf-8", {"ETag": etag})
+
+    def send_ranged(self, data, content_type):
+        """Media is read in pieces: a Range request gets 206 and just that piece."""
+        asked = self.headers.get("Range")
+        start, end = 0, len(data) - 1
+        if asked and asked.startswith("bytes="):
+            first, _, last = asked[6:].partition("-")
+            start = int(first) if first else max(0, len(data) - int(last))
+            end = int(last) if first and last else end
+        piece = data[start:end + 1]
+        self.send_response(206 if asked else 200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Content-Length", str(len(piece)))
+        if asked:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{len(data)}")
+        self.end_headers()
+        self.wfile.write(piece)
 
     def send(self, status, body, content_type="text/html; charset=utf-8", headers=None):
         data = body if isinstance(body, bytes) else body.encode()
@@ -376,6 +403,26 @@ function ask() { window.asked = 'asking'; Notification.requestPermission().then(
             self.send(200, "<!doctype html><title>Verify</title><form><input id=code autocomplete=one-time-code inputmode=numeric><button>Verify</button></form>")
         elif path == "/webauthn":
             self.send(200, """<!doctype html><title>Passkey</title><button id=passkey onclick="navigator.credentials.get({publicKey: {challenge: new Uint8Array(32)}}).catch(e => document.title = 'Passkey: ' + e.name)">Sign in with a passkey</button>""")
+        elif path in ("/clip.mp4", "/tone.wav"):
+            if path == "/clip.mp4":
+                with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "clip.mp4"), "rb") as f:
+                    self.send_ranged(f.read(), "video/mp4")
+            else:
+                self.send_ranged(tone_wav(), "audio/wav")
+        elif path == "/player":
+            self.send(200, """<!doctype html><title>Player</title>
+<video id=video src=/clip.mp4 loop playsinline muted style="width:320px;height:180px"></video>
+<audio id=tone src=/tone.wav loop></audio>
+<button id=play onclick="document.getElementById('tone').play()">Play</button>
+<script>
+window.events = [];
+window.skipped = 0;
+navigator.mediaSession.metadata = new MediaMetadata({title: 'Fixture Tone', artist: 'The Test Band'});
+navigator.mediaSession.setActionHandler('nexttrack', () => { window.skipped += 1; });
+for (const el of [document.getElementById('video'), document.getElementById('tone')])
+  for (const type of ['play', 'pause', 'volumechange', 'enterpictureinpicture', 'leavepictureinpicture'])
+    el.addEventListener(type, () => window.events.push(el.id + ':' + type));
+</script>""")
         elif path == "/page":
             # Any title, for tests that need many tabs told apart; with an icon.
             from urllib.parse import parse_qs, urlparse
