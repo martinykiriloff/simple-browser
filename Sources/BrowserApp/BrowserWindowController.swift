@@ -499,8 +499,15 @@ final class BrowserWindowController: NSWindowController,
         observedGroup = group
         selectionObservation = group.observe(\.selectedWindow, options: [.new]) { [weak self] group, _ in
             let selected = group.selectedWindow
+            // One hop to the main actor: two would send `self` twice, which
+            // Swift 6.2 (CI's compiler) refuses.
             DispatchQueue.main.async {
-                guard let self, selected === self.window else { return }
+                guard let self else { return }
+                guard selected === self.window else {
+                    // Every tab of the group hears it: the one that was in front is left.
+                    self.selectionChanged(selected: false)
+                    return
+                }
                 self.lastActive = Date()
                 self.wake()
                 self.sidebar?.reloadIfStale()
@@ -508,11 +515,6 @@ final class BrowserWindowController: NSWindowController,
                 self.extensions?.didActivate(self)
                 self.selectionChanged(selected: true)
                 self.organizer?.changed()
-            }
-            // Every tab of the group hears it: the one that was in front is left.
-            DispatchQueue.main.async {
-                guard let self, selected !== self.window else { return }
-                self.selectionChanged(selected: false)
             }
         }
         // Tabs dragged in the strip: the sidebar follows, and groups stay together.
