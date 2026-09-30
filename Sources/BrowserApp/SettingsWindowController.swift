@@ -34,7 +34,8 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate, N
     let memorySaverCheckbox = NSButton(checkboxWithTitle: "Put inactive tabs to sleep to save memory", target: nil, action: nil)
     let keepActiveField = NSTextField()
 
-    enum Pane: Int { case general, passwords, autofill, privacy, websites, extensions }
+    enum Pane: Int { case general, tabs, passwords, autofill, privacy, websites, extensions, advanced }
+    let shortcutsPane = ShortcutsSettingsPane()
 
     private let tabs = SettingsTabViewController()
     let passwordsPane: PasswordsSettingsPane
@@ -58,16 +59,28 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate, N
         window.isReleasedWhenClosed = false
         window.delegate = self
         let general = NSViewController()
-        general.view = buildContent()
+        general.view = buildGeneral()
         general.title = "General"
+        let tabsPane = NSViewController()
+        tabsPane.view = buildTabs()
+        tabsPane.title = "Tabs"
+        shortcutsPane.onChange = { MainMenu.applyShortcuts() }
         tabs.tabStyle = .segmentedControlOnTop
         tabs.addChild(general)
+        tabs.addChild(tabsPane)
         tabs.addChild(passwordsPane)
         tabs.addChild(autofillPane)
         tabs.addChild(privacyPane)
         tabs.addChild(websitesPane)
         tabs.addChild(extensionsPane)
+        tabs.addChild(shortcutsPane)
         window.contentViewController = tabs
+        // The pane chooser is AppKit's; VoiceOver needs a name for it.
+        func name(_ view: NSView) {
+            if let segmented = view as? NSSegmentedControl { segmented.setAccessibilityLabel("Settings pane") }
+            view.subviews.forEach(name)
+        }
+        name(tabs.view)
         window.title = "Settings"
         if !window.setFrameUsingName("SettingsWindow") { window.center() }
         window.setFrameAutosaveName("SettingsWindow")
@@ -82,6 +95,7 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate, N
     }
 
     var selectedPane: Pane { Pane(rawValue: tabs.selectedTabViewItemIndex) ?? .general }
+    var paneTitles: [String] { tabs.tabViewItems.map(\.label) }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("not supported") }
@@ -95,7 +109,7 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate, N
 
     // MARK: - Layout
 
-    private func buildContent() -> NSView {
+    private func buildGeneral() -> NSView {
         let title = NSTextField(labelWithString: "Homepage:")
         title.alignment = .right
         title.font = .systemFont(ofSize: NSFont.systemFontSize)
@@ -124,28 +138,12 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate, N
         help.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         help.textColor = .secondaryLabelColor
 
-        let newWindowTitle = NSTextField(labelWithString: "New windows open with:")
-        newWindowTitle.alignment = .right
-        newWindowPopUp.addItems(withTitles: BrowserSettings.NewWindowContent.allCases.map(\.title))
-        newWindowPopUp.target = self
-        newWindowPopUp.action = #selector(newWindowContentChanged(_:))
-        newWindowPopUp.setAccessibilityLabel("New windows open with")
-
         let startupTitle = NSTextField(labelWithString: "SimpleBrowser opens with:")
         startupTitle.alignment = .right
         startupPopUp.addItems(withTitles: ["All windows from last time", "A new window"])
         startupPopUp.target = self
         startupPopUp.action = #selector(startupChanged(_:))
         startupPopUp.setAccessibilityLabel("SimpleBrowser opens with")
-
-        let tabsTitle = NSTextField(labelWithString: "Tabs:")
-        tabsTitle.alignment = .right
-        tabsPopUp.addItems(withTitles: ["In a bar above the page", "In the sidebar"])
-        tabsPopUp.target = self
-        tabsPopUp.action = #selector(tabsLayoutChanged(_:))
-        tabsPopUp.setAccessibilityLabel("Tabs")
-        autoPictureInPictureCheckbox.target = self
-        autoPictureInPictureCheckbox.action = #selector(autoPictureInPictureChanged(_:))
 
         let engineTitle = NSTextField(labelWithString: "Search engine:")
         engineTitle.alignment = .right
@@ -158,19 +156,6 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate, N
         customEngineField.setAccessibilityLabel("Custom search address, with %s for the words")
         suggestionsCheckbox.target = self
         suggestionsCheckbox.action = #selector(suggestionsChanged(_:))
-
-        let memoryTitle = NSTextField(labelWithString: "Memory Saver:")
-        memoryTitle.alignment = .right
-        memorySaverCheckbox.target = self
-        memorySaverCheckbox.action = #selector(memorySaverChanged(_:))
-        keepActiveField.placeholderString = "Always keep these sites active, e.g. music.example.com, mail.example.com"
-        keepActiveField.delegate = self
-        keepActiveField.setAccessibilityLabel("Always keep these sites active")
-        let memoryHelp = NSTextField(wrappingLabelWithString:
-            "Tabs you have not used for a while, or more than a dozen in the background, sleep and wake as they were when you open them. "
-            + "Tabs playing sound, using the camera or holding a half-filled form never sleep.")
-        memoryHelp.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
-        memoryHelp.textColor = .secondaryLabelColor
 
         let downloadsTitle = NSTextField(labelWithString: "Save downloads to:")
         downloadsTitle.alignment = .right
@@ -186,17 +171,11 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate, N
             [NSGridCell.emptyContentView, resolvedLabel],
             [NSGridCell.emptyContentView, buttons],
             [NSGridCell.emptyContentView, help],
-            [newWindowTitle, newWindowPopUp],
-            [tabsTitle, tabsPopUp],
-            [NSGridCell.emptyContentView, autoPictureInPictureCheckbox],
             [engineTitle, enginePopUp],
             [NSGridCell.emptyContentView, customEngineField],
             [NSGridCell.emptyContentView, suggestionsCheckbox],
             [downloadsTitle, downloadFolderPopUp],
             [NSGridCell.emptyContentView, askWhereCheckbox],
-            [memoryTitle, memorySaverCheckbox],
-            [NSGridCell.emptyContentView, keepActiveField],
-            [NSGridCell.emptyContentView, memoryHelp],
         ])
         grid.rowSpacing = 8
         grid.columnSpacing = 10
@@ -211,22 +190,14 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate, N
         grid.row(at: 1).yPlacement = .center
         grid.row(at: 3).topPadding = 2
         grid.cell(for: buttons)?.xPlacement = .leading
-        grid.row(at: 5).topPadding = 10
+        grid.row(at: 5).topPadding = 12
         grid.row(at: 5).yPlacement = .center
-        grid.cell(for: newWindowPopUp)?.xPlacement = .leading
-        grid.cell(for: tabsPopUp)?.xPlacement = .leading
-        grid.row(at: 6).yPlacement = .center
         grid.cell(for: enginePopUp)?.xPlacement = .leading
-        grid.cell(for: autoPictureInPictureCheckbox)?.xPlacement = .leading
+        grid.cell(for: suggestionsCheckbox)?.xPlacement = .leading
         grid.row(at: 8).topPadding = 12
         grid.row(at: 8).yPlacement = .center
-        grid.cell(for: suggestionsCheckbox)?.xPlacement = .leading
-        grid.row(at: 11).topPadding = 12
-        grid.row(at: 11).yPlacement = .center
         grid.cell(for: downloadFolderPopUp)?.xPlacement = .leading
         grid.cell(for: askWhereCheckbox)?.xPlacement = .leading
-        grid.row(at: 13).topPadding = 12
-        grid.cell(for: memorySaverCheckbox)?.xPlacement = .leading
         grid.translatesAutoresizingMaskIntoConstraints = false
 
         let root = NSView()
@@ -237,6 +208,74 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate, N
             grid.topAnchor.constraint(equalTo: root.topAnchor, constant: 24),
             grid.bottomAnchor.constraint(lessThanOrEqualTo: root.bottomAnchor, constant: -20),
             homepageField.widthAnchor.constraint(greaterThanOrEqualToConstant: 300),
+            root.widthAnchor.constraint(equalToConstant: 560),
+            root.heightAnchor.constraint(greaterThanOrEqualToConstant: 170),
+        ])
+        return root
+    }
+
+    /// Settings → Tabs: where tabs go, what a new window opens with, Picture
+    /// in Picture on leaving a tab, and Memory Saver.
+    private func buildTabs() -> NSView {
+        let newWindowTitle = NSTextField(labelWithString: "New windows open with:")
+        newWindowTitle.alignment = .right
+        newWindowPopUp.addItems(withTitles: BrowserSettings.NewWindowContent.allCases.map(\.title))
+        newWindowPopUp.target = self
+        newWindowPopUp.action = #selector(newWindowContentChanged(_:))
+        newWindowPopUp.setAccessibilityLabel("New windows open with")
+
+        let tabsTitle = NSTextField(labelWithString: "Tabs:")
+        tabsTitle.alignment = .right
+        tabsPopUp.addItems(withTitles: ["In a bar above the page", "In the sidebar"])
+        tabsPopUp.target = self
+        tabsPopUp.action = #selector(tabsLayoutChanged(_:))
+        tabsPopUp.setAccessibilityLabel("Tabs")
+        autoPictureInPictureCheckbox.target = self
+        autoPictureInPictureCheckbox.action = #selector(autoPictureInPictureChanged(_:))
+
+        let memoryTitle = NSTextField(labelWithString: "Memory Saver:")
+        memoryTitle.alignment = .right
+        memorySaverCheckbox.target = self
+        memorySaverCheckbox.action = #selector(memorySaverChanged(_:))
+        keepActiveField.placeholderString = "Always keep these sites active, e.g. music.example.com, mail.example.com"
+        keepActiveField.delegate = self
+        keepActiveField.setAccessibilityLabel("Always keep these sites active")
+        let memoryHelp = NSTextField(wrappingLabelWithString:
+            "Tabs you have not used for a while, or more than a dozen in the background, sleep and wake as they were when you open them. "
+            + "Tabs playing sound, using the camera or holding a half-filled form never sleep.")
+        memoryHelp.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        memoryHelp.textColor = .secondaryLabelColor
+
+        let grid = NSGridView(views: [
+            [tabsTitle, tabsPopUp],
+            [newWindowTitle, newWindowPopUp],
+            [NSGridCell.emptyContentView, autoPictureInPictureCheckbox],
+            [memoryTitle, memorySaverCheckbox],
+            [NSGridCell.emptyContentView, keepActiveField],
+            [NSGridCell.emptyContentView, memoryHelp],
+        ])
+        grid.rowSpacing = 8
+        grid.columnSpacing = 10
+        grid.column(at: 0).xPlacement = .trailing
+        grid.column(at: 1).xPlacement = .fill
+        for row in 0..<grid.numberOfRows {
+            grid.cell(atColumnIndex: 0, rowIndex: row).contentView?.setContentCompressionResistancePriority(.required, for: .horizontal)
+        }
+        grid.cell(for: tabsPopUp)?.xPlacement = .leading
+        grid.cell(for: newWindowPopUp)?.xPlacement = .leading
+        grid.row(at: 1).topPadding = 12
+        grid.cell(for: autoPictureInPictureCheckbox)?.xPlacement = .leading
+        grid.row(at: 2).topPadding = 12
+        grid.row(at: 3).topPadding = 12
+        grid.cell(for: memorySaverCheckbox)?.xPlacement = .leading
+        grid.translatesAutoresizingMaskIntoConstraints = false
+        let root = NSView()
+        root.addSubview(grid)
+        NSLayoutConstraint.activate([
+            grid.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 24),
+            grid.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -24),
+            grid.topAnchor.constraint(equalTo: root.topAnchor, constant: 24),
+            grid.bottomAnchor.constraint(lessThanOrEqualTo: root.bottomAnchor, constant: -20),
             root.widthAnchor.constraint(equalToConstant: 560),
             root.heightAnchor.constraint(greaterThanOrEqualToConstant: 170),
         ])
@@ -424,7 +463,7 @@ final class SettingsTabViewController: NSTabViewController {
         let size = view.fittingSize
         var frame = window.frameRect(forContentRect: NSRect(origin: .zero, size: size))
         frame.origin = NSPoint(x: window.frame.minX, y: window.frame.maxY - frame.height)
-        window.setFrame(frame, display: true, animate: animated && window.isVisible)
+        window.setFrame(frame, display: true, animate: animated && window.isVisible && !Accessibility.reduceMotion)
         window.title = "Settings"
     }
 }

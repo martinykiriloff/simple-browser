@@ -107,6 +107,30 @@ Measured WebKit behaviour:
   as the cause and neither was. The feature self-test reports the camera as
   not tested when this happens.
 
+## Shortcuts, the overview and Handoff
+
+`BrowserKit/Shortcuts` is the one list of keyboard shortcuts: every
+command with its default key, Safari's and Chrome's, and the keys macOS
+keeps for itself. `MainMenu.applyShortcuts()` sets the menu bar from it
+(with the person's changes from `BrowserSettings.shortcutOverrides`) and
+`MainMenu.menuShortcuts()` reads it back for the audit in the feature
+self-test. Keys the window handles itself (⌘1–⌘9, the tab keys, F12) are
+in the list as fixed.
+
+`TabOverviewController` draws every tab of the window over the page from
+`BrowserWindowController.overviewImage()`: a fresh WebKit snapshot for the
+tab in front, the picture kept as it last left the front for the rest
+(`cacheSnapshot()` on resigning key; a background tab's web view cannot
+be snapshotted), a sleeping tab's own picture, or the site's initial.
+
+Handoff is an `NSUserActivity` of type browsing web on the window
+controller, replaced when the page changes and dropped in private windows;
+`AppDelegate` opens one continued from another device as a new tab.
+
+`Accessibility` reads Reduce Motion and Increase Contrast (overridable in
+tests) and audits a view tree for controls VoiceOver would read without a
+name, which the self-test runs over the browser window and every pane.
+
 ## Media
 
 `MediaAgent/media-agent.js` runs in its own isolated world and reports what

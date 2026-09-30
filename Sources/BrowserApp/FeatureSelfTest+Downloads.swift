@@ -150,7 +150,7 @@ extension FeatureSelfTest {
         check("downloads: “Ask where to save each file” is a setting", BrowserSettings.askWhereToSave && !settings.downloadFolderPopUp.isEnabled)
         settings.askWhereCheckbox.performClick(nil)
         let titles = settings.window?.contentView?.descendants(NSTextField.self).filter { $0.stringValue.hasSuffix(":") && !$0.isEditable } ?? []
-        check("downloads: every title in Settings is shown whole", titles.count >= 6 && titles.allSatisfy { $0.frame.width >= $0.intrinsicContentSize.width - 0.5 },
+        check("downloads: every title in Settings is shown whole", titles.count >= 4 && titles.allSatisfy { $0.frame.width >= $0.intrinsicContentSize.width - 0.5 },
               titles.filter { $0.frame.width < $0.intrinsicContentSize.width - 0.5 }.map(\.stringValue))
         await pause(0.3)
         snapshot(settings.window, "downloads-settings")

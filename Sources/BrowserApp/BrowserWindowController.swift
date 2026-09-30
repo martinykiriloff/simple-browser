@@ -98,6 +98,12 @@ final class BrowserWindowController: NSWindowController,
     private(set) var pictureInPictureItem: NSToolbarItem?
     private(set) var nowPlayingItem: NSToolbarItem?
     private var mediaObserver: NSObjectProtocol?
+    /// View → Show All Tabs, while it is up.
+    var tabOverview: TabOverviewController?
+    /// The tab as it last looked while in front, for the overview.
+    var lastSnapshot: NSImage?
+    private var magnifyMonitor: Any?
+    private var pinchTotal: CGFloat = 0
     /// Went into Picture in Picture by itself as another tab was chosen.
     var autoPictureInPictureActive = false
     var autoPictureInPictureTask: Task<Void, Never>?
@@ -309,6 +315,7 @@ final class BrowserWindowController: NSWindowController,
         webView.navigationDelegate = self
         webView.uiDelegate = self
         webView.allowsBackForwardNavigationGestures = true
+        webView.allowsMagnification = true   // pinch, and two-finger double-tap to zoom in on a part
         // Always shippable per ARCHITECTURE.md: "Debug in Safari" is the escape hatch.
         webView.isInspectable = true
         webView.contextMenu = contextMenu
@@ -417,6 +424,20 @@ final class BrowserWindowController: NSWindowController,
             }
             if modifiers.contains([.command, .option]), !self.isEditingAddress, event.keyCode == 123 || event.keyCode == 124 {
                 self.stepTab(by: event.keyCode == 123 ? -1 : 1)
+                return nil
+            }
+            return event
+        }
+
+        // A pinch in on a page that is not zoomed shows every tab, as in Safari.
+        magnifyMonitor = NSEvent.addLocalMonitorForEvents(matching: .magnify) { [weak self] event in
+            guard let self, event.window === self.window, self.tabOverview == nil else { return event }
+            if event.phase == .began { self.pinchTotal = 0 }
+            guard self.webView.magnification <= 1.0, event.magnification < 0 else { return event }
+            self.pinchTotal += event.magnification
+            if self.pinchTotal < -0.4 {
+                self.pinchTotal = 0
+                self.toggleTabOverview(nil)
                 return nil
             }
             return event
@@ -758,8 +779,12 @@ final class BrowserWindowController: NSWindowController,
     private(set) var isHibernated = false
     private var hibernatedState: Any?
     private var hibernatedURL: URL?
-    private var hibernatedTitle = ""
+    private(set) var hibernatedTitle = ""
     private let snapshotView = NSImageView()
+    /// Where things go over the page: the overview, notices.
+    var pageOverlayHost: NSView { pageContainer }
+    /// The picture a sleeping tab shows.
+    var hibernationImage: NSImage? { snapshotView.image }
 
     /// Whether this tab must stay live: on screen, making sound, using the
     /// camera or microphone, holding a form someone is filling in, or being
@@ -824,6 +849,7 @@ final class BrowserWindowController: NSWindowController,
         fresh.navigationDelegate = self
         fresh.uiDelegate = self
         fresh.allowsBackForwardNavigationGestures = true
+        fresh.allowsMagnification = true
         fresh.isInspectable = true
         fresh.customUserAgent = old.customUserAgent
         fresh.pageZoom = old.pageZoom
@@ -1033,7 +1059,9 @@ final class BrowserWindowController: NSWindowController,
 
     /// The page showing. In Reader that is the article's own address: what
     /// the address bar says, what a bookmark keeps, what zoom goes by.
-    private var shownURL: URL? { ReaderPage.original(of: webView.url) ?? WarningPage.original(of: webView.url) ?? webView.url }
+    private var shownURL: URL? { errorPageURL ?? ReaderPage.original(of: webView.url) ?? WarningPage.original(of: webView.url) ?? webView.url }
+    /// The address whose load failed, kept in the bar while the error page shows.
+    private var errorPageURL: URL?
 
     // MARK: - Certificates
 
@@ -2029,6 +2057,7 @@ final class BrowserWindowController: NSWindowController,
     private func syncChrome() {
         // A sleeping tab shows the page it will wake to, not the blank one.
         if isHibernated { return }
+        updateHandoff()
         syncNavigationButtons()
         syncStar()
         syncSecurity()
@@ -2168,7 +2197,9 @@ final class BrowserWindowController: NSWindowController,
     }
 
     func windowDidResignKey(_ notification: Notification) {
-        if (notification.object as? NSWindow) === window { lastActive = Date() }
+        guard (notification.object as? NSWindow) === window else { return }
+        lastActive = Date()
+        cacheSnapshot()
     }
 
     func windowWillClose(_ notification: Notification) {
@@ -2179,6 +2210,8 @@ final class BrowserWindowController: NSWindowController,
         onTabClosed?(currentURL, interactionState as? Data, isHibernated ? hibernatedTitle : window?.title ?? "")
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
         keyMonitor = nil
+        if let magnifyMonitor { NSEvent.removeMonitor(magnifyMonitor) }
+        magnifyMonitor = nil
         recorderPanel?.close()
         devToolsWindow?.close()
         devTools?.tearDown()
@@ -2441,6 +2474,7 @@ final class BrowserWindowController: NSWindowController,
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        if let url = webView.url, url.absoluteString != "about:blank" { errorPageURL = nil }
         recordNavigation(.committed)
         media.didCommitNavigation()
         applyZoomForPage()
@@ -2609,15 +2643,9 @@ final class BrowserWindowController: NSWindowController,
         if let failedURL, showCertificateWarning(for: failedURL, error: nsError) { return }
 
         let failedURLString = failedURL?.absoluteString ?? ""
-        let html = """
-        <!doctype html><meta charset="utf-8">
-        <style>body{font:15px -apple-system,system-ui;color:#333;margin:15vh auto;max-width:36em;padding:0 1em}
-        h1{font-size:1.3em}code{word-break:break-all}</style>
-        <h1>This page could not be loaded</h1>
-        <p>\(Self.escape(error.localizedDescription))</p>
-        <p><code>\(Self.escape(failedURLString))</code></p>
-        """
-        webView.loadHTMLString(html, baseURL: nil)
+        let explanation = ErrorPage.explanation(domain: nsError.domain, code: nsError.code, host: failedURL?.host(percentEncoded: false))
+        errorPageURL = failedURL
+        webView.loadHTMLString(ErrorPage.html(explanation: explanation, url: failedURLString, detail: error.localizedDescription), baseURL: nil)
         syncChrome()
         if !isEditingAddress { addressField.stringValue = failedURLString }
     }

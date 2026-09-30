@@ -291,6 +291,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Links handed over by Finder, `open -a`, or another app once the user
     /// picks SimpleBrowser as a handler for http/https.
+    // MARK: - Handoff
+
+    func application(_ application: NSApplication, willContinueUserActivityWithType userActivityType: String) -> Bool {
+        userActivityType == NSUserActivityTypeBrowsingWeb
+    }
+
+    /// A page being read on an iPhone or another Mac, taken up here.
+    func application(_ application: NSApplication, continue userActivity: NSUserActivity,
+                     restorationHandler: @escaping ([any NSUserActivityRestoring]) -> Void) -> Bool {
+        guard userActivity.activityType == NSUserActivityTypeBrowsingWeb, let url = userActivity.webpageURL else { return false }
+        let tab = newTab(beside: frontmostBrowser, url: url, inFront: true)
+        continuedActivities.append(url)
+        restorationHandler([tab])
+        return true
+    }
+
+    /// What Handoff brought in, for the self-test.
+    var continuedActivities: [URL] = []
+
     func application(_ application: NSApplication, open urls: [URL]) {
         for url in urls {
             let controller = makeWindow()

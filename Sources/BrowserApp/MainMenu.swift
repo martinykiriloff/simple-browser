@@ -1,4 +1,5 @@
 import AppKit
+import BrowserKit
 
 /// The app has no nib, so the menu bar is built in code. Menu items with a nil
 /// target resolve through the responder chain: window controller first, then
@@ -18,6 +19,51 @@ enum MainMenu {
         mainMenu.addItem(developMenuItem())
         mainMenu.addItem(windowMenuItem(tabGroupsDelegate: tabGroupsMenuDelegate))
         NSApp.mainMenu = mainMenu
+        applyShortcuts()
+    }
+
+    /// Every menu key follows the catalogue in BrowserKit, with the
+    /// person's changes from Settings → Advanced; called again after a change.
+    static func applyShortcuts() {
+        let effective = Shortcuts.effective(overrides: BrowserSettings.shortcutOverrides)
+        var done: Set<String> = []
+        func walk(_ menu: NSMenu) {
+            for item in menu.items {
+                if let submenu = item.submenu { walk(submenu); continue }
+                guard let action = item.action, !item.isHidden else { continue }
+                let id = NSStringFromSelector(action)
+                guard let command = Shortcuts.command(id), !command.fixed, !done.contains(id) else { continue }
+                done.insert(id)
+                if let shortcut = effective[id] ?? nil {
+                    let (key, flags) = shortcut.menuKeyEquivalent
+                    item.keyEquivalent = key
+                    item.keyEquivalentModifierMask = flags
+                } else {
+                    item.keyEquivalent = ""
+                }
+            }
+        }
+        if let mainMenu = NSApp.mainMenu { walk(mainMenu) }
+    }
+
+    /// Items AppKit puts in the menus itself (Close All, Emoji & Symbols,
+    /// Start Dictation): the Mac's, not the app's to audit or change.
+    static let appKitOwn: Set<String> = ["closeAll:", "orderFrontCharacterPalette:", "startDictation:"]
+
+    /// Every key the menu bar answers to, by command: the audit's other half.
+    static func menuShortcuts() -> [String: KeyShortcut] {
+        var result: [String: KeyShortcut] = [:]
+        func walk(_ menu: NSMenu) {
+            for item in menu.items {
+                if let submenu = item.submenu { walk(submenu); continue }
+                guard let action = item.action, !item.isHidden, let shortcut = KeyShortcut(menuItem: item) else { continue }
+                let id = NSStringFromSelector(action)
+                if appKitOwn.contains(id) { continue }
+                if result[id] == nil { result[id] = shortcut }
+            }
+        }
+        if let mainMenu = NSApp.mainMenu { walk(mainMenu) }
+        return result
     }
 
     private static func appMenuItem() -> NSMenuItem {
@@ -99,6 +145,8 @@ enum MainMenu {
         let menu = NSMenu(title: "View")
         let sidebar = menu.addItem(withTitle: "Show Sidebar", action: #selector(BrowserWindowController.toggleBrowserSidebar(_:)), keyEquivalent: "s")
         sidebar.keyEquivalentModifierMask = [.command, .shift]
+        let overview = menu.addItem(withTitle: "Show All Tabs", action: #selector(BrowserWindowController.toggleTabOverview(_:)), keyEquivalent: "\\")
+        overview.keyEquivalentModifierMask = [.command, .shift]
         menu.addItem(withTitle: "Enter Picture in Picture", action: #selector(BrowserWindowController.togglePictureInPicture(_:)), keyEquivalent: "")
         menu.addItem(withTitle: "Open in Split View", action: #selector(BrowserWindowController.openInSplitView(_:)), keyEquivalent: "")
         menu.addItem(withTitle: "Close Split View", action: #selector(BrowserWindowController.closeSplitView(_:)), keyEquivalent: "")

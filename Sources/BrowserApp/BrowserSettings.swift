@@ -227,6 +227,12 @@ enum BrowserSettings {
         set { store.set(newValue, forKey: "settings.firstRunDone") }
     }
 
+    /// Keyboard shortcuts a person changed: a key, or nil for none.
+    static var shortcutOverrides: [String: KeyShortcut?] {
+        get { store.data(forKey: "settings.shortcuts").flatMap { try? JSONDecoder().decode([String: KeyShortcut?].self, from: $0) } ?? [:] }
+        set { store.set(try? JSONEncoder().encode(newValue), forKey: "settings.shortcuts") }
+    }
+
     /// A video playing goes into Picture in Picture when another tab is chosen.
     static var automaticPictureInPicture: Bool {
         get { store.bool(forKey: "settings.media.autoPictureInPicture") }

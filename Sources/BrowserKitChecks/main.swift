@@ -5,6 +5,12 @@ import BrowserKit
 // Same arrangement as PasswordKitChecks, for the same reason: no XCTest on a
 // Command Line Tools-only Mac.
 
+// `--shortcut-table` prints the README's shortcut table instead.
+if CommandLine.arguments.contains("--shortcut-table") {
+    print(Shortcuts.readmeTable())
+    exit(0)
+}
+
 nonisolated(unsafe) var failures = 0
 nonisolated(unsafe) var passed = 0
 
@@ -506,6 +512,65 @@ do {
     check("extensions: a zip is a zip", CRXPackage.zip(from: zip) == zip)
     crx3[4] = 7
     check("extensions: an unknown .crx is refused", CRXPackage.zip(from: crx3) == nil && CRXPackage.zip(from: Data("hello".utf8)) == nil)
+}
+
+// MARK: Keyboard shortcuts
+
+do {
+    let defaults = Shortcuts.effective(overrides: [:])
+    check("every command has a key by default", Shortcuts.commands.allSatisfy { defaults[$0.id] != nil })
+    check("no two commands share a key, and none is the Mac's own", Shortcuts.conflicts(in: defaults).isEmpty, Shortcuts.conflicts(in: defaults))
+    check("⇧⌘T reads as it is written on the Mac", KeyShortcut("t", [.command, .shift]).display == "⇧⌘T")
+    check("…with every modifier in the Mac's order", KeyShortcut("l", [.command, .option, .control]).display == "⌃⌥⌘L")
+    check("…and named keys by their sign", KeyShortcut("left", [.command, .option]).display == "⌥⌘←" && KeyShortcut("f12", []).display == "F12")
+
+    check("a key needs ⌘", Shortcuts.refusal(giving: KeyShortcut("k", [.shift]), to: "reload:", overrides: [:]) == "A shortcut needs ⌘, or a function key.")
+    check("…unless it is a function key", Shortcuts.refusal(giving: KeyShortcut("f9", []), to: "reload:", overrides: [:]) == nil)
+    check("the Mac's own keys are refused, saying whose they are", Shortcuts.refusal(giving: KeyShortcut("space", [.command]), to: "reload:", overrides: [:]) == "⌘Space is the Mac's own, for Spotlight.")
+    check("a key another command has is refused, naming it", Shortcuts.refusal(giving: KeyShortcut("t"), to: "reload:", overrides: [:]) == "⌘T is “New Tab”.")
+    check("…including one given by the person", Shortcuts.refusal(giving: KeyShortcut("j"), to: "reload:", overrides: ["findInPage:": KeyShortcut("j")]) == "⌘J is “Find…”.")
+    check("a free key is allowed", Shortcuts.refusal(giving: KeyShortcut("j"), to: "reload:", overrides: [:]) == nil)
+    check("the keys every Mac app has stay as they are", Shortcuts.refusal(giving: KeyShortcut("j"), to: "terminate:", overrides: [:]) == "“Quit SimpleBrowser” keeps its key.")
+    check("…as do the tab keys the window handles", Shortcuts.refusal(giving: KeyShortcut("j"), to: "tab.next", overrides: [:]) == "“Next tab” keeps its key.")
+
+    let overrides: [String: KeyShortcut?] = ["reload:": KeyShortcut("j"), "findInPage:": nil]
+    let changed = Shortcuts.effective(overrides: overrides)
+    check("a change applies", changed["reload:"] == KeyShortcut("j"))
+    check("a key can be taken away", changed["findInPage:"] == .some(nil))
+    check("…and the rest keep theirs", changed["newWindow:"] == KeyShortcut("n"))
+    check("a change to a fixed key is ignored", Shortcuts.effective(overrides: ["terminate:": KeyShortcut("j")])["terminate:"] == KeyShortcut("q"))
+    let clash = Shortcuts.conflicts(in: Shortcuts.effective(overrides: ["reload:": KeyShortcut("t")]))
+    check("two commands on one key is a conflict, naming both", clash.count == 1 && clash[0].commands == ["newWindowForTab:", "reload:"], clash)
+
+    let table = Shortcuts.readmeTable()
+    check("the README table lists every command", Shortcuts.commands.filter { !["hide:", "hideOtherApplications:", "terminate:", "performMiniaturize:", "toggleFullScreen:", "showSettings:"].contains($0.id) }
+        .allSatisfy { table.contains("| \($0.title) |") })
+    // The README is checked when the checks run from the repository.
+    if let readme = try? String(contentsOfFile: "README.md", encoding: .utf8) {
+        check("the README's shortcut table is the catalogue's", readme.contains(table), "regenerate it from Shortcuts.readmeTable()")
+    }
+    let encoded = try? JSONEncoder().encode(["reload:": KeyShortcut("j", [.command, .shift])])
+    let decoded = encoded.flatMap { try? JSONDecoder().decode([String: KeyShortcut].self, from: $0) }
+    check("changes survive a round trip through settings", decoded?["reload:"] == KeyShortcut("j", [.command, .shift]))
+}
+
+// MARK: The error page
+
+do {
+    let offline = ErrorPage.explanation(domain: "NSURLErrorDomain", code: -1009, host: "example.com")
+    check("offline is said plainly", offline.title == "You’re offline" && offline.advice.contains("Connect"))
+    let missing = ErrorPage.explanation(domain: "NSURLErrorDomain", code: -1003, host: "nosuch.example")
+    check("an unknown host names the site", missing.title == "Can’t find “nosuch.example”")
+    let refused = ErrorPage.explanation(domain: "NSURLErrorDomain", code: -1004, host: "example.com")
+    check("a refused connection says so", refused.title == "“example.com” refused the connection")
+    check("an unknown error is still a sentence", ErrorPage.explanation(domain: "WebKitErrorDomain", code: 999, host: nil).title == "This page could not be loaded")
+    check("a port WebKit keeps closed is explained", ErrorPage.explanation(domain: "WebKitErrorDomain", code: 103, host: "127.0.0.1").title == "That address uses a port that is kept closed")
+    let html = ErrorPage.html(explanation: refused, url: "http://example.com/<x>", detail: "Could not connect to the server.")
+    check("the page follows light and dark", html.contains("color-scheme: light dark") && html.contains("prefers-color-scheme: dark"))
+    check("…the accent colour", html.contains("background: AccentColor"))
+    check("…and higher contrast", html.contains("prefers-contrast: more"))
+    check("Try Again goes back to the address, escaped", html.contains("href=\"http://example.com/&lt;x&gt;\""))
+    check("the system's own words are kept in Details", html.contains("<summary>Details</summary><p>Could not connect to the server.</p>"))
 }
 
 // MARK: Where the app runs from

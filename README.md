@@ -56,7 +56,7 @@ can be switched off; then nothing typed leaves the Mac until Return.
 
 ```sh
 scripts/test-ui.sh            # the app presses its own keys and buttons, then reports
-scripts/test-features.sh      # tabs, sessions, history, bookmarks, the address bar, blocking, Reader, private windows, downloads, the sidebar, ⌘K, split view, importing, extensions, AutoFill and media
+scripts/test-features.sh      # tabs, sessions, history, bookmarks, the address bar, blocking, Reader, private windows, downloads, the sidebar, ⌘K, split view, importing, extensions, AutoFill, media and native polish
 scripts/test-downloads.sh     # downloads paused or under way at quit go on after a relaunch
 ```
 
@@ -414,6 +414,106 @@ window of its own, over everything; again puts it back. With
 video** on, a playing video goes out by itself as another tab is chosen,
 and comes back into its page when the tab is chosen again. Pages may go
 full screen.
+
+## Keyboard, trackpad and accessibility
+
+Every shortcut, beside what Safari and Chrome use for the same thing. The
+table is made from the catalogue in `BrowserKit/Shortcuts.swift`, which
+also holds the keys macOS keeps for itself (Spotlight, screenshots,
+Mission Control, Force Quit…); `BrowserKitChecks` fails if two commands
+share a key, if one is the Mac's own, or if this table drifts from the
+catalogue, and the feature self-test fails if the menu bar drifts from it.
+
+| Command | SimpleBrowser | Safari | Chrome |
+|---|---|---|---|
+| New Window | ⌘N | ⌘N | ⌘N |
+| New Private Window | ⇧⌘N | ⇧⌘N | ⇧⌘N |
+| New Tab | ⌘T | ⌘T | ⌘T |
+| Open Location… | ⌘L | ⌘L | ⌘L |
+| Command Palette… | ⌘K | — | — |
+| Close Tab | ⌘W | ⌘W | ⌘W |
+| Close Window | ⇧⌘W | ⇧⌘W | ⇧⌘W |
+| Reopen Closed Tab | ⇧⌘T | ⇧⌘T | ⇧⌘T |
+| Undo | ⌘Z | ⌘Z | ⌘Z |
+| Redo | ⇧⌘Z | ⇧⌘Z | ⇧⌘Z |
+| Cut | ⌘X | ⌘X | ⌘X |
+| Copy | ⌘C | ⌘C | ⌘C |
+| Paste | ⌘V | ⌘V | ⌘V |
+| Paste and Go | ⇧⌘V | ⇧⌘V (Paste and Match Style) | ⇧⌘V (Paste and Match Style) |
+| Select All | ⌘A | ⌘A | ⌘A |
+| Find… | ⌘F | ⌘F | ⌘F |
+| Find Next | ⌘G | ⌘G | ⌘G |
+| Find Previous | ⇧⌘G | ⇧⌘G | ⇧⌘G |
+| Use Selection for Find | ⌘E | ⌘E | ⌘E |
+| Show Sidebar | ⇧⌘S | ⇧⌘L | — |
+| Show All Tabs | ⇧⌘\ | ⇧⌘\ | — |
+| Reload Page | ⌘R | ⌘R | ⌘R |
+| Reload Page From Origin | ⌥⌘R | ⌥⌘R | ⇧⌘R |
+| Stop | ⌘. | ⌘. | ⌘. / Esc |
+| Actual Size | ⌘0 | ⌘0 | ⌘0 |
+| Zoom In | ⌘+ | ⌘+ | ⌘+ |
+| Zoom Out | ⌘- | ⌘- | ⌘- |
+| Show Reader | ⇧⌘R | ⇧⌘R | — |
+| Translate Page | ⌥⌘T | — | — |
+| Back | ⌘[ | ⌘[ | ⌘[ |
+| Forward | ⌘] | ⌘] | ⌘] |
+| Home | ⇧⌘H | ⇧⌘H | ⇧⌘H |
+| Show All History | ⌘Y | ⌘Y | ⌘Y |
+| Add Bookmark… | ⌘D | ⌘D | ⌘D |
+| Add to Reading List | ⇧⌘D | ⇧⌘D | ⇧⌘D (bookmark all tabs) |
+| Show Bookmarks | ⌥⌘B | ⌥⌘B | ⌥⌘B |
+| Show Favorites Bar | ⇧⌘B | ⇧⌘B | ⇧⌘B |
+| Show Developer Tools | ⌥⌘I | ⌥⌘I | ⌥⌘I |
+| JavaScript Console | ⌥⌘J | ⌥⌘C | ⌥⌘J |
+| Inspect Elements | ⌥⌘C | — | ⌥⌘C |
+| Show Recording Log | ⌃⌥⌘L | — | — |
+| Downloads | ⌥⌘L | ⌥⌘L | ⇧⌘J |
+| Show tab 1–9 | ⌘1–⌘9 | ⌘1–9 | ⌘1–8, ⌘9 last |
+| Next tab | ⇧⌘] | ⇧⌘] / ⌃⇥ | ⌥⌘→ / ⌃⇥ |
+| Previous tab | ⇧⌘[ | ⇧⌘[ / ⌃⇧⇥ | ⌥⌘← / ⌃⇧⇥ |
+| Next tab (also) | ⌥⌘→ | — | ⌥⌘→ |
+| Previous tab (also) | ⌥⌘← | — | ⌥⌘← |
+| Developer Tools | F12 | — | F12 |
+| Switch to profile 1–9 | ⌥⇧⌘1–9 | — | — |
+
+**Settings → Advanced** changes any of them: choose the command, click the
+box and press the keys. A key the Mac keeps, or another command already
+has, is refused and the reason shown; the keys every Mac app has (Quit,
+Hide, Minimize, Settings, Full Screen) stay where they are. ⌘1–⌘9, the
+tab keys and F12 are handled by the window itself and cannot be changed.
+
+**Trackpad**: swipe with two fingers for Back and Forward, pinch to zoom
+the page and double-tap with two fingers to zoom in on a part (WebKit's
+own smart zoom), and pinch in on a page that is not zoomed to see every
+tab. **View → Show All Tabs** (⇧⌘\) is the same overview: every tab of
+the window as a picture with its title; a click or Return opens one, ✕
+closes it, typing narrows the tabs to those matching, arrows move, Esc
+leaves. A tab in the background is shown as it last looked in front, and
+one never seen as its site's initial.
+
+**Accessibility**: every control has a name for VoiceOver, which the
+self-test checks in the browser window and every Settings pane. With
+*Reduce Motion* on, nothing fades or slides: the overview and the Settings
+window are simply there. With *Increase Contrast* on, the start and error
+pages use full lines and colours (`prefers-contrast: more`), and the
+overview's backdrop is opaque. Full Keyboard Access reaches every button.
+
+**Settings** has eight panes: General (start-up, homepage, search,
+downloads), Tabs (where tabs go, what new windows open with, Picture in
+Picture on leaving a tab, Memory Saver), Passwords, AutoFill, Privacy,
+Websites, Extensions and Advanced (shortcuts). The start page, Reader,
+certificate warnings and the error page follow the system's light or dark
+look and its accent colour.
+
+**Handoff**: the page in front is offered to your other devices, as Safari
+does (`NSUserActivityTypeBrowsingWeb`), and a page handed over from an
+iPhone or another Mac opens here as a new tab. Private windows offer
+nothing. Handoff needs the app signed with a Developer ID, as the DMG is.
+
+**The error page**: a load that fails says what went wrong in plain words
+(you're offline; the site can't be found, refused the connection, took
+too long; the connection isn't secure), with *Try Again* and the system's
+own wording under *Details*.
 
 ## Private windows
 
