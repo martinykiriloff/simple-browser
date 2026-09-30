@@ -12,6 +12,9 @@ import WebKit
 @MainActor
 enum QuietMode {
     static let isOn = CommandLine.arguments.contains("--quiet")
+    /// The performance run wants pages treated as a person's are: hidden
+    /// when not on screen, so WebKit throttles them as it would.
+    static let keepsOcclusion = CommandLine.arguments.contains("--performance")
 
     static func activate() {
         guard !isOn else { return }
@@ -23,7 +26,7 @@ enum QuietMode {
     /// requests for the camera or for the location wait, unanswered, until
     /// it is shown. So a quiet run's pages are told they are visible.
     static func apply(to webView: WKWebView) {
-        guard isOn else { return }
+        guard isOn, !keepsOcclusion else { return }
         let setter = NSSelectorFromString("_setWindowOcclusionDetectionEnabled:")
         guard webView.responds(to: setter), let method = webView.method(for: setter) else { return }
         typealias Set = @convention(c) (AnyObject, Selector, Bool) -> Void

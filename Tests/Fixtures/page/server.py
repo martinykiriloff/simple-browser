@@ -409,6 +409,12 @@ function ask() { window.asked = 'asking'; Notification.requestPermission().then(
                     self.send_ranged(f.read(), "video/mp4")
             else:
                 self.send_ranged(tone_wav(), "audio/wav")
+        elif path.startswith("/busy"):
+            # A page doing what pages do in the background: a timer and an animation.
+            self.send(200, """<!doctype html><title>Busy</title>
+<style>@keyframes spin { to { transform: rotate(360deg) } } .s { width: 60px; height: 60px; background: #48c; animation: spin 1s linear infinite }</style>
+<div class=s></div><p id=n>0</p>
+<script>let n = 0; setInterval(() => { n += 1; document.getElementById('n').textContent = n; }, 100);</script>""")
         elif path == "/player":
             self.send(200, """<!doctype html><title>Player</title>
 <video id=video src=/clip.mp4 loop playsinline muted style="width:320px;height:180px"></video>

@@ -22,6 +22,7 @@ final class MemorySaver {
         timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { _ = self?.run(pressure: .normal) }
         }
+        timer?.tolerance = 15   // a wide tolerance lets the system group wake-ups
         let source = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: .main)
         source.setEventHandler { [weak self, weak source] in
             let event = source?.data ?? []

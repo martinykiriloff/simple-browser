@@ -53,6 +53,7 @@ final class SessionController {
                 self.save(snapshot())
             }
         }
+        timer?.tolerance = 1
     }
 
     func save(_ snapshot: SessionSnapshot) {

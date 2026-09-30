@@ -126,11 +126,10 @@ final class ContentBlocker {
             waiting = []
             if isOn, needsUpdate { _ = await update() }
         }
-        timer = Timer.scheduledTimer(withTimeInterval: 60 * 60, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated {
-                guard let self, self.isOn, self.needsUpdate else { return }
-                Task { @MainActor in _ = await self.update() }
-            }
+        // Hourly, when the Mac has a quiet moment, never while it naps the app.
+        IdleWork.repeating("filter-lists", every: 60 * 60) { [weak self] in
+            guard let self, self.isOn, self.needsUpdate else { return }
+            Task { @MainActor in _ = await self.update() }
         }
     }
 

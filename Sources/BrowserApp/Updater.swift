@@ -50,9 +50,8 @@ final class Updater {
     func start() {
         guard currentVersion != nil else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in self?.checkIfDue() }
-        timer = Timer.scheduledTimer(withTimeInterval: 60 * 60, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.checkIfDue() }
-        }
+        // Hourly, when the Mac has a quiet moment.
+        IdleWork.repeating("update-check", every: 60 * 60) { [weak self] in self?.checkIfDue() }
     }
 
     private func checkIfDue() {

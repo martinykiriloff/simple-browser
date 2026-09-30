@@ -58,6 +58,7 @@ can be switched off; then nothing typed leaves the Mac until Return.
 scripts/test-ui.sh            # the app presses its own keys and buttons, then reports
 scripts/test-features.sh      # tabs, sessions, history, bookmarks, the address bar, blocking, Reader, private windows, downloads, the sidebar, ⌘K, split view, importing, extensions, AutoFill, media and native polish
 scripts/test-downloads.sh     # downloads paused or under way at quit go on after a relaunch
+scripts/test-performance.sh   # launch, new tabs, memory with 20 and 50 tabs, the processor while idle, against the budget
 ```
 
 `test-features.sh`, `test-downloads.sh` and `test-page.sh` run **quietly**: the app is given
@@ -514,6 +515,40 @@ nothing. Handoff needs the app signed with a Developer ID, as the DMG is.
 (you're offline; the site can't be found, refused the connection, took
 too long; the connection isn't secure), with *Try Again* and the system's
 own wording under *Details*.
+
+## Performance budget
+
+"Fast" and "doesn't drain the battery" are numbers here, not impressions.
+`scripts/test-performance.sh` launches the app cold onto the start page,
+opens tabs of the fixture site to 20 and then 50, lets Memory Saver run,
+then idles with ten busy background pages (a timer and an animation each),
+measuring the app and its web, network and GPU processes together. The
+numbers are judged against this budget, which lives in
+`BrowserKit/PerformanceBudget.swift`; over it, the script fails.
+
+| What | Budget |
+|---|---|
+| Cold launch to first window | 1.20 s |
+| Cold launch to start page | 1.60 s |
+| New tab to page loaded, median | 0.40 s |
+| New tab to page loaded, slowest | 1.00 s |
+| Memory with 20 tabs | 1100 MB |
+| Memory with 50 tabs | 2200 MB |
+| Memory with 50 tabs after Memory Saver | 1300 MB |
+| Processor, 10 busy background tabs idle | 5.00 % of a core |
+
+Measured on a debug build on an M-series Mac, with about half again as
+headroom over what was seen; `RELEASE=1` measures the release build. The
+idle figure is processor time over the idle period as a share of one core.
+
+What keeps the numbers down: background tabs are WebKit's own affair
+(timers throttled, animations stopped, media paused when a page is not
+visible) plus Memory Saver, which puts tabs to sleep after half an hour
+unused or when more than a dozen are in the background, and the app's
+own timers carry a tolerance so the system can group their wake-ups.
+Housekeeping waits for a quiet moment: filter-list updates, update checks
+and history pruning run through `NSBackgroundActivityScheduler`, never
+while the Mac is napping the app, and never while a page is loading.
 
 ## Private windows
 

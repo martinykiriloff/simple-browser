@@ -107,6 +107,28 @@ Measured WebKit behaviour:
   as the cause and neither was. The feature self-test reports the camera as
   not tested when this happens.
 
+## Performance
+
+`PerformanceRun` (`--performance <json>`) records launch marks (the first
+window on screen, the start page finished) in seconds since the process
+began, opens tabs one after another timing each to its page finished,
+sums the memory footprint and processor time of the app and every tab's
+web, network and GPU process (`proc_pid_rusage`, the pids read from
+WebKit by name: `_webProcessIdentifier`, `_gpuProcessIdentifier`,
+`_networkProcessIdentifier`), runs Memory Saver, then idles with ten busy
+background pages. `BrowserKit/PerformanceBudget` holds the limits and
+judges a run; `BrowserKitChecks --performance-verdict` is what the script
+calls, and the README's table is checked against the code.
+
+`IdleWork` wraps `NSBackgroundActivityScheduler` for housekeeping that
+can wait: filter lists, update checks, history pruning.
+
+Measured on 2026-10-01: a quiet run turns WebKit's window occlusion
+detection off (so pages under test behave as if seen), and with it off
+every background tab runs its timers and animations at full rate: ten
+busy background pages cost 30% of a core. With detection on, as for a
+person, WebKit throttles them to 2.4%. The performance run keeps it on.
+
 ## Shortcuts, the overview and Handoff
 
 `BrowserKit/Shortcuts` is the one list of keyboard shortcuts: every

@@ -260,6 +260,7 @@ final class DownloadsListController: NSViewController {
         refresh()
         // Speed and time left move on even when no byte arrives.
         ticker = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in MainActor.assumeIsolated { self?.refresh() } }
+        ticker?.tolerance = 0.2
     }
 
     override func viewDidDisappear() {

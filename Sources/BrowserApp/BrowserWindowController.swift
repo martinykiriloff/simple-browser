@@ -100,6 +100,8 @@ final class BrowserWindowController: NSWindowController,
     private var mediaObserver: NSObjectProtocol?
     /// View → Show All Tabs, while it is up.
     var tabOverview: TabOverviewController?
+    /// How many pages have finished loading in this tab; the performance run waits on it.
+    private(set) var pageFinishedCount = 0
     /// The tab as it last looked while in front, for the overview.
     var lastSnapshot: NSImage?
     private var magnifyMonitor: Any?
@@ -2489,6 +2491,7 @@ final class BrowserWindowController: NSWindowController,
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        pageFinishedCount += 1
         if !isHibernated { hideSnapshot() }
         if !isHibernated, let url = webView.url {
             onVisit?(url, webView.title ?? "", typedNavigation)

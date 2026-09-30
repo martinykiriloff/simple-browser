@@ -221,6 +221,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             } else {
                 controller = makeWindow()
                 controller.showWindow(nil)
+                PerformanceRun.mark("window")
                 controller.load(url)
             }
             if launch.showRecorder { controller.showRecorder(nil) }
@@ -243,6 +244,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             if let out = launch.pageSelfTestOutput {
                 PageSelfTest.run(app: self, browser: controller, output: out, snapshots: launch.snapshotDirectory)
+            }
+            if let out = launch.performanceOutput {
+                PerformanceRun.run(app: self, browser: controller, output: out, tabCounts: launch.performanceTabs, idleSeconds: launch.performanceIdle)
             }
             if let directory = launch.snapshotDirectory, launch.passwordsSelfTestOutput == nil, launch.pageSelfTestOutput == nil,
                launch.featureSelfTestOutput == nil {
@@ -350,7 +354,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         // Self-test runs never go looking for real updates.
         guard launch.passwordsSelfTestOutput == nil, launch.pageSelfTestOutput == nil, launch.uiSelfTestOutput == nil,
-              launch.featureSelfTestOutput == nil else { return }
+              launch.featureSelfTestOutput == nil, launch.performanceOutput == nil else { return }
         updater.start()
     }
 
@@ -660,15 +664,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let store = histories[profile.id] { return store }
         let store: HistoryStore?
         if launch.featureSelfTestOutput != nil || launch.pageSelfTestOutput != nil || launch.passwordsSelfTestOutput != nil
-            || launch.uiSelfTestOutput != nil {
+            || launch.uiSelfTestOutput != nil || launch.performanceOutput != nil {
             store = try? HistoryStore(path: nil)
         } else {
             let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
                 .appendingPathComponent("SimpleBrowser/Profiles/\(profile.id)", isDirectory: true)
             try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             store = try? HistoryStore(path: directory.appendingPathComponent("History.sqlite").path)
-            // A year, as Safari keeps by default.
-            try? store?.prune(olderThan: Date().addingTimeInterval(-365 * 86_400))
+            // A year, as Safari keeps by default: pruned when the Mac has a
+            // quiet moment, not while the first page is loading, and then daily.
+            IdleWork.once("history-prune-\(profile.id)", within: 120) { [weak store] in
+                try? store?.prune(olderThan: Date().addingTimeInterval(-365 * 86_400))
+            }
+            IdleWork.repeating("history-prune-daily-\(profile.id)", every: 86_400) { [weak store] in
+                try? store?.prune(olderThan: Date().addingTimeInterval(-365 * 86_400))
+            }
         }
         histories[profile.id] = store
         return store
@@ -723,7 +733,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Whether this run keeps its data in memory (self-tests), never in the person's files.
     private var usesScratchData: Bool {
         launch.featureSelfTestOutput != nil || launch.pageSelfTestOutput != nil || launch.passwordsSelfTestOutput != nil
-            || launch.uiSelfTestOutput != nil
+            || launch.uiSelfTestOutput != nil || launch.performanceOutput != nil
     }
 
     private func profileDirectory(_ profile: Profile) -> URL {
@@ -1311,6 +1321,9 @@ struct LaunchOptions {
     var updateFeed: URL?
     var updateSelfTestOutput: String?
     var showPasswords = false
+    var performanceOutput: String?
+    var performanceTabs = [20, 50]
+    var performanceIdle: Double = 20
 
     static func parse(_ arguments: [String]) -> LaunchOptions {
         var options = LaunchOptions()
@@ -1351,6 +1364,12 @@ struct LaunchOptions {
                 options.sessionDirectory = iterator.next()
             case "--downloads-dir":
                 options.downloadsDirectory = iterator.next()
+            case "--performance":
+                options.performanceOutput = iterator.next()
+            case "--performance-tabs":
+                options.performanceTabs = (iterator.next() ?? "").split(separator: ",").compactMap { Int($0) }
+            case "--performance-idle":
+                options.performanceIdle = Double(iterator.next() ?? "") ?? 20
             case "--quit-when-done":
                 options.quitWhenDone = true
             case "--only":

@@ -5,10 +5,26 @@ import BrowserKit
 // Same arrangement as PasswordKitChecks, for the same reason: no XCTest on a
 // Command Line Tools-only Mac.
 
-// `--shortcut-table` prints the README's shortcut table instead.
+// `--shortcut-table` prints the README's shortcut table instead;
+// `--performance-table` the budget table; `--performance-verdict <json>`
+// checks a run's numbers against the budget and fails on a regression.
 if CommandLine.arguments.contains("--shortcut-table") {
     print(Shortcuts.readmeTable())
     exit(0)
+}
+if CommandLine.arguments.contains("--performance-table") {
+    print(PerformanceBudget.readmeTable())
+    exit(0)
+}
+if let index = CommandLine.arguments.firstIndex(of: "--performance-verdict"), CommandLine.arguments.indices.contains(index + 1) {
+    guard let data = FileManager.default.contents(atPath: CommandLine.arguments[index + 1]),
+          let measure = try? JSONDecoder().decode(PerformanceMeasure.self, from: data) else {
+        print("✘ no performance report at \(CommandLine.arguments[index + 1])")
+        exit(1)
+    }
+    print(PerformanceBudget.report(measure))
+    print(PerformanceBudget.passes(measure) ? "✔ within the performance budget" : "✘ over the performance budget")
+    exit(PerformanceBudget.passes(measure) ? 0 : 1)
 }
 
 nonisolated(unsafe) var failures = 0
@@ -571,6 +587,24 @@ do {
     check("…and higher contrast", html.contains("prefers-contrast: more"))
     check("Try Again goes back to the address, escaped", html.contains("href=\"http://example.com/&lt;x&gt;\""))
     check("the system's own words are kept in Details", html.contains("<summary>Details</summary><p>Could not connect to the server.</p>"))
+}
+
+// MARK: Performance budget
+
+do {
+    let good = PerformanceMeasure(launchToWindow: 0.5, launchToPage: 1, newTabMedian: 0.2, newTabWorst: 0.5, memory20Tabs: 800, memory50Tabs: 1900,
+                                  memory50TabsAfterSaver: 1200, idleCPUPercent: 1, idleSeconds: 20, build: "test")
+    check("a run within every budget passes", PerformanceBudget.passes(good))
+    var slow = good
+    slow.launchToPage = PerformanceBudget.launchToPage + 0.01
+    check("one number over its budget fails the run", !PerformanceBudget.passes(slow))
+    check("…and the report says which", PerformanceBudget.report(slow).contains("✘ Cold launch to start page") && !PerformanceBudget.report(slow).contains("✘ Cold launch to first window"))
+    check("the report shows seconds to two places and megabytes whole", PerformanceBudget.report(good).contains("0.50 s (budget") && PerformanceBudget.report(good).contains("800 MB (budget"))
+    if let readme = try? String(contentsOfFile: "README.md", encoding: .utf8) {
+        check("the README's budget table is the code's", readme.contains(PerformanceBudget.readmeTable()), "regenerate it from PerformanceBudget.readmeTable()")
+    }
+    let encoded = try? JSONEncoder().encode(good)
+    check("a run's numbers survive the trip through JSON", encoded.flatMap { try? JSONDecoder().decode(PerformanceMeasure.self, from: $0) } == good)
 }
 
 // MARK: Where the app runs from
