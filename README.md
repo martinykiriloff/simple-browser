@@ -809,8 +809,10 @@ to both, so a downloaded DMG opens with no Gatekeeper warning, online or
 not, and CI checks it the way Gatekeeper will (`spctl`, `stapler validate`).
 The secrets it needs are listed at the top of `build.yml`: the Developer ID
 certificate as a `.p12`, and an App Store Connect API key for `notarytool`.
-A tag build without them fails, unless the repository variable
-`ALLOW_UNNOTARIZED_RELEASE` is `true`. By hand:
+A tag build without them still releases, ad-hoc signed, with a warning in
+the run, and Gatekeeper warns the first time that DMG is opened; set the
+repository variable `REQUIRE_NOTARIZED_RELEASE` to `true` to have such a
+build fail instead. By hand:
 
 ```sh
 CODESIGN_IDENTITY="Developer ID Application: …" NOTARY_KEYCHAIN_PROFILE=simplebrowser scripts/make-dmg.sh

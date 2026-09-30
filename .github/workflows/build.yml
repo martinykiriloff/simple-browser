@@ -16,8 +16,9 @@
 #   NOTARY_KEY                 an App Store Connect API key (.p8), base64
 #   NOTARY_KEY_ID              its key ID
 #   NOTARY_ISSUER              its issuer ID
-# Without them a tag build fails, unless the repository variable
-# ALLOW_UNNOTARIZED_RELEASE is "true": then it is released ad-hoc signed.
+# Without them a tag build still releases, ad-hoc signed, with a warning in
+# the run (Gatekeeper warns on first launch). Set the repository variable
+# REQUIRE_NOTARIZED_RELEASE to "true" to have such a build fail instead.
 name: Build
 
 on:
@@ -90,15 +91,15 @@ jobs:
           NOTARY_KEY_BASE64: ${{ secrets.NOTARY_KEY }}
           NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
           NOTARY_ISSUER: ${{ secrets.NOTARY_ISSUER }}
-          ALLOW_UNNOTARIZED: ${{ vars.ALLOW_UNNOTARIZED_RELEASE }}
+          REQUIRE_NOTARIZED: ${{ vars.REQUIRE_NOTARIZED_RELEASE }}
         run: |
           if [ -z "$P12" ] || [ -z "$NOTARY_KEY_BASE64" ] || [ -z "$NOTARY_KEY_ID" ] || [ -z "$NOTARY_ISSUER" ]; then
-            if [ "$ALLOW_UNNOTARIZED" = "true" ]; then
-              echo "::warning::No Developer ID or notary key: this release is ad-hoc signed, and Gatekeeper will warn on first launch"
-              exit 0
+            if [ "$REQUIRE_NOTARIZED" = "true" ]; then
+              echo "::error::A notarized release needs DEVELOPER_ID_P12, DEVELOPER_ID_P12_PASSWORD, NOTARY_KEY, NOTARY_KEY_ID and NOTARY_ISSUER (see the top of this file)"
+              exit 1
             fi
-            echo "::error::A release needs DEVELOPER_ID_P12, DEVELOPER_ID_P12_PASSWORD, NOTARY_KEY, NOTARY_KEY_ID and NOTARY_ISSUER (see the top of this file), or the variable ALLOW_UNNOTARIZED_RELEASE=true"
-            exit 1
+            echo "::warning::No Developer ID or notary key: this release is ad-hoc signed, and Gatekeeper will warn on first launch. Add the secrets named at the top of build.yml for a notarized release."
+            exit 0
           fi
           keychain="$RUNNER_TEMP/signing.keychain-db"
           password="$(uuidgen)"
