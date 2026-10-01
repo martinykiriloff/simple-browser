@@ -314,7 +314,22 @@
     return { names: Array.from(names).sort(), prefix };
   }
 
+  // Live expressions: re-evaluated four times a second, so nothing is
+  // retained (no object ids) and `$_` is left alone.
+  function evaluateLive({ expression }) {
+    try {
+      const v = evaluator(api, String(expression));
+      const out = { type: typeof v, description: describe(v) };
+      if (v !== null && typeof v === "object") out.subtype = subtypeOf(v);
+      else if (v === null) out.subtype = "null";
+      return { result: out };
+    } catch (error) {
+      return { exceptionDetails: { text: describe(error) } };
+    }
+  }
+
   const runtime = {
+    "Runtime.evaluateLive": evaluateLive,
     "Runtime.evaluate": evaluate,
     "Runtime.getProperties": getProperties,
     "Runtime.invokeGetter": invokeGetter,

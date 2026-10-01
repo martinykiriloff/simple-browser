@@ -29,6 +29,7 @@
       this.historyIndex = this.history.length;
 
       $("#console-clear").addEventListener("click", () => this.clear());
+      this.loadLive();
       $("#console-filter").addEventListener("input", debounce(() => { this.filterText = $("#console-filter").value.toLowerCase(); this.applyFilter(); }, 100));
       $("#console-levels").addEventListener("change", () => { this.level = $("#console-levels").value; this.applyFilter(); });
       $("#console-preserve").addEventListener("change", (e) => { this.preserve = e.target.checked; });
@@ -61,7 +62,90 @@
       this.load();
     },
 
-    show() { this.prompt.focus(); this.scrollToBottom(); },
+    show() { this.prompt.focus(); this.scrollToBottom(); this.startLive(); },
+    hide() { this.stopLive(); },
+
+    // ---- live expressions ------------------------------------------------------
+    // Pinned above the messages and re-evaluated every 250 ms while the
+    // Console shows, without logging or keeping objects alive.
+    live: [],
+    liveTimer: null,
+
+    loadLive() {
+      try { this.live = JSON.parse(localStorage.getItem("devtools.console.live") || "[]").map((expression) => ({ expression, value: null })); } catch (_) { this.live = []; }
+      $("#console-live-add").addEventListener("click", () => this.addLive(""));
+      this.renderLive();
+    },
+    saveLive() {
+      try { localStorage.setItem("devtools.console.live", JSON.stringify(this.live.map((l) => l.expression).filter(Boolean))); } catch (_) {}
+    },
+    addLive(expression) {
+      const item = { expression, value: null };
+      this.live.push(item);
+      this.renderLive();
+      if (!expression) this.editLive(item);
+      else { this.saveLive(); this.evaluateLive(); }
+      return item;
+    },
+    removeLive(item) {
+      this.live = this.live.filter((l) => l !== item);
+      this.saveLive();
+      this.renderLive();
+    },
+    editLive(item) {
+      const row = $$("#console-live .live-row")[this.live.indexOf(item)];
+      if (!row) return;
+      const input = h("textarea", { class: "live-input", rows: "1", spellcheck: "false", placeholder: "Expression" });
+      input.value = item.expression;
+      row.querySelector(".live-expression").replaceWith(input);
+      input.focus();
+      const finish = (commit) => {
+        if (commit) item.expression = input.value.trim();
+        if (!item.expression) { this.removeLive(item); return; }
+        this.saveLive(); this.renderLive(); this.evaluateLive();
+      };
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); input.blur(); }
+        else if (e.key === "Escape") { e.preventDefault(); input.value = item.expression; input.blur(); }
+        e.stopPropagation();
+      });
+      input.addEventListener("blur", () => finish(true), { once: true });
+    },
+    renderLive() {
+      const box = $("#console-live");
+      box.textContent = "";
+      box.hidden = !this.live.length;
+      for (const item of this.live) {
+        const value = item.value == null ? h("span", { class: "muted" }, "not available")
+          : item.error ? h("span", { class: "v-error" }, item.error) : h("span", { class: "v-" + (item.value.subtype === "null" ? "null" : item.value.type) }, item.value.type === "string" ? JSON.stringify(item.value.description) : item.value.description);
+        const expression = h("div", { class: "live-expression", title: "Click to edit" }, item.expression);
+        expression.addEventListener("click", () => this.editLive(item));
+        box.appendChild(h("div", { class: "live-row" }, h("span", { class: "live-eye" }, "👁"),
+          h("div", { class: "live-main" }, expression, h("div", { class: "live-value" }, value)),
+          h("span", { class: "remove", title: "Remove expression", onclick: () => this.removeLive(item) }, "✕")));
+      }
+    },
+    async evaluateLive() {
+      if (this.liveBusy || !this.live.length) return;
+      this.liveBusy = true;
+      try {
+        for (const item of this.live) {
+          if (!item.expression) continue;
+          try {
+            const r = await DevTools.rpc("Runtime.evaluateLive", { expression: item.expression });
+            item.error = r.exceptionDetails ? r.exceptionDetails.text : null;
+            item.value = r.result || item.value || { type: "undefined", description: "undefined" };
+          } catch (e) { item.error = /paused/i.test(e.message) ? "(paused in the debugger)" : e.message; item.value = item.value || {}; }
+        }
+      } finally { this.liveBusy = false; }
+      if (!document.activeElement || !document.activeElement.classList.contains("live-input")) this.renderLive();
+    },
+    startLive() {
+      if (this.liveTimer) return;
+      this.evaluateLive();
+      this.liveTimer = setInterval(() => this.evaluateLive(), 250);
+    },
+    stopLive() { clearInterval(this.liveTimer); this.liveTimer = null; },
 
     async load() {
       let entries = [];

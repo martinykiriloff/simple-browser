@@ -689,6 +689,7 @@
         $("#styles-list").innerHTML = ""; $("#computed-list").innerHTML = ""; $("#layout-view").innerHTML = "";
         $("#styles-list").appendChild(h("div", { class: "styles-note" }, "Select an element to see its styles."));
         $("#listeners-list").textContent = "";
+        $("#a11y-view").textContent = "";
         this.syncForcedState();
         return;
       }
@@ -696,6 +697,7 @@
       if (this.sidebarTab === "styles") this.loadStyles(id);
       else if (this.sidebarTab === "computed") this.loadComputed(id);
       else if (this.sidebarTab === "listeners") this.loadListeners(id);   // elements-extras.js
+      else if (this.sidebarTab === "accessibility") this.loadAccessibility(id);   // elements-a11y.js
       else this.loadLayout(id);
     },
 

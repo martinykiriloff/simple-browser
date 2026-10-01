@@ -118,6 +118,11 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/data.json"):
             body = json.dumps({"ok": True, "items": [1, 2, 3], "path": self.path}).encode()
             self._send(200, body, "application/json")
+        elif self.path == "/manifest.json":
+            manifest = {"name": "Fixture Shop", "short_name": "Shop", "start_url": "/?pwa=1", "display": "standalone",
+                        "theme_color": "#1a73e8", "background_color": "#ffffff",
+                        "icons": [{"src": "/pixel.png", "sizes": "192x192", "type": "image/png"}]}
+            self._send(200, json.dumps(manifest).encode(), "application/manifest+json")
         elif self.path == "/pixel.png":
             self._send(200, PNG, "image/png")
         elif self.path == "/bundle.js":

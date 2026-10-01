@@ -637,6 +637,109 @@ try {
   const restored = await DevTools.rpc("Page.getInfo");
   check("leaving device mode restores viewport and user agent", restored.width === desktop.width && !/iPhone/.test(restored.userAgent), { w: restored.width, ua: restored.userAgent.slice(0, 40) });
 
+  // ---- Application: IndexedDB, Cache Storage, manifest, service workers ------------------
+  const pageEval = async (expression) => {
+    const r = await DevTools.rpc("Console.evaluate", { expression });
+    return r?.result?.description ?? ("error: " + (r?.exceptionDetails?.text || JSON.stringify(r)));
+  };
+  {
+    const app = DevTools.panels.application;
+    out.appSetup = [
+      await pageEval("await new Promise((resolve, reject) => { const req = indexedDB.open('shop', 2); req.onupgradeneeded = () => { const db = req.result; if (!db.objectStoreNames.contains('products')) { const s = db.createObjectStore('products', { keyPath: 'id' }); s.createIndex('byName', 'name'); } }; req.onsuccess = () => { const db = req.result; const tx = db.transaction('products', 'readwrite'); const s = tx.objectStore('products'); s.put({ id: 1, name: 'Apple', price: 1.5, added: new Date(0), tags: ['fruit'] }); s.put({ id: 2, name: 'Bread', price: 3 }); s.put({ id: 3, name: 'Cheese', price: 7 }); tx.oncomplete = () => { db.close(); resolve('idb ok'); }; tx.onerror = () => reject(tx.error); }; req.onerror = () => reject(req.error); })"),
+      await pageEval("await caches.open('v1').then((c) => c.addAll(['/api/data.json?cached=1', '/pixel.png'])).then(() => 'cache ok')"),
+      await pageEval("(() => { const l = document.createElement('link'); l.rel = 'manifest'; l.href = '/manifest.json'; document.head.appendChild(l); return 'manifest ok'; })()"),
+    ];
+    DevTools.showPanel("application"); await wait(300);
+    await app.loadTree();
+    const treeText = document.querySelector("#application-tree").textContent;
+    check("IndexedDB databases and stores are in the tree", treeText.includes("shop") && treeText.includes("products"), { setup: out.appSetup, treeText });
+    check("caches are in the tree", treeText.includes("v1"), treeText);
+    await app.open("idb:shop/products");
+    check("IndexedDB records", app.rows.length === 3 && document.querySelector("#application-body").textContent.includes("Apple"), app.rows.length);
+    document.querySelector('#application-body tr[data-index="0"]').click(); await wait(200);
+    const record = document.querySelector("#app-detail").textContent;
+    check("a record's value as a tree, dates included", record.includes("Apple") && record.includes("1970-01-01T00:00:00.000Z") && record.includes("fruit"), record.slice(0, 200));
+    app.selectedIndex = 1; await app.deleteSelected();
+    check("delete a record", app.rows.length === 2 && !app.rows.some((r) => r.value && r.value.name === "Bread"), app.rows.map((r) => r.value && r.value.name));
+    await app.clearAll();
+    check("clear an object store", app.rows.length === 0);
+    await app.open("cache:v1");
+    check("cache entries", app.rows.length === 2 && app.rows.some((r) => r.url.endsWith("/api/data.json?cached=1") && r.status === 200), app.rows);
+    document.querySelector(`#application-body tr[data-index="${app.rows.findIndex((r) => r.url.includes("data.json"))}"]`).click(); await wait(500);
+    check("a cached response's headers and body", /"ok": true/.test(document.querySelector("#app-detail").textContent) && /content-type/i.test(document.querySelector("#app-detail").textContent));
+    await app.open("manifest");
+    const manifestText = document.querySelector("#application-body").textContent;
+    check("the Web App Manifest is parsed", manifestText.includes("Fixture Shop") && manifestText.includes("standalone") && document.querySelectorAll("#application-body .manifest-icon img").length === 1, manifestText.slice(0, 200));
+    check("manifest warnings", manifestText.includes("No 512×512 icon"));
+    await app.open("serviceworkers");
+    out.serviceWorkers = app.extra;
+    check("the service workers pane says what it can", document.querySelector("#application-body").textContent.length > 30 && app.extra && typeof app.extra.supported === "boolean");
+    await DevTools.rpc("IndexedDB.deleteDatabase", { name: "shop" });
+    await DevTools.rpc("CacheStorage.deleteCache", { cache: "v1" });
+    await app.open("local");
+  }
+
+  // ---- Elements: Accessibility pane -----------------------------------------------------------
+  {
+    DevTools.showPanel("elements"); await wait(300);
+    const button = Array.from(el.nodes.values()).find((n) => n.nodeName === "button")?.nodeId;
+    const input = Array.from(el.nodes.values()).find((n) => n.nodeName === "input")?.nodeId;
+    el.select(button); await wait(200);
+    document.querySelector('#styles-tabs [data-subpanel="accessibility"]').click();
+    for (let i = 0; i < 30 && !(el.a11y && el.a11y.computed.nodeId === button); i++) await wait(100);
+    const a11y = el.a11y || {};
+    out.a11y = { computed: a11y.computed, engine: a11y.engine };
+    check("computed role and name", a11y.computed && a11y.computed.role === "button" && a11y.computed.name === "Action" && a11y.computed.nameSource === "contents", out.a11y);
+    if (SBDebugger.available) check("WebKit's own accessibility object", a11y.engine && a11y.engine.exists && a11y.engine.role === "button" && a11y.engine.label === "Action", a11y.engine);
+    check("the tree runs down to the node", /button\s*"Action"/.test(document.querySelector("#a11y-view .a11y-node.current")?.textContent || ""), document.querySelector("#a11y-view")?.textContent.slice(0, 200));
+    check("computed properties", /Name\s*Action/.test(document.querySelector("#a11y-view .a11y-props")?.textContent || ""));
+    el.select(input); await wait(200);
+    for (let i = 0; i < 30 && !(el.a11y && el.a11y.computed.nodeId === input); i++) await wait(100);
+    check("a placeholder is the only name of the unlabelled input", el.a11y.computed.nameSource === "placeholder" && el.a11y.computed.role === "textbox", el.a11y.computed);
+    document.querySelector('#styles-tabs [data-subpanel="styles"]').click();
+  }
+
+  // ---- Animations ----------------------------------------------------------------------------------
+  {
+    out.animSetup = await pageEval("(() => { const s = document.createElement('style'); s.id = 'spin-style'; s.textContent = '@keyframes spin { from { transform: rotate(0deg) } to { transform: rotate(360deg) } } #spinner { animation: spin 2s linear infinite; display: inline-block }'; document.head.appendChild(s); const d = document.createElement('div'); d.id = 'spinner'; d.textContent = '*'; document.body.appendChild(d); d.animate([{ opacity: 1 }, { opacity: 0.2 }], { duration: 1000, iterations: Infinity, id: 'fade' }); return 'ok'; })()");
+    Drawer.show("animations"); await wait(400);
+    const list = await SBAnimations.refresh();
+    out.animations = list.map((a) => `${a.name} ${a.type} ${a.playState} ${a.target && a.target.label}`);
+    const spin = list.find((a) => a.name === "spin");
+    check("CSS animations and Web Animations are listed", spin && spin.type === "CSS animation" && list.some((a) => a.name === "fade" && a.type === "Web animation"), out.animations);
+    check("with their target node", spin && spin.target && spin.target.label === "div#spinner" && spin.duration === 2000 && spin.iterations === "infinite", spin);
+    await SBAnimations.pauseAll();
+    check("pause all", SBAnimations.list.length >= 2 && SBAnimations.list.every((a) => a.playState === "paused"), SBAnimations.list.map((a) => a.playState));
+    await SBAnimations.setRate(0.25);
+    check("playback rate", SBAnimations.list.every((a) => a.playbackRate === 0.25));
+    await SBAnimations.resumeAll();
+    check("resume all", SBAnimations.list.every((a) => a.playState === "running"), SBAnimations.list.map((a) => a.playState));
+    await SBAnimations.setRate(1);
+    check("rows with a timeline", document.querySelectorAll("#animations-list .anim-row .anim-track").length >= 2);
+    await pageEval("document.getAnimations().forEach((a) => a.cancel()); document.getElementById('spinner').remove(); document.getElementById('spin-style').remove(); 1");
+    Drawer.hide();
+  }
+
+  // ---- Console: live expressions ----------------------------------------------------------------
+  {
+    DevTools.showPanel("console"); await wait(200);
+    const cons = DevTools.panels.console;
+    for (const l of cons.live.slice()) cons.removeLive(l);
+    await pageEval("window.__liveCounter = 1; 1");
+    cons.addLive("window.__liveCounter * 2");
+    await wait(700);
+    const liveValue = () => document.querySelector("#console-live .live-value")?.textContent;
+    check("a live expression shows its value", document.querySelector("#console-live .live-expression")?.textContent === "window.__liveCounter * 2" && liveValue() === "2", document.querySelector("#console-live").textContent);
+    const before = cons.entries.length;
+    await DevTools.rpc("Runtime.evaluate", { expression: "window.__liveCounter = 21" });
+    await wait(700);
+    check("it updates by itself", liveValue() === "42", liveValue());
+    check("without logging anything", cons.entries.length === before, [before, cons.entries.length]);
+    check("and is remembered", JSON.parse(localStorage.getItem("devtools.console.live")).includes("window.__liveCounter * 2"));
+    cons.removeLive(cons.live[0]);
+    check("removing it", document.querySelector("#console-live").hidden && !cons.live.length);
+  }
+
   // ---- Disable JavaScript, Clear site data (last: they reload and wipe the fixture's state) ----
   if (SBDebugger.available) {
     const statusText = async () => {

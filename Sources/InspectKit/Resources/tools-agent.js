@@ -436,6 +436,235 @@
     };
   }
 
+  // ---- values for display ----------------------------------------------------------------------
+  // Structured-clone values (IndexedDB records, keys) as JSON the UI can show
+  // as a tree; non-JSON types are tagged with "$type".
+  function toJSONValue(v, depth = 0, seen = new WeakSet()) {
+    if (v === null || typeof v === "boolean" || typeof v === "string") return v;
+    if (typeof v === "number") return Number.isFinite(v) ? v : { $type: "number", value: String(v) };
+    if (typeof v === "bigint") return { $type: "bigint", value: String(v) };
+    if (typeof v === "undefined") return { $type: "undefined" };
+    if (typeof v !== "object") return { $type: typeof v, value: String(v) };
+    if (seen.has(v)) return { $type: "circular" };
+    if (depth > 8) return { $type: "truncated" };
+    seen.add(v);
+    if (v instanceof Date) return { $type: "Date", value: isNaN(v) ? "Invalid Date" : v.toISOString() };
+    if (v instanceof RegExp) return { $type: "RegExp", value: String(v) };
+    if (typeof Blob !== "undefined" && v instanceof Blob) return { $type: v instanceof File ? "File" : "Blob", size: v.size, type: v.type, name: v.name };
+    if (v instanceof ArrayBuffer) return { $type: "ArrayBuffer", byteLength: v.byteLength };
+    if (ArrayBuffer.isView(v)) return { $type: v.constructor.name, length: v.length, values: Array.from(v.slice ? v.slice(0, 50) : []) };
+    if (v instanceof Map) return { $type: "Map", entries: Array.from(v.entries()).slice(0, 200).map(([k, val]) => [toJSONValue(k, depth + 1, seen), toJSONValue(val, depth + 1, seen)]) };
+    if (v instanceof Set) return { $type: "Set", values: Array.from(v).slice(0, 200).map((x) => toJSONValue(x, depth + 1, seen)) };
+    if (Array.isArray(v)) return v.slice(0, 500).map((x) => toJSONValue(x, depth + 1, seen));
+    const out = {};
+    for (const key of Object.keys(v).slice(0, 500)) out[key] = toJSONValue(v[key], depth + 1, seen);
+    return out;
+  }
+  // A key back from its JSON form; keys are numbers, strings, dates, binary or arrays of those.
+  function fromJSONKey(k) {
+    if (Array.isArray(k)) return k.map(fromJSONKey);
+    if (k && typeof k === "object" && k.$type === "Date") return new Date(k.value);
+    return k;
+  }
+
+  // ---- IndexedDB ---------------------------------------------------------------------------------
+  // The isolated world shares the page's origin, so it opens the same
+  // databases. Opened without a version, so nothing is ever upgraded.
+  const request = (req) => new Promise((resolve, reject) => { req.onsuccess = () => resolve(req.result); req.onerror = () => reject(req.error); });
+  async function openDatabase(name) {
+    const names = indexedDB.databases ? (await indexedDB.databases()).map((d) => d.name) : [name];
+    if (!names.includes(name)) throw new Error("No database named " + name);
+    return new Promise((resolve, reject) => {
+      const req = indexedDB.open(name);
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+      req.onblocked = () => reject(new Error("The database is blocked by another connection"));
+    });
+  }
+  async function withStore(dbName, storeName, mode, fn) {
+    const db = await openDatabase(dbName);
+    try {
+      const tx = db.transaction(storeName, mode);
+      const done = new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onerror = () => reject(tx.error); tx.onabort = () => reject(tx.error || new Error("aborted")); });
+      const result = await fn(tx.objectStore(storeName));
+      if (mode !== "readonly") await done;
+      return result;
+    } finally { db.close(); }
+  }
+  const indexedDBCommands = {
+    "IndexedDB.databases": async () => indexedDB.databases ? (await indexedDB.databases()).map((d) => ({ name: d.name, version: d.version })) : [],
+    "IndexedDB.database": async ({ name }) => {
+      const db = await openDatabase(name);
+      try {
+        const stores = [];
+        for (const storeName of Array.from(db.objectStoreNames)) {
+          const tx = db.transaction(storeName, "readonly");
+          const store = tx.objectStore(storeName);
+          stores.push({
+            name: storeName, keyPath: store.keyPath, autoIncrement: store.autoIncrement, count: await request(store.count()),
+            indexes: Array.from(store.indexNames).map((n) => { const i = store.index(n); return { name: n, keyPath: i.keyPath, unique: i.unique, multiEntry: i.multiEntry }; }),
+          });
+        }
+        return { name: db.name, version: db.version, objectStores: stores };
+      } finally { db.close(); }
+    },
+    "IndexedDB.records": ({ database, store, index, skip = 0, limit = 50 }) => withStore(database, store, "readonly", async (os) => {
+      const source = index ? os.index(index) : os;
+      const total = await request(source.count());
+      const records = [];
+      await new Promise((resolve, reject) => {
+        const req = source.openCursor();
+        let skipped = false;
+        req.onerror = () => reject(req.error);
+        req.onsuccess = () => {
+          const cursor = req.result;
+          if (!cursor) return resolve();
+          if (skip && !skipped) { skipped = true; cursor.advance(skip); return; }
+          records.push({ key: toJSONValue(cursor.key), primaryKey: toJSONValue(cursor.primaryKey), value: toJSONValue(cursor.value) });
+          if (records.length >= limit) resolve(); else cursor.continue();
+        };
+      });
+      return { records, total, hasMore: skip + records.length < total };
+    }),
+    "IndexedDB.deleteRecord": ({ database, store, key }) => withStore(database, store, "readwrite", (os) => request(os.delete(fromJSONKey(key))).then(() => true)),
+    "IndexedDB.clearStore": ({ database, store }) => withStore(database, store, "readwrite", (os) => request(os.clear()).then(() => true)),
+    "IndexedDB.deleteDatabase": ({ name }) => request(indexedDB.deleteDatabase(name)).then(() => true),
+  };
+
+  // ---- Cache Storage ---------------------------------------------------------------------------------
+  function cacheStorage() {
+    if (typeof caches === "undefined") throw new Error("Cache Storage is only available in secure contexts (HTTPS or localhost).");
+    return caches;
+  }
+  const cacheCommands = {
+    "CacheStorage.caches": async () => cacheStorage().keys(),
+    "CacheStorage.entries": async ({ cache }) => {
+      const c = await cacheStorage().open(cache);
+      const out = [];
+      for (const req of (await c.keys()).slice(0, 500)) {
+        const res = await c.match(req);
+        out.push({ url: req.url, method: req.method, status: res ? res.status : 0, type: res ? res.type : "", contentType: res ? res.headers.get("content-type") || "" : "",
+                   contentLength: res ? +(res.headers.get("content-length") || 0) || null : null, date: res ? res.headers.get("date") || "" : "" });
+      }
+      return out;
+    },
+    "CacheStorage.response": async ({ cache, url }) => {
+      const res = await (await cacheStorage().open(cache)).match(url);
+      if (!res) throw new Error("No cached response for " + url);
+      const type = res.headers.get("content-type") || "";
+      let body;
+      if (/^image\//.test(type)) {
+        const blob = await res.blob();
+        body = await new Promise((resolve) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.readAsDataURL(blob); });
+      } else {
+        body = await res.text();
+        if (body.length > 1024 * 1024) body = body.slice(0, 1024 * 1024) + "\n… (truncated)";
+      }
+      return { status: res.status, statusText: res.statusText, type: res.type, headers: Array.from(res.headers.entries()), body };
+    },
+    "CacheStorage.deleteEntry": async ({ cache, url }) => (await cacheStorage().open(cache)).delete(url),
+    "CacheStorage.deleteCache": async ({ cache }) => cacheStorage().delete(cache),
+  };
+
+  // ---- Web App Manifest and service workers ---------------------------------------------------------------
+  async function manifest() {
+    const link = document.querySelector("link[rel~=manifest]");
+    if (!link) return { present: false };
+    const url = link.href;
+    const out = { present: true, url, warnings: [], errors: [] };
+    try {
+      const res = await fetch(url, { credentials: link.crossOrigin === "use-credentials" ? "include" : "same-origin" });
+      out.status = res.status;
+      out.raw = await res.text();
+      out.manifest = JSON.parse(out.raw);
+    } catch (e) {
+      out.errors.push(String(e && e.message || e));
+      return out;
+    }
+    const m = out.manifest;
+    const resolve = (u) => { try { return new URL(u, url).href; } catch (_) { return u; } };
+    if (!m.name && !m.short_name) out.warnings.push("Manifest has no name or short_name.");
+    if (!m.start_url) out.warnings.push("Manifest has no start_url; the manifest's own URL's directory is used.");
+    if (!m.display) out.warnings.push("Manifest has no display mode (browser is assumed).");
+    const icons = Array.isArray(m.icons) ? m.icons : [];
+    out.icons = icons.map((i) => ({ src: resolve(i.src), sizes: i.sizes || "", type: i.type || "", purpose: i.purpose || "any" }));
+    const sizes = icons.flatMap((i) => String(i.sizes || "").split(/\s+/));
+    if (!sizes.includes("192x192")) out.warnings.push("No 192×192 icon.");
+    if (!sizes.includes("512x512")) out.warnings.push("No 512×512 icon.");
+    if (m.start_url) out.startURL = resolve(m.start_url);
+    return out;
+  }
+  async function serviceWorkers() {
+    const sw = navigator.serviceWorker;
+    if (!sw) return { supported: false, reason: "navigator.serviceWorker is not available in this web view (WebKit only offers service workers to apps with app-bound domains or a browser entitlement, and on secure origins)." };
+    const regs = await sw.getRegistrations();
+    const worker = (w) => w ? { scriptURL: w.scriptURL, state: w.state } : null;
+    return { supported: true, controller: worker(sw.controller), registrations: regs.map((r) => ({ scope: r.scope, active: worker(r.active), waiting: worker(r.waiting), installing: worker(r.installing), updateViaCache: r.updateViaCache })) };
+  }
+  const appCommands = {
+    "Manifest.get": manifest,
+    "ServiceWorker.list": serviceWorkers,
+    "ServiceWorker.unregister": async ({ scope }) => {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      const reg = regs.find((r) => r.scope === scope);
+      return reg ? reg.unregister() : false;
+    },
+    "ServiceWorker.update": async ({ scope }) => {
+      const reg = (await navigator.serviceWorker.getRegistrations()).find((r) => r.scope === scope);
+      if (reg) await reg.update();
+      return !!reg;
+    },
+  };
+
+  // ---- animations -------------------------------------------------------------------------------------
+  // document.getAnimations(): CSS animations, CSS transitions and Web
+  // Animations alike, controlled through the Web Animations API.
+  const animationIds = new WeakMap();
+  const animationsById = new Map();
+  let nextAnimation = 1;
+  function animationId(a) {
+    let id = animationIds.get(a);
+    if (!id) { id = nextAnimation++; animationIds.set(a, id); animationsById.set(id, new WeakRef(a)); }
+    return id;
+  }
+  function liveAnimations() {
+    return document.getAnimations().filter((a) => {
+      const target = a.effect && a.effect.target;
+      return !(target && isOurs(target));
+    });
+  }
+  function describeAnimation(a) {
+    const effect = a.effect;
+    const timing = effect && effect.getComputedTiming ? effect.getComputedTiming() : {};
+    const target = effect && effect.target;
+    const element = target && (target.nodeType === 1 ? target : target.element) || null;
+    const type = typeof CSSTransition !== "undefined" && a instanceof CSSTransition ? "CSS transition"
+      : typeof CSSAnimation !== "undefined" && a instanceof CSSAnimation ? "CSS animation" : "Web animation";
+    const name = a.animationName || a.transitionProperty || a.id || "(anonymous)";
+    return {
+      id: animationId(a), type, name, playState: a.playState, playbackRate: a.playbackRate,
+      currentTime: a.currentTime == null ? null : Number(a.currentTime),
+      duration: typeof timing.duration === "number" ? timing.duration : null, delay: timing.delay || 0, endDelay: timing.endDelay || 0,
+      iterations: timing.iterations === Infinity ? "infinite" : timing.iterations, direction: timing.direction, easing: timing.easing,
+      progress: timing.progress == null ? null : timing.progress, iteration: timing.currentIteration,
+      keyframes: effect && effect.getKeyframes ? effect.getKeyframes().length : 0,
+      target: element ? { nodeId: agent.nodeId(element), label: agent.shortName(element) } : null,
+      pseudo: target && target.pseudoElement || (effect && effect.pseudoElement) || null,
+    };
+  }
+  function animationsFor(ids) {
+    if (!ids) return liveAnimations();
+    return ids.map((id) => animationsById.get(id)?.deref()).filter(Boolean);
+  }
+  const animationCommands = {
+    "Animations.list": () => liveAnimations().map(describeAnimation),
+    "Animations.pause": ({ ids }) => { for (const a of animationsFor(ids)) a.pause(); return true; },
+    "Animations.play": ({ ids }) => { for (const a of animationsFor(ids)) a.play(); return true; },
+    "Animations.replay": ({ ids }) => { for (const a of animationsFor(ids)) { a.currentTime = 0; a.play(); } return true; },
+    "Animations.setPlaybackRate": ({ ids, rate }) => { for (const a of animationsFor(ids)) a.playbackRate = rate; return true; },
+    "Animations.seek": ({ ids, time }) => { for (const a of animationsFor(ids)) a.currentTime = time; return true; },
+  };
+
   // ---- FPS meter ----------------------------------------------------------------------
   // A fixed overlay counting animation frames, like Chrome's Rendering → FPS
   // meter. Frames that took over 1.5× the median are counted as dropped.
@@ -512,5 +741,5 @@
     },
   };
 
-  agent.extend(handlers);
+  agent.extend(Object.assign(handlers, indexedDBCommands, cacheCommands, appCommands, animationCommands));
 })();

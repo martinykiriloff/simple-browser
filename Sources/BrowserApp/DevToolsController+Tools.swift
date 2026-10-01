@@ -35,10 +35,11 @@ extension DevToolsController {
     static let toolMethods: Set<String> = [
         "Network.setBlockedPatterns", "Network.setOverrides", "Network.getHAR",
         "Emulation.setRendering", "Page.captureScreenshot", "Storage.clearSiteData", "DevTools.saveFile",
+        "Accessibility.getEngineProperties",
     ]
 
     /// Isolated-world commands that live in the on-demand tools agent.
-    static let toolsAgentPrefixes = ["Tools.", "Audit.", "Accessibility.", "IndexedDB.", "CacheStorage.", "Manifest.", "Animations.", "Rendering."]
+    static let toolsAgentPrefixes = ["Tools.", "Audit.", "Accessibility.", "IndexedDB.", "CacheStorage.", "Manifest.", "ServiceWorker.", "Animations.", "Rendering."]
 
     func handleTool(_ method: String, _ params: [String: Any]) async throws -> Any? {
         switch method {
@@ -61,6 +62,11 @@ extension DevToolsController {
             return try await captureScreenshot(params)
         case "Storage.clearSiteData":
             return try await clearSiteData()
+        case "Accessibility.getEngineProperties":
+            // WebKit's own accessibility object for the node: what VoiceOver gets.
+            let node = try await protocolNodeId(for: params)
+            let result = try await protocolBridge.send("DOM.getAccessibilityPropertiesForNode", ["nodeId": node])
+            return result["properties"] ?? [:]
         case "DevTools.saveFile":
             // Reports and exports: the UI has the text, the app asks where to put it.
             guard let window = view.window else { return false }

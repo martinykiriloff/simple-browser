@@ -60,6 +60,7 @@
           <button class="subtab" data-subpanel="computed">Computed</button>
           <button class="subtab" data-subpanel="layout">Layout</button>
           <button class="subtab" data-subpanel="listeners">Event Listeners</button>
+          <button class="subtab" data-subpanel="accessibility">Accessibility</button>
         </div>
         <div class="subpanel active" id="subpanel-styles">
           <div class="toolbar">
@@ -88,6 +89,9 @@
           </div>
           <div class="scroll" id="listeners-list"></div>
         </div>
+        <div class="subpanel" id="subpanel-accessibility">
+          <div class="scroll" id="a11y-view"></div>
+        </div>
         <div class="subpanel" id="subpanel-layout">
           <div class="scroll" id="layout-view"></div>
         </div>
@@ -99,6 +103,7 @@
   <section class="panel" id="panel-console">
     <div class="toolbar">
       <button class="icon-button" id="console-clear" title="Clear console (⌘K)">&#128683;</button>
+      <button class="icon-button" id="console-live-add" title="Create live expression"><svg viewBox="0 0 20 20" width="16" height="16"><path fill="currentColor" d="M10 5c4 0 7 3.2 8 5-1 1.8-4 5-8 5s-7-3.2-8-5c1-1.8 4-5 8-5zm0 1.6c-2.8 0-5 2-6.1 3.4 1.1 1.4 3.3 3.4 6.1 3.4s5-2 6.1-3.4C15 8.6 12.8 6.6 10 6.6zM10 7.5a2.5 2.5 0 1 1 0 5 2.5 2.5 0 0 1 0-5z"/></svg></button>
       <input type="search" id="console-filter" placeholder="Filter">
       <select id="console-levels">
         <option value="all">All levels</option>
@@ -112,6 +117,7 @@
       <span class="toolbar-spacer"></span>
       <span class="muted" id="console-status"></span>
     </div>
+    <div id="console-live" hidden></div>
     <div class="scroll" id="console-messages"></div>
     <div id="console-prompt-row">
       <span class="prompt-chevron">&gt;</span>
@@ -382,6 +388,18 @@
       </div>
       <div class="scroll" id="netsearch-results"></div>
     </section>
+    <section class="drawer-pane" id="drawer-animations">
+      <div class="toolbar">
+        <button class="text-button" id="animations-pause">⏸ Pause all</button>
+        <button class="text-button" id="animations-replay" title="Replay all animations">↻ Replay all</button>
+        <span class="chips" id="animations-rates">
+          <button class="chip" data-rate="1">100%</button><button class="chip" data-rate="0.25">25%</button><button class="chip" data-rate="0.1">10%</button>
+        </span>
+        <span class="toolbar-spacer"></span>
+        <button class="icon-button" id="animations-refresh" title="Refresh">&#8635;</button>
+      </div>
+      <div class="scroll" id="animations-list"></div>
+    </section>
     <section class="drawer-pane" id="drawer-rendering">
       <div class="scroll" id="rendering-body"></div>
     </section>
@@ -406,6 +424,7 @@
   <div class="popup-sep"></div>
   <div class="popup-label">More tools</div>
   <div class="popup-item" data-drawer="rendering">Rendering</div>
+  <div class="popup-item" data-drawer="animations">Animations</div>
   <div class="popup-item" data-drawer="blocking">Network request blocking</div>
   <div class="popup-item" data-drawer="overrides">Local overrides</div>
   <div class="popup-item" data-drawer="search">Search network</div>
@@ -423,6 +442,7 @@
 <script src="debugger.js"></script>
 <script src="breakpoints.js"></script>
 <script src="elements-extras.js"></script>
+<script src="elements-a11y.js"></script>
 <script src="performance.js"></script>
 <script src="profiler.js"></script>
 <script src="application.js"></script>
@@ -432,6 +452,7 @@
 <script src="markdown.js"></script>
 <script src="network-tools.js"></script>
 <script src="rendering.js"></script>
+<script src="animations.js"></script>
 <script src="command-menu.js"></script>
 <script>DevTools.start();</script>
 </body>

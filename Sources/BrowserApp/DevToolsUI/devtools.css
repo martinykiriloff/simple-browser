@@ -726,6 +726,55 @@ body.debugger-paused #tabbar { box-shadow: inset 0 -2px 0 #f5a623; }
 .audit-selector { font-family: var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1; }
 .audit-item-detail { color: var(--text-soft); margin-left: auto; text-align: right; }
 
+/* ---- Application extras ------------------------------------------------- */
+.app-group .tree-arrow { cursor: pointer; margin-left: -12px; }
+.app-pager { gap: 8px; }
+.app-detail { border-top: 1px solid var(--border); min-height: 80px; }
+.detail-head-line { padding: 4px 8px; background: var(--toolbar-bg); border-bottom: 1px solid var(--border-soft); font-weight: 600; }
+.app-detail > .obj { padding: 4px 8px; }
+.manifest-warning { color: var(--warn-text); }
+.manifest-icons { display: flex; flex-wrap: wrap; gap: 12px; padding: 4px 0; }
+.manifest-icon { display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 11px; }
+.manifest-icon img { max-width: 96px; max-height: 96px; background: repeating-conic-gradient(#ccc 0 25%, #fff 0 50%) 0 0/12px 12px; }
+
+/* ---- Accessibility pane ---------------------------------------------------- */
+.a11y-body { padding: 4px 0 6px; }
+.a11y-node { line-height: 20px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; font-family: var(--mono); font-size: 11px; }
+.a11y-node:hover { background: var(--hover); }
+.a11y-node.current { background: var(--selected); }
+.a11y-role { color: var(--tag); }
+.a11y-name { color: var(--string); }
+.a11y-prop { display: flex; gap: 8px; padding: 1px 10px; line-height: 18px; font-family: var(--mono); font-size: 11px; }
+.a11y-prop-name { flex: 0 0 110px; color: var(--css-property); }
+.a11y-prop-value { color: var(--text); -webkit-user-select: text; user-select: text; word-break: break-word; }
+.a11y-prop-value.empty { color: var(--text-muted); }
+.a11y-prop-note { color: var(--text-muted); margin-left: auto; font-family: var(--font); }
+
+/* ---- Animations ------------------------------------------------------------ */
+#animations-rates .chip.active { background: var(--accent-soft); color: var(--accent); }
+.anim-row { display: flex; align-items: center; gap: 6px; padding: 4px 10px; border-bottom: 1px solid var(--border-soft); }
+.anim-info { flex: 0 0 45%; min-width: 0; }
+.anim-info > div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.anim-name { font-weight: 600; font-family: var(--mono); }
+.anim-timing { font-size: 11px; }
+.anim-track { flex: 1; height: 10px; background: var(--hover); border-radius: 5px; position: relative; overflow: hidden; cursor: pointer; }
+.anim-delay { position: absolute; left: 0; top: 0; bottom: 0; background: var(--border-soft); }
+.anim-progress { position: absolute; left: 0; top: 0; bottom: 0; background: #9c27b0; opacity: 0.7; }
+.anim-row.paused .anim-progress { background: var(--text-muted); }
+.anim-row.finished { opacity: 0.6; }
+
+/* ---- Console live expressions --------------------------------------------- */
+#console-live { flex: none; max-height: 30%; overflow: auto; border-bottom: 1px solid var(--border); background: var(--bg); }
+.live-row { display: flex; align-items: flex-start; gap: 6px; padding: 3px 8px; border-bottom: 1px solid var(--border-soft); font-family: var(--mono); }
+.live-row:last-child { border-bottom: none; }
+.live-eye { flex: none; font-size: 11px; opacity: 0.6; }
+.live-main { flex: 1; min-width: 0; }
+.live-expression { color: var(--text); cursor: text; white-space: pre-wrap; word-break: break-all; }
+.live-value { white-space: pre-wrap; word-break: break-all; }
+.live-input { width: 100%; font: inherit; border: 1px solid var(--focus-ring); background: var(--bg); padding: 0 4px; resize: none; }
+.live-row .remove { color: var(--text-muted); cursor: pointer; visibility: hidden; }
+.live-row:hover .remove { visibility: visible; }
+
 /* Rendering */
 .rendering-option { display: flex; align-items: flex-start; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--border-soft); }
 .rendering-option input[type="checkbox"] { margin: 2px 0 0; }

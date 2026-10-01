@@ -493,6 +493,7 @@
   };
 
   DevTools.register("network", panel);
+  window.JSONTree = JSONTree;      // also used by the Application panel
 
   // "Disable cache" applies while DevTools is open, whether or not this panel
   // has been shown, so it lives outside the panel's lazy init. WebKit forgets
