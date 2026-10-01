@@ -1,6 +1,7 @@
 import AppKit
 import WebKit
 import InspectKit
+import UniformTypeIdentifiers
 
 /// What the tools below keep between requests. One per DevTools.
 @MainActor
@@ -16,6 +17,12 @@ final class DevToolsToolState {
 
     /// Rendering emulation in force (feature → value), undone while hidden.
     var rendering: [String: Any] = [:]
+
+    /// What the inspector protocol says about a request beyond the request
+    /// record itself, by protocol request id: initiator (with its stack),
+    /// remote address, priority, connection, and where the response came
+    /// from (network, memory or disk cache, service worker).
+    var networkExtras: [String: [String: Any]] = [:]
 }
 
 /// A response served instead of the network's, while DevTools is open.
@@ -35,7 +42,7 @@ extension DevToolsController {
     static let toolMethods: Set<String> = [
         "Network.setBlockedPatterns", "Network.setOverrides", "Network.getHAR",
         "Emulation.setRendering", "Page.captureScreenshot", "Storage.clearSiteData", "DevTools.saveFile",
-        "Accessibility.getEngineProperties",
+        "Accessibility.getEngineProperties", "Network.getExtras", "DevTools.openFile",
     ]
 
     /// Isolated-world commands that live in the on-demand tools agent.
@@ -68,16 +75,96 @@ extension DevToolsController {
             let result = try await protocolBridge.send("DOM.getAccessibilityPropertiesForNode", ["nodeId": node])
             return result["properties"] ?? [:]
         case "DevTools.saveFile":
-            // Reports and exports: the UI has the text, the app asks where to put it.
+            // Reports and exports: the UI has the text (or, for a binary
+            // response body, base64 bytes); the app asks where to put it.
             guard let window = view.window else { return false }
             let panel = NSSavePanel()
             panel.nameFieldStringValue = params["name"] as? String ?? "devtools.txt"
             guard await panel.beginSheetModal(for: window) == .OK, let url = panel.url else { return false }
-            try Data((params["text"] as? String ?? "").utf8).write(to: url, options: .atomic)
+            if let base64 = params["base64"] as? String {
+                guard let data = Data(base64Encoded: base64) else { throw DevToolsError.protocolUnavailable("invalid base64 data") }
+                try data.write(to: url, options: .atomic)
+            } else {
+                try Data((params["text"] as? String ?? "").utf8).write(to: url, options: .atomic)
+            }
             return url.path
+        case "DevTools.openFile":
+            // Import (a HAR file): the app asks which file, the UI gets its text.
+            guard let window = view.window else { return NSNull() }
+            let panel = NSOpenPanel()
+            panel.canChooseDirectories = false
+            panel.allowsMultipleSelection = false
+            if let types = params["extensions"] as? [String] {
+                panel.allowedContentTypes = types.compactMap { UTType(filenameExtension: $0) }
+            }
+            guard await panel.beginSheetModal(for: window) == .OK, let url = panel.url else { return NSNull() }
+            let data = try Data(contentsOf: url)
+            return ["name": url.lastPathComponent, "text": String(decoding: data, as: UTF8.self)]
+        case "Network.getExtras":
+            return tools.networkExtras
         default:
             throw DevToolsError.unknownRequest
         }
+    }
+
+    /// Keeps what the protocol tells about a request that the request
+    /// record has no place for. Called for every `Network.*` event.
+    func recordNetworkExtras(_ method: String, requestId: String, _ params: [String: Any]) {
+        var extras = tools.networkExtras[requestId] ?? [:]
+        switch method {
+        case "Network.requestWillBeSent":
+            if params["redirectResponse"] == nil { extras = [:] }
+            if let initiator = params["initiator"] as? [String: Any] { extras["initiator"] = initiator }
+            if let type = params["type"] as? String { extras["type"] = type }
+            if let walltime = params["walltime"] as? Double { extras["walltime"] = walltime * 1000 }
+            if let timestamp = params["timestamp"] as? Double { extras["requestTimestamp"] = timestamp }
+            if let redirect = params["redirectResponse"] as? [String: Any], let status = redirect["status"] {
+                var chain = extras["redirects"] as? [[String: Any]] ?? []
+                chain.append(["status": status, "url": redirect["url"] ?? ""])
+                extras["redirects"] = chain
+            }
+        case "Network.responseReceived":
+            guard let response = params["response"] as? [String: Any] else { return }
+            if let source = response["source"] as? String { extras["source"] = source }
+            if let statusText = response["statusText"] as? String { extras["statusText"] = statusText }
+            if let timestamp = params["timestamp"] as? Double { extras["responseTimestamp"] = timestamp }
+            if let security = response["security"] as? [String: Any] { extras["security"] = security }
+        case "Network.loadingFinished":
+            if let timestamp = params["timestamp"] as? Double { extras["finishTimestamp"] = timestamp }
+            guard let metrics = params["metrics"] as? [String: Any] else { break }
+            for key in ["remoteAddress", "priority", "connectionIdentifier", "protocol", "isProxyConnection",
+                        "requestHeaderBytesSent", "requestBodyBytesSent", "responseHeaderBytesReceived",
+                        "responseBodyBytesReceived", "responseBodyDecodedSize"] {
+                if let value = metrics[key] { extras[key] = value }
+            }
+        case "Network.loadingFailed":
+            if let text = params["errorText"] as? String { extras["errorText"] = text }
+            if let blocked = params["blockedReason"] as? String { extras["blockedReason"] = blocked }
+        default:
+            return
+        }
+        if tools.networkExtras.count > 3000 { tools.networkExtras.removeAll() }
+        guard JSONSerialization.isValidJSONObject(extras) else { return }
+        tools.networkExtras[requestId] = extras
+    }
+
+    /// A body the page-world hooks cut short ("…[truncated N chars]").
+    static func isTruncatedByPageHooks(_ body: String) -> Bool {
+        body.hasSuffix(" chars]") && body.suffix(64).contains("\u{2026}[truncated ")
+    }
+
+    /// Bodies the UI must treat as bytes, not text.
+    static func isBinaryMime(_ mime: String) -> Bool {
+        let mime = mime.lowercased()
+        if mime.hasPrefix("font/") || mime.hasPrefix("audio/") || mime.hasPrefix("video/") { return true }
+        return ["octet-stream", "font", "woff", "wasm", "zip", "gzip", "pdf", "protobuf", "msgpack", "x-tar", "x-7z", "x-rar", "vnd.ms-", "opentype", "truetype"]
+            .contains { mime.contains($0) }
+    }
+
+    /// A body as a data URL, or nil past the size the UI can hold (~30 MB).
+    static func binaryDataURL(base64: String, mime: String) -> String? {
+        guard base64.utf8.count <= 40_000_000 else { return nil }
+        return "data:\(mime.isEmpty ? "application/octet-stream" : mime);base64,\(base64)"
     }
 
     func toolsDidShow() {

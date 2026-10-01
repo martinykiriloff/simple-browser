@@ -287,7 +287,10 @@ final class DevToolsController: NSObject, WKScriptMessageHandler, WKNavigationDe
             guard let raw = params["id"] as? String, let id = UUID(uuidString: raw),
                   let request = networkLog.request(id: id) else { throw DevToolsError.unknownRequest }
             if method == "Network.getResponseBody" {
-                if request.responseBody != nil { return try Self.jsonObject(request) }
+                // The page hooks cut bodies at 256 KB; the engine has them whole.
+                if let body = request.responseBody, !(request.protocolRequestID != nil && Self.isTruncatedByPageHooks(body)) {
+                    return try Self.jsonObject(request)
+                }
                 if let body = await protocolResponseBody(request),
                    let updated = networkLog.setResponseBody(body, refetched: false, for: request.id) {
                     return try Self.jsonObject(updated)
@@ -417,6 +420,7 @@ final class DevToolsController: NSObject, WKScriptMessageHandler, WKNavigationDe
 
     private func handleNetworkEvent(_ method: String, _ params: [String: Any]) {
         guard let requestId = params["requestId"] as? String else { return }
+        recordNetworkExtras(method, requestId: requestId, params)
         if method.hasPrefix("Network.webSocket") { handleWebSocketEvent(method, requestId: requestId, params); return }
         switch method {
         case "Network.requestWillBeSent":
@@ -567,9 +571,11 @@ final class DevToolsController: NSObject, WKScriptMessageHandler, WKNavigationDe
               let body = result["body"] as? String else { return nil }
         guard result["base64Encoded"] as? Bool == true else { return body }
         let mime = request.mimeType ?? "application/octet-stream"
-        if mime.hasPrefix("image/") { return "data:\(mime);base64,\(body)" }
+        // Images, fonts, media and other binary bodies travel to the UI as
+        // data URLs, so the Preview can render them and show their bytes.
+        if mime.hasPrefix("image/") || Self.isBinaryMime(mime) { return Self.binaryDataURL(base64: body, mime: mime) }
         if let data = Data(base64Encoded: body), let text = String(data: data, encoding: .utf8) { return text }
-        return nil
+        return Self.binaryDataURL(base64: body, mime: mime)
     }
 
     private func protocolResourceContent(_ params: [String: Any]) async -> [String: Any]? {
@@ -872,7 +878,7 @@ final class DevToolsController: NSObject, WKScriptMessageHandler, WKNavigationDe
     // MARK: - Network extras
 
     private func refetch(_ request: NetworkRequest) async throws -> NetworkRequest {
-        let (text, mime, _) = try await fetchNatively(request.url, method: request.method)
+        let (text, mime, _) = try await fetchNatively(request.url, method: request.method, binaryAsDataURL: true)
         return networkLog.setResponseBody(text, refetched: true, for: request.id).map { updated in
             var copy = updated
             if copy.mimeType == nil { copy.mimeType = mime }
@@ -883,7 +889,7 @@ final class DevToolsController: NSObject, WKScriptMessageHandler, WKNavigationDe
     /// Fetches with the profile's cookies and the page's user agent, from the
     /// app rather than the page: no CORS, but also no guarantee the server
     /// returns what the page originally received.
-    func fetchNatively(_ url: URL, method: String? = nil) async throws -> (String?, String?, Int) {
+    func fetchNatively(_ url: URL, method: String? = nil, binaryAsDataURL: Bool = false) async throws -> (String?, String?, Int) {
         var request = URLRequest(url: url)
         request.httpMethod = method == "POST" ? "GET" : (method ?? "GET")
         // Only this profile's cookies, set below. `URLSession.shared` keeps
@@ -910,8 +916,8 @@ final class DevToolsController: NSObject, WKScriptMessageHandler, WKNavigationDe
             }
             return (String(data: data, encoding: encoding) ?? String(decoding: data, as: UTF8.self), mime, http?.statusCode ?? 0)
         }
-        if mime.hasPrefix("image/") {
-            return ("data:\(mime);base64," + data.base64EncodedString(), mime, http?.statusCode ?? 0)
+        if mime.hasPrefix("image/") || binaryAsDataURL {
+            return (Self.binaryDataURL(base64: data.base64EncodedString(), mime: mime), mime, http?.statusCode ?? 0)
         }
         return (nil, mime, http?.statusCode ?? 0)
     }
