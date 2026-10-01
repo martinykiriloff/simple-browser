@@ -18,10 +18,10 @@ func render(scale: CGFloat) -> Data? {
     NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
     let bounds = NSRect(origin: .zero, size: size)
 
-    // A soft light wash, the night sky of the icon kept for the corner glow.
-    NSGradient(colors: [NSColor(srgbRed: 0.97, green: 0.97, blue: 0.99, alpha: 1), NSColor(srgbRed: 0.91, green: 0.92, blue: 0.97, alpha: 1)])?
+    // A soft light wash, with the icon's teal and amber kept for the corner glow.
+    NSGradient(colors: [NSColor(srgbRed: 0.97, green: 0.98, blue: 0.98, alpha: 1), NSColor(srgbRed: 0.90, green: 0.94, blue: 0.94, alpha: 1)])?
         .draw(in: bounds, angle: -90)
-    NSGradient(colors: [NSColor(srgbRed: 0.55, green: 0.45, blue: 0.95, alpha: 0.10), .clear])?
+    NSGradient(colors: [NSColor(srgbRed: 0.96, green: 0.62, blue: 0.04, alpha: 0.10), .clear])?
         .draw(fromCenter: NSPoint(x: 600, y: 360), radius: 0, toCenter: NSPoint(x: 600, y: 360), radius: 320, options: [])
 
     // The arrow, between the two icons (Finder's y runs down; here it runs up).
@@ -31,7 +31,7 @@ func render(scale: CGFloat) -> Data? {
     arrow.curve(to: NSPoint(x: 392, y: y), controlPoint1: NSPoint(x: 300, y: y + 26), controlPoint2: NSPoint(x: 352, y: y + 26))
     arrow.lineWidth = 5
     arrow.lineCapStyle = .round
-    let ink = NSColor(srgbRed: 0.42, green: 0.36, blue: 0.86, alpha: 0.9)
+    let ink = NSColor(srgbRed: 0.06, green: 0.36, blue: 0.42, alpha: 0.9)
     ink.setStroke()
     arrow.stroke()
     let head = NSBezierPath()
