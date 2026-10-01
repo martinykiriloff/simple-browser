@@ -87,6 +87,7 @@ const DevTools = window.DevTools = {
     if (window.SBCacheControl) SBCacheControl.start();
     if (window.Drawer) Drawer.init();
     if (window.SBNetworkTools) SBNetworkTools.start();
+    if (window.CommandMenu) CommandMenu.init();
 
     let panel = "elements";
     try { panel = localStorage.getItem("devtools.panel") || panel; } catch (_) {}
@@ -117,6 +118,9 @@ const DevTools = window.DevTools = {
       item.addEventListener("click", () => { Theme.apply(item.dataset.theme); this.rpc("Settings.set", { key: "theme", value: item.dataset.theme }); Popup.hideAll(); });
     }
     document.getElementById("more-webkit").addEventListener("click", () => { this.rpc("DevTools.openWebKitInspector"); Popup.hideAll(); });
+    document.getElementById("more-command").addEventListener("click", () => { Popup.hideAll(); CommandMenu.open(">"); });
+    document.getElementById("more-open-file").addEventListener("click", () => { Popup.hideAll(); CommandMenu.open(""); });
+    document.getElementById("more-screenshot").addEventListener("click", () => { Popup.hideAll(); SBScreenshots.capture("viewport"); });
 
     document.addEventListener("keydown", (e) => {
       const meta = e.metaKey || e.ctrlKey;

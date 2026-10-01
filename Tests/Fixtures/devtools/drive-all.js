@@ -456,6 +456,72 @@ try {
     Drawer.hide();
   }
 
+  // ---- Command menu, Rendering, screenshots -----------------------------------------------
+  {
+    const pageEval = async (expression) => (await DevTools.rpc("Console.evaluate", { expression }))?.result?.description;
+    const input = document.querySelector("#command-input");
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "P", metaKey: true, shiftKey: true, bubbles: true })); await wait(200);
+    check("⇧⌘P opens the command menu in command mode", !document.querySelector("#command-menu").hidden && input.value === ">");
+    input.value = ">rendering"; input.dispatchEvent(new Event("input")); await wait(150);
+    check("Show Rendering is the best match", CommandMenu.items[0]?.title === "Show Rendering", CommandMenu.items.slice(0, 3).map((i) => i.title));
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); await wait(300);
+    check("Enter runs it", Drawer.current === "rendering" && document.querySelector("#command-menu").hidden && document.querySelectorAll("#rendering-body .rendering-option").length >= 10);
+    const fuzzyHits = CommandMenu.matches(">cfss").map((i) => i.title);
+    check("fuzzy matching skips letters", fuzzyHits[0] === "Capture full size screenshot", fuzzyHits.slice(0, 3));
+    check("the menu has the Chrome actions", ["Disable JavaScript", "Capture screenshot", "Capture node screenshot", "Clear site data", "Dock to right", "Show Network request blocking"].every((t) => CommandMenu.commands().some((c) => c.title === t)));
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "p", metaKey: true, bubbles: true })); await wait(500);
+    check("⌘P opens it on files", !document.querySelector("#command-menu").hidden && input.value === "" && CommandMenu.items.some((i) => i.title === "script.js"), CommandMenu.items.map((i) => i.title));
+    CommandMenu.close();
+    await CommandMenu.run("script.js"); await wait(800);
+    check("Open file shows it in Sources", DevTools.activePanel === "sources" && (DevTools.panels.sources.current || "").endsWith("/script.js"), DevTools.panels.sources.current);
+
+    if (SBDebugger.available) {
+      await SBRendering.set("media", "print");
+      check("emulate CSS print media", (await pageEval("matchMedia('print').matches")) === "true");
+      await SBRendering.set("media", "");
+      check("media emulation off again", (await pageEval("matchMedia('print').matches")) === "false");
+      await SBRendering.set("colorScheme", "dark");
+      check("emulate prefers-color-scheme: dark", (await pageEval("matchMedia('(prefers-color-scheme: dark)').matches")) === "true");
+      await SBRendering.set("colorScheme", "light");
+      check("emulate prefers-color-scheme: light", (await pageEval("matchMedia('(prefers-color-scheme: light)').matches")) === "true");
+      await SBRendering.set("colorScheme", "");
+      await SBRendering.set("reducedMotion", "reduce");
+      check("emulate prefers-reduced-motion: reduce", (await pageEval("matchMedia('(prefers-reduced-motion: reduce)').matches")) === "true");
+      await SBRendering.set("reducedMotion", "");
+      for (const feature of ["paintFlashing", "layerBorders", "repaintCounter", "rulers"]) {
+        let ok = true;
+        try { await SBRendering.set(feature, true); await SBRendering.set(feature, false); } catch (e) { ok = e.message; }
+        check(feature + " switches through the protocol", ok === true, ok);
+      }
+      check("nothing left emulated", Object.keys(SBRendering.state).length === 0, SBRendering.state);
+    }
+    await SBRendering.set("fpsMeter", true); await wait(1500);
+    const meter = await DevTools.rpc("Rendering.getFPS");
+    // An occluded window gets no animation frames at all; then only the overlay can be checked.
+    const visibility = await pageEval("document.visibilityState");
+    if (visibility !== "visible") out.fpsNote = "page is " + visibility + ": no animation frames to count";
+    check("the FPS meter runs in the page", meter.shown && (meter.fps > 0 || visibility !== "visible"), meter);
+    check("the FPS overlay is not part of the page's DOM tree", (await DevTools.rpc("DOM.performSearch", { query: "dropped/s" })).nodeIds.length === 0 && (await DevTools.rpc("DOM.performSearch", { query: " fps" })).nodeIds.length === 0);
+    await SBRendering.set("fpsMeter", false);
+    check("and goes away", !(await DevTools.rpc("Rendering.getFPS")).shown);
+
+    const info = await DevTools.rpc("Page.getInfo");
+    const shot = await SBScreenshots.capture("viewport", null, "none");
+    out.screenshots = { viewport: shot, info: { w: info.width, h: info.height, sw: info.scrollWidth, sh: info.scrollHeight, dpr: info.devicePixelRatio } };
+    check("viewport screenshot", shot.width >= info.width && shot.height >= info.height * 0.9, out.screenshots);
+    if (SBDebugger.available) {
+      const full = await SBScreenshots.capture("full", null, "none");
+      out.screenshots.full = full;
+      check("full size screenshot is the whole document", Math.abs(full.width / full.height - info.scrollWidth / info.scrollHeight) < 0.05, out.screenshots);
+      const h1 = Array.from(DevTools.panels.elements.nodes.values()).find((n) => n.nodeName === "h1")?.nodeId;
+      const box = await DevTools.rpc("DOM.getBoxModel", { nodeId: h1 });
+      const node = await SBScreenshots.capture("node", h1, "none");
+      out.screenshots.node = node;
+      check("node screenshot is the node's box", Math.abs(node.width / node.height - box.rect.width / box.rect.height) < 0.1, { node, box: box.rect });
+    }
+    Drawer.hide();
+  }
+
   // ---- Performance -------------------------------------------------------------------
   DevTools.showPanel("performance"); await wait(400);
   out.perf = document.querySelector("#vitals").textContent;
@@ -511,6 +577,25 @@ try {
   await wait(2000);
   const restored = await DevTools.rpc("Page.getInfo");
   check("leaving device mode restores viewport and user agent", restored.width === desktop.width && !/iPhone/.test(restored.userAgent), { w: restored.width, ua: restored.userAgent.slice(0, 40) });
+
+  // ---- Disable JavaScript, Clear site data (last: they reload and wipe the fixture's state) ----
+  if (SBDebugger.available) {
+    const statusText = async () => {
+      const found = await DevTools.rpc("DOM.performSearch", { query: "#status" });
+      return found.nodeIds.length ? (await DevTools.rpc("DOM.getOuterHTML", { nodeId: found.nodeIds[0] })) : "";
+    };
+    await SBRendering.set("disableJavaScript", true);
+    await DevTools.rpc("Page.reload"); await wait(2500);
+    out.noScript = await statusText().catch((e) => "agent failed: " + e.message);
+    check("Disable JavaScript stops the page's scripts, and DevTools still works", /running…/.test(out.noScript), out.noScript);
+    await SBRendering.set("disableJavaScript", false);
+    await DevTools.rpc("Page.reload"); await wait(2500);
+    check("Enable JavaScript brings them back", /done/.test(await statusText().catch(() => "")));
+  }
+  const cleared = await DevTools.rpc("Storage.clearSiteData");
+  check("Clear site data removes the site's records", cleared.records.length > 0, cleared);
+  check("its cookies are gone", (await DevTools.rpc("Cookies.list")).length === 0);
+  check("its local storage is empty", (await DevTools.rpc("Storage.getEntries", { area: "local" })).length === 0);
 
   DevTools.showPanel("elements"); await wait(200);
 } catch (e) {

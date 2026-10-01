@@ -683,7 +683,7 @@ final class DevToolsController: NSObject, WKScriptMessageHandler, WKNavigationDe
 
     /// The protocol's node id for a node in our tree: the agent marks the
     /// node, the page world remembers it, and the protocol resolves that.
-    private func protocolNodeId(for params: [String: Any]) async throws -> Int {
+    func protocolNodeId(for params: [String: Any]) async throws -> Int {
         guard protocolState == "attached" else { throw DevToolsError.protocolUnavailable(protocolState) }
         guard let agentNode = (params["nodeId"] as? NSNumber)?.intValue else { throw DevToolsError.unknownRequest }
         _ = try await callIsolated("DOM.mark", ["nodeId": agentNode])

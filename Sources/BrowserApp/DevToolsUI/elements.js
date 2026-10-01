@@ -580,6 +580,7 @@
         items.push({ label: "Hide element", action: () => DevTools.rpc("DOM.toggleHidden", { nodeId: id }) });
         items.push({ label: "Scroll into view", action: () => DevTools.rpc("DOM.scrollIntoView", { nodeId: id }) });
         items.push({ label: "Focus", action: () => DevTools.rpc("DOM.focus", { nodeId: id }) });
+        if (window.SBScreenshots) items.push({ label: "Capture node screenshot", action: () => SBScreenshots.capture("node", id) });
         items.push("-");
         items.push(...this.breakOnItems(id), "-");                           // elements-extras.js
         items.push({ label: "Expand recursively", action: () => this.expandRecursively(id) });

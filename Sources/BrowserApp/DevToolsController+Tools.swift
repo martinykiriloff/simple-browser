@@ -13,6 +13,9 @@ final class DevToolsToolState {
     /// Local overrides, keyed by the regex given to `Network.addInterception`.
     var overrides: [LocalOverride] = []
     var interceptions: [String] = []
+
+    /// Rendering emulation in force (feature → value), undone while hidden.
+    var rendering: [String: Any] = [:]
 }
 
 /// A response served instead of the network's, while DevTools is open.
@@ -31,6 +34,7 @@ extension DevToolsController {
     /// Requests answered in this file rather than by the agents.
     static let toolMethods: Set<String> = [
         "Network.setBlockedPatterns", "Network.setOverrides", "Network.getHAR",
+        "Emulation.setRendering", "Page.captureScreenshot", "Storage.clearSiteData",
     ]
 
     /// Isolated-world commands that live in the on-demand tools agent.
@@ -47,6 +51,16 @@ extension DevToolsController {
         case "Network.getHAR":
             let data = try HARExporter.export(networkLog.requests, pageURL: page?.url, pageTitle: page?.title)
             return String(decoding: data, as: UTF8.self)
+        case "Emulation.setRendering":
+            guard let feature = params["feature"] as? String else { throw DevToolsError.unknownRequest }
+            let value = params["value"] ?? NSNull()
+            try await applyRendering(feature, value)
+            if Self.isRenderingDefault(value) { tools.rendering.removeValue(forKey: feature) } else { tools.rendering[feature] = value }
+            return true
+        case "Page.captureScreenshot":
+            return try await captureScreenshot(params)
+        case "Storage.clearSiteData":
+            return try await clearSiteData()
         default:
             throw DevToolsError.unknownRequest
         }
@@ -56,6 +70,7 @@ extension DevToolsController {
         tools.isShown = true
         Task { try? await applyBlocking() }
         if !tools.overrides.isEmpty, protocolState == "attached" { Task { try? await syncInterceptions() } }
+        for (feature, value) in tools.rendering { Task { try? await applyRendering(feature, value) } }
     }
 
     /// Like Chrome, blocking and overrides apply only while DevTools is open.
@@ -65,6 +80,8 @@ extension DevToolsController {
             ContentBlocker.setPinnedLists([], for: controller)
         }
         if !tools.interceptions.isEmpty, protocolState == "attached" { Task { try? await syncInterceptions() } }
+        // Rendering emulation too: the page goes back to how it really renders.
+        for feature in tools.rendering.keys { Task { try? await applyRendering(feature, NSNull()) } }
     }
 
     // MARK: - Request blocking
@@ -181,5 +198,139 @@ extension DevToolsController {
                 _ = try? await protocolBridge.send("Network.interceptContinue", ["requestId": requestId, "stage": "request"])
             }
         }
+    }
+
+    // MARK: - Rendering
+
+    static func isRenderingDefault(_ value: Any) -> Bool {
+        value is NSNull || (value as? Bool) == false || (value as? String) == ""
+    }
+
+    /// One Rendering-drawer feature, through the protocol. `NSNull`, false
+    /// or "" puts the page back to normal.
+    func applyRendering(_ feature: String, _ value: Any) async throws {
+        let on = (value as? Bool) ?? false
+        let text = (value as? String) ?? ""
+        if feature == "fpsMeter" {
+            // Drawn by the tools agent in the page; no protocol involved.
+            _ = try await callIsolated("Rendering.setFPSMeter", ["enabled": on])
+            return
+        }
+        if feature == "colorScheme", protocolState != "attached" {
+            // Without the protocol the web view's appearance still drives prefers-color-scheme.
+            page?.appearance = text == "dark" ? NSAppearance(named: .darkAqua) : text == "light" ? NSAppearance(named: .aqua) : nil
+            return
+        }
+        guard protocolState == "attached" else {
+            throw DevToolsError.protocolUnavailable("rendering emulation needs the inspector protocol (\(protocolState))")
+        }
+        func setting(_ name: String, _ value: Bool?) async throws {
+            var params: [String: Any] = ["setting": name]
+            if let value { params["value"] = value }          // no value: back to the page's own setting
+            _ = try await protocolBridge.send("Page.overrideSetting", params)
+        }
+        func preference(_ name: String, _ value: String?) async throws {
+            var params: [String: Any] = ["name": name]
+            if let value { params["value"] = value }
+            _ = try await protocolBridge.send("Page.overrideUserPreference", params)
+        }
+        switch feature {
+        case "paintFlashing":     _ = try await protocolBridge.send("Page.setShowPaintRects", ["result": on])
+        case "rulers":            _ = try await protocolBridge.send("Page.setShowRulers", ["result": on])
+        case "layerBorders":      try await setting("ShowDebugBorders", on ? true : nil)
+        case "repaintCounter":    try await setting("ShowRepaintCounter", on ? true : nil)
+        case "disableJavaScript": try await setting("ScriptEnabled", on ? false : nil)
+        case "disableImages":     try await setting("ImagesEnabled", on ? false : nil)
+        case "media":             _ = try await protocolBridge.send("Page.setEmulatedMedia", ["media": text])
+        case "colorScheme":       try await preference("PrefersColorScheme", ["light": "Light", "dark": "Dark"][text])
+        case "reducedMotion":     try await preference("PrefersReducedMotion", ["reduce": "Reduce", "no-preference": "NoPreference"][text])
+        case "contrast":          try await preference("PrefersContrast", ["more": "More", "no-preference": "NoPreference"][text])
+        default: throw DevToolsError.protocolUnavailable("unknown rendering feature \(feature)")
+        }
+    }
+
+    // MARK: - Screenshots
+
+    /// `mode`: viewport, full or node. `destination`: downloads (default),
+    /// clipboard, or none (only measured; for tests).
+    private func captureScreenshot(_ params: [String: Any]) async throws -> Any? {
+        guard let page else { throw DevToolsError.noPage }
+        let mode = params["mode"] as? String ?? "viewport"
+        var png: Data?
+        if mode != "viewport", protocolState == "attached" {
+            // The protocol renders the whole document, or one node, whatever is in view.
+            let result: [String: Any]
+            if mode == "node" {
+                result = try await protocolBridge.send("Page.snapshotNode", ["nodeId": try await protocolNodeId(for: params)])
+            } else {
+                let info = try await callIsolated("Page.getInfo", [:]) as? [String: Any]
+                let width = (info?["scrollWidth"] as? NSNumber)?.doubleValue ?? page.bounds.width
+                let height = (info?["scrollHeight"] as? NSNumber)?.doubleValue ?? page.bounds.height
+                result = try await protocolBridge.send("Page.snapshotRect",
+                                                       ["x": 0, "y": 0, "width": width, "height": height, "coordinateSystem": "Page"])
+            }
+            if let url = result["dataURL"] as? String, let comma = url.firstIndex(of: ",") {
+                png = Data(base64Encoded: String(url[url.index(after: comma)...]))
+            }
+        }
+        if png == nil {
+            if mode == "full" {
+                throw DevToolsError.protocolUnavailable("a full size screenshot needs the inspector protocol (\(protocolState))")
+            }
+            let configuration = WKSnapshotConfiguration()
+            if mode == "node" {
+                // Without the protocol: the part of the node's box that is in view.
+                let box = try await callIsolated("DOM.getBoxModel", params) as? [String: Any]
+                let rect = box?["rect"] as? [String: Any]
+                let value = { (key: String) in (rect?[key] as? NSNumber)?.doubleValue ?? 0 }
+                configuration.rect = CGRect(x: value("x"), y: value("y"), width: value("width"), height: value("height"))
+                    .intersection(page.bounds)
+            }
+            let image = try await page.takeSnapshot(configuration: configuration)
+            guard let tiff = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff) else {
+                throw DevToolsError.protocolUnavailable("the snapshot could not be encoded")
+            }
+            png = bitmap.representation(using: .png, properties: [:])
+        }
+        guard let png, let bitmap = NSBitmapImageRep(data: png) else { throw DevToolsError.protocolUnavailable("no image") }
+        var result: [String: Any] = ["width": bitmap.pixelsWide, "height": bitmap.pixelsHigh, "bytes": png.count]
+        switch params["destination"] as? String ?? "downloads" {
+        case "clipboard":
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setData(png, forType: .png)
+            result["copied"] = true
+        case "none":
+            break
+        default:
+            let formatter = DateFormatter()
+            formatter.dateFormat = "yyyy-MM-dd 'at' HH.mm.ss"
+            let host = page.url?.host() ?? "page"
+            let suffix = mode == "full" ? " (full size)" : mode == "node" ? " (node)" : ""
+            let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+                ?? FileManager.default.temporaryDirectory
+            let file = downloads.appendingPathComponent("Screenshot \(host) \(formatter.string(from: Date()))\(suffix).png")
+            try png.write(to: file, options: .atomic)
+            result["path"] = file.path
+        }
+        return result
+    }
+
+    // MARK: - Clear site data
+
+    /// Everything WebKit stores for the page's site in this profile: cookies,
+    /// storage, IndexedDB, caches, service workers.
+    private func clearSiteData() async throws -> Any? {
+        guard let page, let host = page.url?.host()?.lowercased() else { throw DevToolsError.noPage }
+        let store = page.configuration.websiteDataStore
+        let types = WKWebsiteDataStore.allWebsiteDataTypes()
+        let records = await store.dataRecords(ofTypes: types).filter { record in
+            let name = record.displayName.lowercased()
+            return host == name || host.hasSuffix("." + name)
+        }
+        await store.removeData(ofTypes: types, for: records)
+        // The live document keeps its storage areas in memory: empty those too.
+        _ = try? await callIsolated("Storage.clear", ["area": "session"])
+        _ = try? await callIsolated("Storage.clear", ["area": "local"])
+        return ["records": records.map(\.displayName)]
     }
 }

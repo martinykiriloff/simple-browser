@@ -339,7 +339,15 @@
       </div>
       <div class="scroll" id="netsearch-results"></div>
     </section>
+    <section class="drawer-pane" id="drawer-rendering">
+      <div class="scroll" id="rendering-body"></div>
+    </section>
   </div>
+</div>
+
+<div id="command-menu" hidden>
+  <input type="text" id="command-input" spellcheck="false" autocomplete="off" placeholder="Type > to run a command, or a file name to open it">
+  <div id="command-list"></div>
 </div>
 
 <div id="context-menu" hidden></div>
@@ -349,7 +357,12 @@
   <div class="popup-item" data-theme="light">Theme: Light</div>
   <div class="popup-item" data-theme="dark">Theme: Dark</div>
   <div class="popup-sep"></div>
+  <div class="popup-item" id="more-command">Run command<span class="popup-key">⇧⌘P</span></div>
+  <div class="popup-item" id="more-open-file">Open file<span class="popup-key">⌘P</span></div>
+  <div class="popup-item" id="more-screenshot">Capture screenshot</div>
+  <div class="popup-sep"></div>
   <div class="popup-label">More tools</div>
+  <div class="popup-item" data-drawer="rendering">Rendering</div>
   <div class="popup-item" data-drawer="blocking">Network request blocking</div>
   <div class="popup-item" data-drawer="overrides">Local overrides</div>
   <div class="popup-item" data-drawer="search">Search network</div>
@@ -373,6 +386,8 @@
 <script src="drawer.js"></script>
 <script src="markdown.js"></script>
 <script src="network-tools.js"></script>
+<script src="rendering.js"></script>
+<script src="command-menu.js"></script>
 <script>DevTools.start();</script>
 </body>
 </html>

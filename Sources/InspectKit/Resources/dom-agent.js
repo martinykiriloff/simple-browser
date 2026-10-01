@@ -642,6 +642,8 @@
       url: location.href, title: document.title, readyState: document.readyState,
       width: innerWidth, height: innerHeight, devicePixelRatio: devicePixelRatio,
       userAgent: navigator.userAgent, origin: location.origin,
+      scrollWidth: document.documentElement ? document.documentElement.scrollWidth : innerWidth,
+      scrollHeight: document.documentElement ? document.documentElement.scrollHeight : innerHeight,
     }),
     "Sources.list": () => {
       const seen = new Map();
