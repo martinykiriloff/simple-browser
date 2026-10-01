@@ -417,7 +417,7 @@
 
     initSearchAll() {
       Drawer.register("source-search", {
-        title: "Search",
+        title: "Search sources",
         show: () => { setTimeout(() => { $("#srcsearch-input").focus(); $("#srcsearch-input").select(); }, 0); },
       });
       $("#srcsearch-input").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); this.runSearchAll(); } });

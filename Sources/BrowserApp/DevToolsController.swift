@@ -253,6 +253,13 @@ final class DevToolsController: NSObject, WKScriptMessageHandler, WKNavigationDe
         case "Clipboard.write":
             copyToPasteboard(params["text"] as? String ?? "")
             return true
+        case "DevTools.snapshot":
+            // A picture of DevTools itself, as a PNG data URL: lets a driver
+            // (or an assistant) see what the panels show, in either theme.
+            let image = try await view.takeSnapshot(configuration: nil)
+            guard let tiff = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff),
+                  let png = bitmap.representation(using: .png, properties: [:]) else { throw DevToolsError.protocolUnavailable("no image") }
+            return ["dataURL": "data:image/png;base64," + png.base64EncodedString(), "width": bitmap.pixelsWide, "height": bitmap.pixelsHigh]
 
         case "Page.reload":
             onReload?(); return true

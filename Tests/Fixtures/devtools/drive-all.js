@@ -801,7 +801,7 @@ try {
     // sidebar, group similar, hide network, log XHR
     cons.setSetting("sidebar", true); await wait(150);
     const errorsRow = document.querySelector("#console-side-error");
-    check("sidebar: shows counts by kind", !document.querySelector("#console-sidebar").hidden && /^\d+ errors$/.test(errorsRow?.textContent.trim() || "") && /\d+ user messages/.test(document.querySelector("#console-side-user")?.textContent || ""), errorsRow?.textContent);
+    check("sidebar: shows counts by kind", !document.querySelector("#console-sidebar").hidden && /^\d+ errors?$/.test(errorsRow?.textContent.trim() || "") && /\d+ user messages?/.test(document.querySelector("#console-side-user")?.textContent || ""), errorsRow?.textContent);
     errorsRow.click(); await wait(150);
     const visible = Array.from(document.querySelectorAll("#console-messages .console-message")).filter((m) => !m.hidden && m.offsetParent && !m.classList.contains("type-command") && !m.classList.contains("type-result"));
     check("sidebar: selecting errors shows only errors", visible.length > 0 && visible.every((m) => m.classList.contains("level-error")), visible.map((m) => m.dataset.level));
@@ -1111,6 +1111,11 @@ try {
       if (dbg.paused) { await dbg.send("Debugger.resume"); await wait(500); }
       await dbg.toggle(cartURL, 4);
     }
+  }
+
+  {
+    const snap = await DevTools.rpc("DevTools.snapshot");
+    check("DevTools.snapshot pictures DevTools itself", /^data:image\/png;base64,/.test(snap?.dataURL || "") && snap.width > 100, snap && snap.width);
   }
 
   // ---- Disable JavaScript, Clear site data (last: they reload and wipe the fixture's state) ----

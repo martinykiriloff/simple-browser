@@ -320,7 +320,7 @@
       if (!result || result.exceptionDetails || !result.result) { show(null); return; }
       const value = result.result;
       // A literal previews as itself; nothing to add.
-      if (value.type !== "object" && value.type !== "function" && String(value.description) === text) { show(null); return; }
+      if (value.type === "undefined" || (value.type !== "object" && value.type !== "function" && String(value.description) === text)) { show(null); return; }
       show(h("span", { class: "console-eager-value" }, ObjectTree.render(value, { quoteStrings: true, expandable: false })));
     },
   });

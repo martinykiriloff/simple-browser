@@ -496,7 +496,7 @@
         const row = h("div", { class: "console-side-row level-" + key + (selected ? " selected" : "") + (open ? " expanded" : ""), id, role: "treeitem", tabindex: "0",
           "aria-selected": selected ? "true" : "false", "aria-expanded": bucket.files.size ? (open ? "true" : "false") : null },
           h("span", { class: "arrow" + (bucket.files.size ? "" : " none") }), h("span", { class: "console-side-icon" }),
-          h("span", { class: "console-side-label" }, (bucket.count === 0 ? "No" : String(bucket.count)) + " " + label));
+          h("span", { class: "console-side-label" }, (bucket.count === 0 ? "No" : String(bucket.count)) + " " + (bucket.count === 1 && key !== "info" && key !== "debug" ? label.replace(/s$/, "") : label)));
         row.addEventListener("click", (e) => {
           if (e.target.classList.contains("arrow")) { this.toggleSide(key); return; }
           this.selectSide(key, null);

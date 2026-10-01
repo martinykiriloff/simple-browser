@@ -23,7 +23,12 @@
     "grid-column": ["grid-column-start", "grid-column-end"], columns: ["column-width", "column-count"], "flex-flow": ["flex-direction", "flex-wrap"],
     "text-decoration": ["text-decoration-line", "text-decoration-color", "text-decoration-style", "text-decoration-thickness"],
   };
-  const covers = (decl, prop) => decl === prop || prop.startsWith(decl + "-") || (SHORTHANDS[decl] || []).includes(prop) ||
+  // Shorthands whose longhands are "<shorthand>-…" (color is not one: color-scheme is its own property).
+  const PREFIX_SHORTHANDS = new Set(["margin", "padding", "border", "border-top", "border-right", "border-bottom", "border-left", "border-image",
+    "background", "font", "flex", "grid-template", "list-style", "transition", "animation", "outline", "text-decoration", "text-emphasis", "mask",
+    "column-rule", "scroll-margin", "scroll-padding", "offset", "-webkit-text-stroke", "border-block", "border-inline", "margin-block", "margin-inline",
+    "padding-block", "padding-inline", "inset-block", "inset-inline", "contain-intrinsic-size", "container"]);
+  const covers = (decl, prop) => decl === prop || (PREFIX_SHORTHANDS.has(decl) && prop.startsWith(decl + "-")) || (SHORTHANDS[decl] || []).includes(prop) ||
     (decl === "border" && /^border-(top|right|bottom|left)-(width|style|color)$/.test(prop)) ||
     (decl === "font" && /^(line-height|font-.*)$/.test(prop)) || (decl === "background" && prop.startsWith("background-"));
 
