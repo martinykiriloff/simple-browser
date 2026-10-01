@@ -60,6 +60,72 @@ def build_bundle():
     return bundle.encode(), json.dumps(source_map).encode()
 
 
+# ---- Network panel v2 fixtures: one response of every kind the Preview knows.
+FX_HTML = b"""<!doctype html><html><head><title>Preview page</title>
+<style>h1 { color: rgb(10, 120, 30); }</style></head>
+<body><h1 id="fx-title">Rendered preview</h1><img src="/pixel.png" alt="relative pixel">
+<a href="/api/data.json">a link</a><p>caf\xc3\xa9 &amp; cr\xc3\xa8me</p>
+<script>document.title = "scripts ran"; document.body.setAttribute("data-script", "ran");</script>
+</body></html>"""
+FX_XML = b"""<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel><title>Fixture feed</title><link>http://127.0.0.1:8765/</link>
+<item><title>First post</title><guid isPermaLink="false">a1</guid></item>
+<item><title>Second post</title><description><![CDATA[<b>bold</b> text]]></description></item>
+<!-- a comment --></channel></rss>"""
+FX_SVG = b"""<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20" viewBox="0 0 40 20"><rect width="40" height="20" fill="#1a73e8"/><circle cx="10" cy="10" r="6" fill="#fff"/></svg>"""
+FX_EVENTS = b"""retry: 2000
+
+: a comment line
+id: 1
+event: greeting
+data: {"hello": "world"}
+
+id: 2
+data: line one
+data: line two
+
+event: done
+data: bye
+
+"""
+FX_NDJSON = b'{"n": 1, "ok": true}\n{"n": 2, "ok": false}\n{"n": 3, "tags": ["a", "b"]}\n'
+FX_BINARY = bytes(range(256)) + b"SimpleBrowser hex view" + bytes(range(255, -1, -1))
+FX_FONT_CANDIDATES = [
+    "/System/Library/Fonts/Supplemental/NotoSansGothic-Regular.ttf",
+    "/System/Library/Fonts/Supplemental/NotoSansCoptic-Regular.ttf",
+    "/System/Library/Fonts/Supplemental/Arial.ttf",
+    "/Library/Fonts/Arial Unicode.ttf",
+]
+
+
+def fx_font():
+    for path in FX_FONT_CANDIDATES:
+        if os.path.exists(path):
+            with open(path, "rb") as f:
+                return f.read()
+    return None
+
+
+def fx_wav(seconds=0.25, rate=8000):
+    """A short sine tone as 8-bit mono PCM WAV."""
+    import math
+    samples = bytes(int(128 + 60 * math.sin(2 * math.pi * 440 * i / rate)) for i in range(int(seconds * rate)))
+    header = b"RIFF" + struct.pack("<I", 36 + len(samples)) + b"WAVEfmt " + struct.pack("<IHHIIHH", 16, 1, 1, rate, rate, 1, 8)
+    return header + b"data" + struct.pack("<I", len(samples)) + samples
+
+
+def fx_big_js(target=2_600_000):
+    """A large minified-looking script, to keep the Response viewer honest."""
+    chunk = "function f{0}(a,b){{var c=a*{0}+b;if(c>{0}){{return c-{0};}}return [a,b,c,'item-{0}'];}}"
+    parts, size, i = [], 0, 0
+    while size < target:
+        piece = chunk.format(i)
+        parts.append(piece)
+        size += len(piece)
+        i += 1
+    return ";".join(parts).encode()
+
+
 class Handler(BaseHTTPRequestHandler):
     # The app's HTTP cache outlives this process: start above anything a
     # previous run could have left in it, so every real fetch counts higher.
@@ -70,7 +136,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("X-Served-By", "devtools-fixture")
-        for name, value in (extra or {}).items():
+        for name, value in (extra.items() if isinstance(extra, dict) else (extra or [])):
             self.send_header(name, value)
         self.end_headers()
         self.wfile.write(body)
@@ -138,12 +204,74 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, str(Handler.cacheable_hits).encode(), "text/plain", {"Cache-Control": "max-age=3600"})
         elif self.path == "/script.js":
             self._send(200, SCRIPT, "application/javascript")
+        elif self.path.startswith("/fx/"):
+            self.fixture_get()
+        else:
+            self._send(404, b"not found")
+
+    def fixture_get(self):
+        path = self.path.split("?")[0]
+        if path == "/fx/page.html":
+            self._send(200, FX_HTML, "text/html; charset=utf-8", {"Cache-Control": "no-cache"})
+        elif path == "/fx/feed.xml":
+            self._send(200, FX_XML, "application/rss+xml")
+        elif path == "/fx/logo.svg":
+            self._send(200, FX_SVG, "image/svg+xml", {"Cache-Control": "max-age=60"})
+        elif path == "/fx/font.ttf":
+            font = fx_font()
+            if font is None:
+                self._send(404, b"no font on this system")
+            else:
+                self._send(200, font, "font/ttf", {"Access-Control-Allow-Origin": "*"})
+        elif path == "/fx/blob.bin":
+            self._send(200, FX_BINARY, "application/octet-stream")
+        elif path == "/fx/tone.wav":
+            self._send(200, fx_wav(), "audio/wav")
+        elif path == "/fx/events":
+            self._send(200, FX_EVENTS, "text/event-stream", {"Cache-Control": "no-store"})
+        elif path == "/fx/ndjson":
+            self._send(200, FX_NDJSON, "application/x-ndjson")
+        elif path == "/fx/jsonp":
+            self._send(200, b'cb_123({"jsonp": true, "list": [1, 2]});', "application/javascript")
+        elif path == "/fx/form":
+            self._send(200, b"name=Ada+Lovelace&lang=en&note=caf%C3%A9", "application/x-www-form-urlencoded")
+        elif path == "/fx/style.css":
+            self._send(200, b"body{margin:0;color:#222}.a,.b{padding:2px 4px}@media (max-width:600px){.a{display:none}}", "text/css")
+        elif path == "/fx/big.js":
+            self._send(200, fx_big_js(), "application/javascript")
+        elif path == "/fx/cookies":
+            self._send(200, b'{"cookies": "set"}', "application/json", [
+                ("Set-Cookie", "fx_session=s3cr3t; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=3600"),
+                ("Set-Cookie", "fx_pref=dark; Path=/fx; Expires=Wed, 21 Oct 2037 07:28:00 GMT"),
+                ("Set-Cookie", "fx_track=1; SameSite=None"),
+                ("Cache-Control", "no-store"),
+            ])
+        elif path == "/fx/timing":
+            time.sleep(1.1)
+            self._send(200, b'{"slow": true}', "application/json", [
+                ("Server-Timing", 'db;dur=53.2;desc="Database", app;dur=47.2, cache;desc="Cache read";dur=23'),
+                ("Access-Control-Allow-Origin", "*"),
+                ("Content-Security-Policy", "default-src 'self'"),
+                ("Link", "</fx/style.css>; rel=preload; as=style"),
+                ("Referrer-Policy", "no-referrer"),
+            ])
+        elif path == "/fx/redirect":
+            self.send_response(302)
+            self.send_header("Location", "/api/data.json?redirected=1")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+        elif path == "/fx/error":
+            self._send(500, b'{"error": "boom", "code": 500}', "application/json")
         else:
             self._send(404, b"not found")
 
     def do_POST(self):
         length = int(self.headers.get("Content-Length", 0))
-        self._send(201, b"created:" + self.rfile.read(length))
+        body = self.rfile.read(length)
+        if self.path.startswith("/fx/upload"):
+            self._send(200, json.dumps({"received": len(body)}).encode(), "application/json")
+            return
+        self._send(201, b"created:" + body)
 
     def log_message(self, *args):
         pass

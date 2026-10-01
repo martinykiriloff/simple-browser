@@ -413,7 +413,7 @@ try {
     check("removing the pattern unblocks", /^200 /.test(await pageFetch("/api/data.json?blockme=4")));
     check("no blocking patterns left in settings", (await DevTools.rpc("Settings.get", { key: "blockedPatterns" })) === "[]");
     const dataReq = Array.from(net.requests.values()).find((r) => r.url.endsWith("/api/data.json"));
-    const labels = net.copyItems(dataReq).filter((i) => i !== "-").map((i) => i.label);
+    const labels = net.contextItems(dataReq).flatMap((i) => i === "-" ? [] : i.submenu ? i.submenu.filter((x) => x !== "-") : [i]).map((i) => i.label);
     check("request menu offers blocking, overrides and Copy for AI", ["Block request URL", "Block request domain", "Override content…", "Override headers…", "Copy as Markdown (for AI)", "Copy all as HAR"].every((l) => labels.includes(l)), labels);
     check("Block request domain blocks the host", net.blockDomainPattern(dataReq.url) === "127.0.0.1:8765");
 
@@ -440,7 +440,7 @@ try {
 
     const post = Array.from(net.requests.values()).find((r) => r.method === "POST");
     out.markdown = post && net.asMarkdown(post);
-    check("Copy as Markdown has method, status, payload and response", out.markdown && out.markdown.startsWith("## POST 201 http://127.0.0.1:8765/api/post") && out.markdown.includes("### Request payload") && out.markdown.includes('"hello": "world"') && out.markdown.includes("created:"), out.markdown && out.markdown.slice(0, 300));
+    check("Copy as Markdown has method, status, payload and response", out.markdown && out.markdown.startsWith("## POST http://127.0.0.1:8765/api/post → 201 Created") && out.markdown.includes("### Request payload") && out.markdown.includes('"hello": "world"') && out.markdown.includes("created:"), out.markdown && out.markdown.slice(0, 300));
     const summary = net.summaryMarkdown();
     check("Copy all as Markdown is a table with failures", /\| # \| Method \| Status/.test(summary) && summary.includes("## Failed requests"), summary.slice(0, 200));
     const har = JSON.parse(await DevTools.rpc("Network.getHAR"));
@@ -1116,6 +1116,322 @@ try {
   {
     const snap = await DevTools.rpc("DevTools.snapshot");
     check("DevTools.snapshot pictures DevTools itself", /^data:image\/png;base64,/.test(snap?.dataURL || "") && snap.width > 100, snap && snap.width);
+  }
+
+  // ---- Network v2: previews by type, response viewer, headers, cookies, initiator, timing,
+  //      filter syntax, columns, copy formats, Copy for AI, Explain failures, HAR import ----------
+  {
+    const net = DevTools.panels.network;
+    DevTools.showPanel("network"); await wait(300);
+    net.setFilter(""); net.setExplain(false);
+    out.fxSetup = await pageEval(`(async () => {
+      const paths = ['/fx/page.html', '/fx/feed.xml', '/fx/logo.svg', '/fx/font.ttf', '/fx/blob.bin', '/fx/tone.wav', '/fx/events', '/fx/ndjson',
+        '/fx/jsonp?callback=cb_123', '/fx/form', '/fx/style.css', '/fx/big.js', '/fx/cookies', '/fx/timing', '/fx/error', '/fx/redirect'];
+      const statuses = [];
+      for (const p of paths) { const r = await fetch(p); await r.arrayBuffer(); statuses.push(r.status); }
+      const fd = new FormData(); fd.append('title', 'Hello'); fd.append('file', new Blob(['file body'], { type: 'text/plain' }), 'a.txt');
+      statuses.push((await fetch('/fx/upload', { method: 'POST', body: fd })).status);
+      return statuses.join(',');
+    })()`);
+    await wait(1500);
+    const reqs = () => Array.from(net.requests.values());
+    // The request the page made (a Link: preload header can add another row for the same URL).
+    const find = (suffix) => { const all = reqs().filter((r) => r.url.endsWith(suffix)); return all.filter((r) => r.sources.length > 1 || r.responseBody != null).pop() || all.pop(); };
+    const detail = () => document.querySelector("#network-detail-body");
+    const openTab = async (r, tab) => {
+      net.select(r.id); net.setDetailTab(tab); net.renderDetail();
+      for (let i = 0; i < 50 && /Loading (the full )?response body/.test(detail().textContent); i++) await wait(100);
+      await wait(200);
+      // A streamed body the page could not read and the engine did not keep: fetch it again, as a user would.
+      const again = Array.from(detail().querySelectorAll("button")).find((b) => b.textContent === "Fetch body again");
+      if (again && (tab === "preview" || tab === "response")) { again.click(); for (let i = 0; i < 30 && net.get(r.id).responseBody == null; i++) await wait(100); await wait(200); }
+      return detail();
+    };
+    const fontServed = out.fxSetup.split(",")[3] === "200";
+    out.fxRequests = reqs().filter((r) => r.url.includes("/fx/")).map((r) => [fileName(r.url), r.sources.join("+"), r.protocolRequestID ? "P" : "-", r.responseBody != null ? r.responseBody.length : "-"].join(" "));
+    check("fixture requests ran", /^200,200,200,(200|404),200,200,200,200,200,200,200,200,200,200,500,200,200$/.test(out.fxSetup), out.fxSetup);
+
+    // Preview: HTML rendered without scripts, relative assets resolved, and its formatted source.
+    const page = find("/fx/page.html");
+    if (page) {
+      const body = await openTab(page, "preview");
+      const frame = body.querySelector("iframe.nv-frame");
+      for (let i = 0; i < 30 && frame && !frame.dataset.loaded; i++) await wait(100);
+      const doc = frame && frame.contentDocument;
+      check("HTML preview renders the page in a sandboxed frame", body.dataset.previewKind === "html" && frame && frame.getAttribute("sandbox") === "allow-same-origin" && doc && !!doc.querySelector("#fx-title"), body.dataset.previewKind);
+      check("HTML preview runs no scripts", doc && doc.body.getAttribute("data-script") !== "ran" && doc.title === "Preview page", doc && doc.title);
+      check("HTML preview resolves relative URLs against the response", doc && doc.querySelector("img").src === "http://127.0.0.1:8765/pixel.png", doc && doc.querySelector("img").src);
+      body.querySelector('.nv-seg-item[data-value="source"]').click(); await wait(200);
+      check("HTML source toggle: formatted and highlighted", body.querySelectorAll(".code-line").length >= 10 && body.querySelectorAll(".tok-tag").length > 5, body.querySelectorAll(".code-line").length);
+    } else check("page.html was recorded", false);
+
+    // JSON: tree with expand/collapse all, search and property paths.
+    const json = reqs().find((r) => /\/api\/data\.json$/.test(r.url) && r.responseBody);
+    if (json) {
+      const body = await openTab(json, "preview");
+      const view = net.activeView && net.activeView.view;
+      check("JSON preview is a tree with a toolbar", body.dataset.previewKind === "json" && view instanceof SBNetPreview.JSONView && /Expand all/.test(body.textContent));
+      view.collapseAll();
+      view.expandAll();
+      check("expand all", body.querySelectorAll(".nv-jnode.expanded").length >= 2);
+      check("search finds keys and values", view.search("items") === 1 && view.search("2") >= 1 && !!body.querySelector(".nv-jrow.nv-hit-row.current"), view.hits.length);
+      const node = view.reveal(["items", 1]);
+      check("property path of a nested value", node && SBNetPreview.pathString(node.path) === "items[1]" && SBNetPreview.pathString(["data", "items", 3, "id"]) === "data.items[3].id" && SBNetPreview.pathString(["a b", 0]) === '["a b"][0]');
+      check("JSON context menu: Copy value and Copy property path", node && view.menuItems(node).map((i) => i.label).slice(0, 2).join() === "Copy value,Copy property path" && view.copyValue(view.reveal(["path"])) === json.responseBody.match(/"path": "([^"]*)"/)[1]);
+    } else check("a JSON body was recorded", false);
+
+    const kindChecks = [
+      ["/fx/jsonp?callback=cb_123", "jsonp", (b) => b.textContent.includes("cb_123") && b.textContent.includes("jsonp")],
+      ["/fx/ndjson", "ndjson", (b) => b.querySelectorAll(".nv-record").length === 3 && /3 records/.test(b.textContent)],
+      ["/fx/events", "sse", (b) => Array.from(b.querySelectorAll(".nv-sse-row td:nth-child(2)")).map((td) => td.textContent).join() === "greeting,message,done" && /retry 2000 ms/.test(b.textContent)],
+      ["/fx/feed.xml", "xml", (b) => /RSS feed “Fixture feed” · 2 items/.test(b.textContent) && !!b.querySelector(".nv-xml .nv-xnode") && b.textContent.includes("First post") && b.textContent.includes("CDATA")],
+      ["/fx/form", "form", (b) => b.textContent.includes("Ada Lovelace") && b.textContent.includes("café")],
+      ["/fx/style.css", "css", (b) => b.querySelectorAll(".code-line").length >= 8 && !!b.querySelector(".tok-prop")],
+    ];
+    for (const [path, kind, test] of kindChecks) {
+      const r = find(path);
+      const b = r ? await openTab(r, "preview") : null;
+      check(`preview of ${path} as ${kind}`, b && b.dataset.previewKind === kind && test(b), b && { kind: b.dataset.previewKind, text: b.textContent.slice(0, 160) });
+    }
+
+    // Images, SVG, fonts, media and binary need the bytes: the protocol keeps them.
+    if (SBDebugger.available) {
+      const svg = find("/fx/logo.svg");
+      let b = svg ? await openTab(svg, "preview") : detail();
+      await wait(300);
+      check("SVG preview renders the image with its dimensions", b && b.dataset.previewKind === "svg" && b.querySelector(".nv-image-box")?.dataset.width === "40", b && b.textContent.slice(0, 120));
+      b.querySelector('.nv-seg-item[data-value="tree"]')?.click(); await wait(150);
+      check("SVG as an XML tree", !!b.querySelector(".nv-xml") && b.textContent.includes("circle"));
+      const pixel = reqs().filter((r) => r.url.endsWith("/pixel.png")).pop();
+      b = await openTab(pixel, "preview"); await wait(300);
+      check("image preview: natural size, bytes, MIME, checkerboard", b.dataset.previewKind === "image" && b.querySelector(".nv-image-box")?.dataset.width === "1" && /image\/png/.test(b.textContent) && !!b.querySelector(".nv-checker"), b.textContent.slice(0, 120));
+      if (fontServed) {
+        const font = find("/fx/font.ttf");
+        b = await openTab(font, "preview");
+        for (let i = 0; i < 30 && b.querySelector(".nv-font")?.dataset.fontStatus === "loading"; i++) await wait(100);
+        check("font preview loads the font and shows samples", b.dataset.previewKind === "font" && b.querySelector(".nv-font")?.dataset.fontStatus === "loaded" && b.querySelectorAll(".nv-font-sample").length === 6, b.textContent.slice(0, 160));
+      }
+      const wav = find("/fx/tone.wav");
+      b = await openTab(wav, "preview");
+      check("audio preview is a player", b.dataset.previewKind === "media" && /^data:audio\/wav/.test(b.querySelector("audio")?.getAttribute("src") || ""), b.textContent.slice(0, 120));
+      const bin = find("/fx/blob.bin");
+      b = await openTab(bin, "preview");
+      const hexRows = Array.from(b.querySelectorAll(".nv-hex-row:not(.nv-hex-head)"));
+      check("binary preview is a hex dump", b.dataset.previewKind === "binary" && hexRows.length === Math.ceil(534 / 16) && hexRows[0].textContent.startsWith("0000000000 01 02 03") && hexRows[16].querySelector(".nv-hex-ascii").textContent.startsWith("SimpleBrowser he"), hexRows.slice(0, 1).map((r) => r.textContent).concat(hexRows[16]?.textContent));
+      b = await openTab(bin, "response");
+      check("binary response: hex and Save", !!b.querySelector(".nv-hex") && Array.from(b.querySelectorAll("button")).some((x) => x.textContent === "Save…"));
+    }
+
+    // Response tab: line numbers, highlighting, pretty-print, wrap, find (⌘F in the pane), copy and save.
+    const script = reqs().filter((r) => r.url.endsWith("/fx/style.css")).pop();
+    if (script) {
+      const b = await openTab(script, "response");
+      const view = net.activeView.view;
+      check("response viewer: line numbers and highlighting", !!b.querySelector(".code-line .ln") && !!b.querySelector(".tok-prop") && /Copy/.test(b.textContent) && /Save…/.test(b.textContent));
+      const before = b.querySelectorAll(".code-line").length;
+      b.querySelector(".nv-pretty").click(); await wait(100);
+      check("{ } pretty-prints the response", b.querySelectorAll(".code-line").length > before && b.querySelector(".nv-pretty").classList.contains("active"), [before, b.querySelectorAll(".code-line").length]);
+      const wrap = b.querySelector(".nv-code-view input[type=checkbox]");
+      const wrapped = !b.querySelector(".nv-scroll").classList.contains("nv-nowrap");
+      wrap.click();
+      check("word wrap toggle", b.querySelector(".nv-scroll").classList.contains("nv-nowrap") === wrapped);
+      wrap.click();
+      net.pointerInDetail = true;
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "f", metaKey: true, bubbles: true })); await wait(100);
+      check("⌘F in the response pane opens its find bar, not the drawer", !b.querySelector(".nv-find").hidden && Drawer.current !== "search", Drawer.current);
+      const input = b.querySelector(".nv-find-input");
+      input.value = "padding"; input.dispatchEvent(new Event("input")); await wait(300);
+      check("find highlights matches with a count", b.querySelectorAll("mark.nv-hit").length >= 1 && !!b.querySelector("mark.nv-hit.current") && /^1 of \d+/.test(b.querySelector(".nv-find-count").textContent), b.querySelector(".nv-find-count").textContent);
+      view.step(1);
+      check("next/previous match", view.matches.length < 2 || view.current === 1);
+      net.pointerInDetail = false;
+    }
+
+    // A 2.6 MB minified script stays fast: only the visible lines are drawn.
+    const big = find("/fx/big.js");
+    if (big && SBDebugger.available) {
+      let t0 = performance.now();
+      let b = await openTab(big, "response");
+      const view = net.activeView && net.activeView.view;
+      out.bigResponseMs = Math.round(performance.now() - t0 - 200);
+      check("large response renders quickly and virtualized", view && view.virtual && b.querySelectorAll(".code-line").length < 400 && !!b.querySelector(".nv-notice") && out.bigResponseMs < 3000, { ms: out.bigResponseMs, lines: b.querySelectorAll(".code-line").length });
+      t0 = performance.now();
+      view.setPretty(true);
+      out.bigPrettyMs = Math.round(performance.now() - t0);
+      check("pretty-printing 2.6 MB is fast", view.lines.length > 10000 && b.querySelectorAll(".code-line").length < 400 && out.bigPrettyMs < 4000, { ms: out.bigPrettyMs, lines: view.lines.length });
+      check("find works across the whole large text", view.find("item-4242") >= 1 && !!b.querySelector("mark.nv-hit.current"), view.matches.length);
+      t0 = performance.now();
+      b = await openTab(big, "preview");
+      out.bigPreviewMs = Math.round(performance.now() - t0 - 200);
+      check("large script preview is formatted and virtualized", b.dataset.previewKind === "js" && b.querySelectorAll(".code-line").length < 400 && out.bigPreviewMs < 4000, out.bigPreviewMs);
+    }
+
+    // Headers: raw toggle, filter, notable headers, links, per-header copy, referrer policy, remote address.
+    const timing = find("/fx/timing");
+    if (timing) {
+      let b = await openTab(timing, "headers");
+      check("notable headers are highlighted", !!b.querySelector('.nv-header.nv-notable[data-header="content-security-policy"]') && !!b.querySelector('.nv-header.nv-notable[data-header="access-control-allow-origin"] .nv-tag'));
+      check("URL-valued headers are links", !!b.querySelector('.nv-header[data-header="link"] a.link'));
+      check("each header has Copy", b.querySelectorAll(".nv-header .nv-copy").length === b.querySelectorAll(".nv-header").length && b.querySelectorAll(".nv-header").length > 4);
+      check("Referrer Policy in General", /Referrer Policyno-referrer/.test(b.textContent));
+      check("slow request flagged in General", /Slow: 1\.\d+ s/.test(b.textContent), b.textContent.slice(0, 300));
+      if (SBDebugger.available) check("Remote Address from the engine", /Remote Address127\.0\.0\.1:8765/.test(b.textContent) || !net.ext(timing).remoteAddress, net.ext(timing));
+      net.rawSections.add("response"); net.renderDetail();
+      b = detail();
+      check("raw response headers as HTTP/1.1 text", /HTTP\/1\.1 200 OK\nAccess-Control-Allow-Origin: \*/i.test(b.querySelector(".nv-raw-text")?.textContent || ""), b.querySelector(".nv-raw-text")?.textContent.slice(0, 80));
+      net.rawSections.clear();
+      net.headerFilter = "server-timing"; net.renderDetail();
+      check("header filter", detail().querySelectorAll(".nv-header").length === 1, detail().querySelectorAll(".nv-header").length);
+      net.headerFilter = ""; net.renderDetail();
+      b = await openTab(timing, "timing");
+      check("timing: Server-Timing entries, queued and started times", b.querySelectorAll(".nv-server-timing").length === 3 && b.textContent.includes("Database") && /Queued at/.test(b.textContent) && /Started at/.test(b.textContent), b.textContent.slice(0, 200));
+    }
+
+    // Cookies: parsed request and response cookies with attributes and issues.
+    const parsed = SBNet.parseSetCookies("a=1; Path=/; SameSite=None\nsess_id=2; Secure; SameSite=Lax; Expires=Wed, 21 Oct 2037 07:28:00 GMT, c=3; HttpOnly; Secure; SameSite=Strict");
+    check("Set-Cookie parsing, folded or not", parsed.map((c) => c.name).join() === "a,sess_id,c" && parsed[1].expires.includes("2037") && parsed[2].httpOnly && parsed[2].sameSite === "Strict", parsed);
+    check("cookie issues", SBNet.cookieIssues(parsed[0], "https://x.test/").some((i) => /SameSite=None without Secure/.test(i)) && SBNet.cookieIssues(parsed[1], "https://x.test/").some((i) => /HttpOnly/.test(i)) && SBNet.cookieIssues(parsed[2], "https://x.test/").length === 0);
+    const cookieReq = find("/fx/cookies");
+    out.setCookieHeader = cookieReq && SBNet.header(cookieReq.responseHeaders, "set-cookie");
+    if (cookieReq && out.setCookieHeader) {
+      net.select(cookieReq.id);
+      check("Cookies tab appears for a request with cookies", !document.querySelector('#network-detail-tabs [data-subpanel="cookies"]').hidden);
+      const b = await openTab(cookieReq, "cookies"); await wait(300);
+      const rows = Array.from(b.querySelectorAll(".nv-cookies tbody tr")).map((tr) => tr.textContent);
+      check("response cookies table with attributes and flagged issues", rows.some((t) => t.includes("fx_session") && t.includes("Strict") && t.includes("Max-Age=3600")) && b.querySelectorAll(".nv-cookie-issue").length >= 1 && /fx_track: SameSite=None without Secure/.test(b.textContent), rows);
+    } else check("Set-Cookie headers reach the Network panel", !SBDebugger.available, cookieReq && cookieReq.responseHeaders);
+    if (SBDebugger.available) {
+      const withCookie = reqs().find((r) => SBNet.header(r.requestHeaders, "cookie"));
+      if (withCookie) {
+        const b = await openTab(withCookie, "cookies"); await wait(300);
+        check("request cookies table", /Request Cookies/.test(b.textContent) && b.textContent.includes("session"), b.textContent.slice(0, 200));
+      }
+    }
+
+    // Initiator: the stack of the script that made the request, and the chain from the document.
+    if (SBDebugger.available) {
+      const scripted = reqs().find((r) => net.initiatorFrames(net.ext(r).initiator).length && r.url.includes("/api/data.json"));
+      if (scripted) {
+        const b = await openTab(scripted, "initiator");
+        check("initiator call stack links into Sources", b.querySelectorAll(".nv-frame-row .link").length >= 1 && /Request initiator chain/.test(b.textContent), b.textContent.slice(0, 200));
+      } else check("an initiator stack was captured for a fetch", false, reqs().map((r) => fileName(r.url) + ":" + JSON.stringify(net.ext(r).initiator || null).slice(0, 60)).slice(0, 8));
+    }
+    const docReq = reqs().find((r) => r.resourceType === "document");
+    if (docReq) check("initiator tab degrades gracefully", (await openTab(docReq, "initiator")).textContent.includes("Initiator type"));
+
+    // Payload: multipart form data as a table.
+    const upload = find("/fx/upload");
+    out.uploadBody = upload && String(upload.requestBody).slice(0, 120);
+    if (upload && upload.requestBody && /form-data/.test(upload.requestBody)) {
+      const b = await openTab(upload, "payload");
+      check("multipart payload as a table", /Form Data \(multipart, 2 parts\)/.test(b.textContent) && b.textContent.includes("a.txt") && b.textContent.includes("Hello"), b.textContent.slice(0, 200));
+    }
+    const mp = SBNetPreview.parseMultipart('--B\r\nContent-Disposition: form-data; name="t"\r\n\r\nHi\r\n--B\r\nContent-Disposition: form-data; name="f"; filename="a.txt"\r\nContent-Type: text/plain\r\n\r\nbody\r\n--B--\r\n', "multipart/form-data; boundary=B");
+    check("multipart parsing", mp && mp.length === 2 && mp[1].filename === "a.txt" && mp[0].value === "Hi", mp);
+    const post = reqs().find((r) => r.method === "POST" && r.url.endsWith("/api/post"));
+    if (post) {
+      const b = await openTab(post, "payload");
+      check("JSON payload as a tree with view source", b.querySelector(".nv-json") && /view source/.test(b.textContent));
+    }
+
+    // Filter syntax and invert.
+    const names = () => net.visibleRequests().map((r) => r.url);
+    net.setFilter("status-code:500");
+    check("filter status-code:", names().length >= 1 && names().every((u) => u.endsWith("/fx/error")), names());
+    net.setFilter("-status-code:200");
+    check("negated filter", net.visibleRequests().every((r) => r.statusCode !== 200) && names().length >= 2, names().length);
+    net.setFilter("method:POST");
+    check("filter method:", net.visibleRequests().length >= 2 && net.visibleRequests().every((r) => r.method === "POST"));
+    net.setFilter("larger-than:1M");
+    check("filter larger-than:", SBDebugger.available ? names().length === 1 && names()[0].endsWith("/fx/big.js") : true, names());
+    net.setFilter("/fx\\/(feed|ndjson)/");
+    check("regex filter", names().length === 2, names());
+    net.setFilter("has-response-header:server-timing domain:127.0.0.1*");
+    check("has-response-header: and domain: combined", names().length === 1 && names()[0].endsWith("/fx/timing"), names());
+    net.setFilter("mime-type:application/x-ndjson");
+    check("filter mime-type:", names().length === 1);
+    net.setFilter("is:running");
+    check("is:running", names().length === 0, names());
+    net.setFilter("method:POST"); document.querySelector("#network-invert").click();
+    check("invert", net.visibleRequests().length > 3 && net.visibleRequests().every((r) => r.method !== "POST"));
+    document.querySelector("#network-invert").click();
+    net.setFilter("");
+
+    // Columns, summary bar, keyboard.
+    check("default columns", Array.from(document.querySelectorAll("#network-table thead th")).map((th) => th.textContent).join() === "Name,Status,Type,Initiator,Size,Time,Waterfall");
+    check("column menu lists every optional column", net.columnItems().filter((i) => i !== "-").length === 14);
+    net.setColumnVisible("method", true); net.setColumnVisible("domain", true); net.setColumnVisible("remote", true);
+    const methodCells = Array.from(document.querySelectorAll("#network-table tbody td.col-method")).map((td) => td.textContent);
+    check("show Method, Domain and Remote Address columns", !!document.querySelector('#network-table th[data-col="method"]') && methodCells.includes("POST") && document.querySelector("#network-table tbody td.col-domain")?.textContent === "127.0.0.1:8765");
+    net.setColumnVisible("method", false); net.setColumnVisible("domain", false); net.setColumnVisible("remote", false);
+    check("hide them again", !document.querySelector('#network-table th[data-col="method"]') && JSON.parse(localStorage.getItem("devtools.network.columns")).includes("method"));
+    check("status text is shown and coloured", !!document.querySelector("#network-table tbody .nv-status-bad") && Array.from(document.querySelectorAll("#network-table tbody td.col-status")).some((td) => td.textContent === "500 Internal Server Error"));
+    await net.loadPageTiming();
+    out.networkSummary = document.querySelector("#network-status").textContent;
+    check("summary bar", /\d+ requests/.test(out.networkSummary) && /transferred/.test(out.networkSummary) && /resources/.test(out.networkSummary) && /Finish:/.test(out.networkSummary) && /DOMContentLoaded: /.test(out.networkSummary) && /Load: /.test(out.networkSummary), out.networkSummary);
+    const rows = Array.from(document.querySelectorAll("#network-table tbody tr[data-id]"));
+    net.select(rows[1].dataset.id);
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+    check("↓ selects the next request", net.selectedId === rows[2].dataset.id);
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true }));
+    check("↑ selects the previous one", net.selectedId === rows[1].dataset.id);
+
+    // Copy submenu and formats.
+    const copyLabels = net.contextItems(post)[0].submenu.filter((i) => i !== "-").map((i) => i.label);
+    check("Copy submenu has every format", ["Copy URL", "Copy as cURL", "Copy as fetch", "Copy as fetch (Node.js)", "Copy as PowerShell", "Copy response", "Copy as HAR entry", "Copy as Markdown (for AI)", "Copy all URLs", "Copy all as cURL", "Copy all as HAR"].every((l) => copyLabels.includes(l)), copyLabels);
+    net.showMenu(10, 10, net.contextItems(post));
+    check("the context menu shows Copy as a submenu", !!document.querySelector("#context-menu .nv-has-submenu .nv-submenu .item"));
+    ContextMenu.hide();
+    out.powershell = net.asPowerShell(post);
+    check("Copy as PowerShell", out.powershell.includes('Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:8765/api/post"') && out.powershell.includes('-Method "POST"') && out.powershell.includes('-Body "{`"hello`":`"world`"}"'), out.powershell);
+    const nodeFetch = net.asNodeFetch(post);
+    check("Copy as fetch (Node.js)", nodeFetch.startsWith('fetch("http://127.0.0.1:8765/api/post"') && nodeFetch.includes('"method": "POST"'), nodeFetch);
+    const entry = net.harEntry(post);
+    check("Copy as HAR entry", entry.request.method === "POST" && entry.request.postData.text === '{"hello":"world"}' && entry.response.status === 201, entry.request);
+    check("Copy all as cURL", net.allAsCurl().split(" ;\n").length === net.visibleRequests().length);
+
+    // Copy for AI.
+    const errorReq = find("/fx/error");
+    const md = net.asMarkdown(errorReq);
+    out.aiMarkdown = md;
+    check("Copy for AI: status line, issues, key headers only, body", md.startsWith("## GET http://127.0.0.1:8765/fx/error → 500 Internal Server Error") && /- Issues: Server error 500/.test(md) && md.includes('"error": "boom"') && !/^date:/im.test(md) && /more omitted/.test(md), md.slice(0, 400));
+    const slowMd = net.asMarkdown(timing);
+    check("Copy for AI notes slow requests and Server-Timing", /Issues: .*Slow: 1\.\d+ s/.test(slowMd) && /Server-Timing: Database 53\.2 ms/.test(slowMd), slowMd.slice(0, 400));
+    if (big && SBDebugger.available) {
+      const bigMd = net.asMarkdown(await net.withBody(big));
+      check("Copy for AI truncates a large body, keeping head and tail", bigMd.length < 9000 && /middle omitted/.test(bigMd) && /Large: \d\.\d+ MB/.test(bigMd) && /Uncompressed text/.test(bigMd), bigMd.slice(0, 300));
+    }
+    const binMd = find("/fx/blob.bin") && net.asMarkdown(await net.withBody(find("/fx/blob.bin")));
+    check("Copy for AI leaves binary bodies out", !binMd || /binary application\/octet-stream/.test(binMd) || /not captured/.test(binMd), binMd && binMd.slice(-200));
+    check("CORS failures are recognised", SBNet.issues({ url: "http://api.other.test/x", resourceType: "fetch", requestHeaders: { Origin: "http://127.0.0.1:8765" }, responseHeaders: { "content-type": "application/json" }, statusCode: 200 }).some((i) => i.kind === "cors"));
+
+    // Explain failures.
+    net.setExplain(true);
+    const explained = net.visibleRequests();
+    check("Explain failures shows only failed, blocked and slow requests", explained.some((r) => r.url.endsWith("/fx/error")) && explained.some((r) => r.url.endsWith("/missing")) && explained.some((r) => r.url.endsWith("/fx/timing")) && !explained.some((r) => r.url.endsWith("/fx/page.html")), explained.map((r) => fileName(r.url)));
+    check("with the reason under each name and a summary", !document.querySelector("#network-explain-bar").hidden && /\d 5xx/.test(document.querySelector("#network-explain-bar").textContent) && !!document.querySelector("#network-table .nv-reason"));
+    const failuresMd = await net.failuresMarkdown();
+    check("failures as Markdown for AI", failuresMd.startsWith("# Failed, blocked and slow requests") && failuresMd.includes("/fx/error"), failuresMd.slice(0, 200));
+    net.setExplain(false);
+
+    // Import HAR: a read-only session, then back to the live log.
+    const liveCount = net.all().length;
+    const har = net.harFromRequests(net.all().filter((r) => /\/api\/data\.json$|\/fx\/error$/.test(r.url)));
+    har.log.entries.push({ startedDateTime: new Date().toISOString(), time: 12, request: { method: "GET", url: "https://example.test/img.png", headers: [] },
+      response: { status: 200, statusText: "OK", headers: [{ name: "content-type", value: "image/png" }], content: { size: 68, mimeType: "image/png", encoding: "base64",
+        text: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==" } }, timings: { blocked: 1, dns: -1, connect: -1, send: 0, wait: 8, receive: 3 } });
+    net.importHAR(JSON.stringify(har), "fixture.har");
+    check("an imported HAR is shown as a read-only session", net.session && net.all().length === har.log.entries.length && !document.querySelector("#network-session-bar").hidden && /fixture\.har/.test(document.querySelector("#network-session-bar").textContent));
+    const imported = net.all().find((r) => r.url.endsWith("/api/data.json"));
+    let b = await openTab(imported, "preview");
+    check("imported bodies preview", b.dataset.previewKind === "json");
+    const importedImage = net.all().find((r) => r.url.endsWith("img.png"));
+    b = await openTab(importedImage, "preview"); await wait(300);
+    check("imported base64 bodies preview as images", b.dataset.previewKind === "image" && b.querySelector(".nv-image-box")?.dataset.width === "1");
+    check("imported requests have no blocking or override actions", !net.contextItems(importedImage).some((i) => i.label === "Block request URL"));
+    net.closeSession();
+    check("back to the live log", !net.session && net.all().length === liveCount && document.querySelector("#network-session-bar").hidden);
+    net.closeDetail();
   }
 
   // ---- Disable JavaScript, Clear site data (last: they reload and wipe the fixture's state) ----
