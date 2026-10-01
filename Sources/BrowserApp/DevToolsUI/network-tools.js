@@ -294,6 +294,7 @@
           const row = h("div", { class: "search-hit" }, h("span", { class: "search-where" }, hit.where + (hit.line ? " " + hit.line : "")), text);
           row.addEventListener("click", () => {
             DevTools.showPanel("network");
+            if (network.session) network.closeSession();      // results are from the live log
             network.select(result.id);
             network.setDetailTab(hit.where === "Response" ? "response" : hit.where === "Payload" ? "payload" : "headers");
             network.renderDetail();
@@ -316,50 +317,118 @@
 
   Drawer.register("search", { title: "Search", init: () => SBNetSearch.initPane(), show: () => $("#netsearch-input").focus() });
 
-  // ---- Copy for AI -----------------------------------------------------------------------------------------
+  // ---- Copy as… and Copy for AI ---------------------------------------------------------------------------
+  // Request headers worth showing an assistant; the rest are counted, not listed.
+  const KEY_REQUEST_HEADERS = /^(content-type|content-length|accept|accept-language|authorization|cookie|origin|referer|cache-control|pragma|if-none-match|if-modified-since|range|x-requested-with|x-[\w-]+)$/i;
+  const KEY_RESPONSE_HEADERS = /^(content-type|content-length|content-encoding|cache-control|expires|etag|last-modified|age|vary|location|set-cookie|server-timing|www-authenticate|retry-after|access-control-[\w-]+|content-security-policy|strict-transport-security|x-[\w-]+)$/i;
+
+  // Long arrays and strings in a JSON body, cut so its shape survives truncation.
+  function shrinkJSON(value, depth = 0) {
+    if (Array.isArray(value)) {
+      const kept = value.slice(0, depth > 3 ? 1 : 3).map((v) => shrinkJSON(v, depth + 1));
+      if (value.length > kept.length) kept.push(`… ${value.length - kept.length} more items`);
+      return kept;
+    }
+    if (value && typeof value === "object") {
+      const out = {};
+      const keys = Object.keys(value);
+      for (const k of keys.slice(0, 40)) out[k] = shrinkJSON(value[k], depth + 1);
+      if (keys.length > 40) out["…"] = `${keys.length - 40} more keys`;
+      return out;
+    }
+    if (typeof value === "string" && value.length > 300) return value.slice(0, 300) + `… (${value.length} chars)`;
+    return value;
+  }
+
+  // A body for Markdown: [text, fence language, note].
+  function bodyForAI(text, mime, max) {
+    if (text == null) return [null, "", "not captured"];
+    if (SBNetPreview.Body.isDataURL(text)) return [null, "", `binary ${SBNetPreview.Body.parseDataURL(text).mime}, ${formatBytes(SBNetPreview.Body.byteLength(text))}; not included`];
+    if (text === "") return [null, "", "empty"];
+    const lang = Markdown.langFor(mime) || (SBNetPreview.tryParseJSON(text) !== undefined ? "json" : "");
+    const json = lang === "json" ? SBNetPreview.tryParseJSON(text) : undefined;
+    if (json !== undefined) {
+      const full = JSON.stringify(json, null, 2);
+      if (full.length <= max) return [full, "json", ""];
+      const shrunk = JSON.stringify(shrinkJSON(json), null, 2);
+      return [Markdown.truncate(shrunk, max), "json", `JSON, ${formatBytes(text.length)}; long arrays and strings shortened`];
+    }
+    if (text.length <= max) return [text, lang, ""];
+    // Head and tail: errors often sit at the end of a long text.
+    const head = text.slice(0, Math.floor(max * 0.8)), tail = text.slice(-Math.floor(max * 0.2));
+    return [`${head}\n… (${(text.length - head.length - tail.length).toLocaleString()} characters omitted) …\n${tail}`, lang, `${mime || "text"}, ${formatBytes(text.length)}; middle omitted`];
+  }
+
+  function keyHeaders(headers, pattern) {
+    const lines = [];
+    let omitted = 0;
+    for (const name of Object.keys(headers || {}).sort()) {
+      if (!pattern.test(name)) { omitted++; continue; }
+      const value = String(headers[name]);
+      if (/^(cookie)$/i.test(name)) lines.push(`${name}: <${SBNet.parseCookieHeader(value).map((c) => c.name).join(", ")} — values redacted>`);
+      else if (/^set-cookie$/i.test(name)) for (const c of SBNet.parseSetCookies(value)) lines.push(`${name}: ${c.name}=<redacted>${c.raw.slice(c.raw.indexOf(";")).replace(/^[^;]*$/, "")}`);
+      else lines.push(`${name}: ${Markdown.SECRET_HEADERS.test(name) ? "<redacted>" : value}`);
+    }
+    return { text: lines.join("\n"), omitted };
+  }
+
   Object.assign(network, {
     // One request as Markdown: what an assistant needs to reason about it,
-    // secrets redacted, the body truncated.
+    // key headers only, secrets redacted, the body truncated with its shape kept.
     asMarkdown(r, { maxBody = 4000 } = {}) {
-      const status = r.statusCode != null ? String(r.statusCode) : (r.failure ? "failed: " + r.failure : "unknown");
-      const out = [`## ${(r.method || "GET").toUpperCase()} ${status} ${r.url}`, ""];
-      const facts = [`Type: ${r.resourceType}`];
-      if (r.mimeType) facts.push(`MIME: ${r.mimeType}`);
-      if (r.transferSize != null || r.bodySize != null) facts.push(`Size: ${formatBytes(r.transferSize ?? r.bodySize)}`);
-      if (r.duration != null) facts.push(`Time: ${formatMs(r.duration)}`);
-      if (r.protocolName) facts.push(`Protocol: ${r.protocolName}`);
-      if (r.initiator) facts.push(`Initiator: ${r.initiator}`);
+      const method = (r.method || "GET").toUpperCase();
+      const ext = this.ext(r);
+      const statusText = r.statusCode != null ? `${r.statusCode} ${SBNet.statusText(r, ext)}`.trim() : r.failure ? `failed (${r.failure})` : "no status observed";
+      const out = [`## ${method} ${r.url} → ${statusText}`, ""];
+      const facts = [`type ${r.resourceType}`];
+      if (r.mimeType) facts.push(r.mimeType);
+      if (r.transferSize != null) facts.push(`${formatBytes(r.transferSize)} transferred`);
+      if (r.bodySize != null) facts.push(`${formatBytes(r.bodySize)} resource`);
+      if (r.duration != null) facts.push(`${formatMs(r.duration)}`);
+      if (r.protocolName || ext.protocol) facts.push(r.protocolName || ext.protocol);
+      if (ext.remoteAddress) facts.push(`remote ${ext.remoteAddress}`);
+      if (ext.source && ext.source !== "network") facts.push(`served from ${ext.source}`);
       out.push("- " + facts.join(" · "));
+      const issues = SBNet.issues(r);
+      out.push(`- Issues: ${issues.length ? issues.map((i) => i.text).join("; ") : "none"}`);
+      const initiator = ext.initiator && this.initiatorFrames(ext.initiator)[0];
+      if (initiator) out.push(`- Initiator: ${r.initiator || ext.initiator.type} at ${initiator.functionName || "(anonymous)"} (${initiator.url}:${initiator.lineNumber})`);
+      else if (r.initiator) out.push(`- Initiator: ${r.initiator}`);
+      const t = r.timing;
+      if (t && t.responseEnd > 0) {
+        const phase = (a, b) => (b > a ? formatMs((b - a) / 1000) : "0");
+        out.push(`- Timing: queued ${phase(0, t.domainLookupStart || t.connectStart || t.requestStart)} · DNS ${phase(t.domainLookupStart, t.domainLookupEnd)} · connect ${phase(t.connectStart, t.connectEnd)} · waiting (TTFB) ${phase(t.requestStart, t.responseStart)} · download ${phase(t.responseStart, t.responseEnd)}`);
+      }
+      const serverTiming = SBNet.parseServerTiming(SBNet.header(r.responseHeaders, "server-timing"));
+      if (serverTiming.length) out.push(`- Server-Timing: ${serverTiming.map((e) => `${e.description || e.name} ${e.duration != null ? e.duration + " ms" : ""}`.trim()).join(", ")}`);
       if (r.startedAt) out.push(`- Started: ${new Date(r.startedAt).toISOString()}`);
       if (window.SBBlocking && r.failure && SBBlocking.matches(r.url)) out.push("- Blocked by a DevTools request blocking pattern");
       const section = (title, body, lang) => { out.push("", `### ${title}`, Markdown.fence(body, lang)); };
-      if (Object.keys(r.requestHeaders || {}).length) section("Request headers", Markdown.headers(r.requestHeaders), "http");
+      const req = keyHeaders(r.requestHeaders, KEY_REQUEST_HEADERS);
+      if (req.text) section(`Request headers (key${req.omitted ? `; ${req.omitted} more omitted` : ""})`, req.text, "http");
       if (r.requestBody != null) {
-        const type = Object.entries(r.requestHeaders || {}).find(([k]) => k.toLowerCase() === "content-type")?.[1] || "";
-        section("Request payload", Markdown.truncate(tryPrettyJSON(r.requestBody) || r.requestBody, maxBody), Markdown.langFor(type) || (tryPrettyJSON(r.requestBody) ? "json" : ""));
+        const type = SBNet.header(r.requestHeaders, "content-type") || "";
+        const [text, lang, note] = bodyForAI(r.requestBody, type, maxBody);
+        if (text != null) section(`Request payload${note ? ` (${note})` : ""}`, text, lang);
       }
-      if (Object.keys(r.responseHeaders || {}).length) section("Response headers", Markdown.headers(r.responseHeaders), "http");
-      if (r.responseBody != null && !r.responseBody.startsWith("data:")) {
-        const pretty = tryPrettyJSON(r.responseBody);
-        section(`Response body${r.responseBody.length > maxBody ? ` (first ${maxBody} characters)` : ""}`, Markdown.truncate(pretty || r.responseBody, maxBody), Markdown.langFor(r.mimeType) || (pretty ? "json" : ""));
-      } else if (r.responseBody != null) {
-        out.push("", "### Response body", `(binary, ${r.mimeType || "image"}; not included)`);
-      } else {
-        out.push("", "### Response body", "(not captured)");
-      }
+      const res = keyHeaders(r.responseHeaders, KEY_RESPONSE_HEADERS);
+      if (res.text) section(`Response headers (key${res.omitted ? `; ${res.omitted} more omitted` : ""})`, res.text, "http");
+      const [text, lang, note] = bodyForAI(r.responseBody, r.mimeType, maxBody);
+      if (text != null) section(`Response body${note ? ` (${note})` : r.mimeType ? ` (${r.mimeType})` : ""}`, text, lang);
+      else out.push("", "### Response body", `(${note})`);
       return out.join("\n");
     },
 
     // The whole log as a table, failures spelled out underneath.
     summaryMarkdown() {
-      const all = this.order.map((id) => this.requests.get(id)).filter(Boolean);
+      const all = this.all();
       const failed = all.filter((r) => r.failure || r.statusCode >= 400);
       const bytes = all.reduce((s, r) => s + (r.transferSize || 0), 0);
-      const out = [`# Network log — ${DevTools.info.url || ""}`, "",
+      const out = [`# Network log — ${this.session ? this.session.name : DevTools.info.url || ""}`, "",
         `${all.length} requests · ${formatBytes(bytes)} transferred · ${failed.length} failed`, "",
-        Markdown.table(["#", "Method", "Status", "Type", "Size", "Time", "URL"], all.slice(0, 300).map((r, i) => [
+        Markdown.table(["#", "Method", "Status", "Type", "Size", "Time", "URL", "Issues"], all.slice(0, 300).map((r, i) => [
           i + 1, (r.method || "GET").toUpperCase(), r.statusCode ?? (r.failure ? "(failed)" : ""), r.resourceType,
-          formatBytes(r.transferSize ?? r.bodySize), formatMs(r.duration), r.url]))];
+          formatBytes(r.transferSize ?? r.bodySize), formatMs(r.duration), r.url, SBNet.issues(r).map((x) => x.kind).join(", ")]))];
       if (all.length > 300) out.push("", `… ${all.length - 300} more requests not listed`);
       if (failed.length) {
         out.push("", "## Failed requests");
@@ -368,11 +437,86 @@
       return out.join("\n");
     },
 
+    // "Explain failures": every failed, blocked or slow request, each with the details to fix it.
+    async failuresMarkdown() {
+      const list = this.all().filter((r) => SBNet.issues(r).some((i) => i.failure));
+      const out = [`# Failed, blocked and slow requests — ${this.session ? this.session.name : DevTools.info.url || ""}`, "",
+        list.length ? `${list.length} of ${this.all().length} requests have a problem.` : "No failed, blocked or slow requests."];
+      for (const r of list.slice(0, 20)) out.push("", this.asMarkdown(await this.withBody(r), { maxBody: 1500 }));
+      if (list.length > 20) out.push("", `… ${list.length - 20} more not shown`);
+      return out.join("\n");
+    },
+
     async withBody(r) {
-      if (r.responseBody != null || !r.protocolRequestID) return r;
+      if ((r.responseBody != null && !this.isTruncated(r)) || !r.protocolRequestID || r.imported) return r;
       try { const updated = await DevTools.rpc("Network.getResponseBody", { id: r.id }); this.requests.set(updated.id, updated); return updated; }
       catch (_) { return r; }
     },
+
+    // Chrome's "Copy as fetch (Node.js)": every header, cookies included.
+    asNodeFetch(r) {
+      const init = { headers: Object.fromEntries(this.replayHeaders(r)) };
+      if (r.requestBody != null) init.body = r.requestBody;
+      init.method = (r.method || "GET").toUpperCase();
+      return "fetch(" + JSON.stringify(r.url) + ", " + JSON.stringify(init, null, 2) + ");";
+    },
+
+    asPowerShell(r) {
+      const q = (s) => '"' + String(s).replace(/[`"$]/g, "`$&").replace(/\r/g, "`r").replace(/\n/g, "`n") + '"';
+      const lines = ["$session = New-Object Microsoft.PowerShell.Commands.WebRequestSession"];
+      const ua = SBNet.header(r.requestHeaders, "user-agent");
+      if (ua) lines.push(`$session.UserAgent = ${q(ua)}`);
+      const args = [`Invoke-WebRequest -UseBasicParsing -Uri ${q(r.url)}`];
+      const method = (r.method || "GET").toUpperCase();
+      if (method !== "GET") args.push(`-Method ${q(method)}`);
+      args.push("-WebSession $session");
+      const headers = this.replayHeaders(r).filter(([k]) => !/^(user-agent|content-type)$/i.test(k));
+      if (headers.length) args.push("-Headers @{\n" + headers.map(([k, v]) => `  ${q(k)}=${q(v)}`).join("\n") + "\n}");
+      const type = SBNet.header(r.requestHeaders, "content-type");
+      if (type) args.push(`-ContentType ${q(type)}`);
+      if (r.requestBody != null) args.push(`-Body ${q(r.requestBody)}`);
+      lines.push(args.join(" `\n"));
+      return lines.join("\n");
+    },
+
+    // One request as a HAR 1.2 entry, the shape the app's exporter writes.
+    harEntry(r) {
+      const list = (headers) => Object.keys(headers || {}).sort().flatMap((name) => String(headers[name]).split(/^set-cookie$/i.test(name) ? "\n" : /$^/).map((value) => ({ name, value })));
+      const t = r.timing;
+      const phase = (a, b) => (t && a > 0 && b > 0 && b >= a ? b - a : -1);
+      let query = [];
+      try { query = Array.from(new URL(r.url).searchParams.entries()).map(([name, value]) => ({ name, value })); } catch (_) {}
+      const body = r.responseBody;
+      const isBinary = body != null && SBNetPreview.Body.isDataURL(body);
+      const entry = {
+        startedDateTime: new Date(r.startedAt || Date.now()).toISOString(),
+        time: (r.duration || 0) * 1000,
+        request: {
+          method: (r.method || "GET").toUpperCase(), url: r.url, httpVersion: r.protocolName || "", cookies: SBNet.parseCookieHeader(SBNet.header(r.requestHeaders, "cookie")),
+          headers: list(r.requestHeaders), queryString: query, headersSize: -1, bodySize: r.requestBody != null ? SBNetPreview.Body.byteLength(r.requestBody) : -1,
+        },
+        response: {
+          status: r.statusCode || 0, statusText: SBNet.statusText(r, this.ext(r)), httpVersion: r.protocolName || "",
+          cookies: SBNet.parseSetCookies(SBNet.header(r.responseHeaders, "set-cookie")).map((c) => ({ name: c.name, value: c.value, path: c.path || undefined, domain: c.domain || undefined, expires: c.expires || undefined, httpOnly: c.httpOnly, secure: c.secure, sameSite: c.sameSite || undefined })),
+          headers: list(r.responseHeaders), redirectURL: SBNet.header(r.responseHeaders, "location") || "", headersSize: -1, bodySize: r.bodySize ?? -1,
+          content: Object.assign({ size: r.bodySize ?? -1, mimeType: r.mimeType || "" }, body == null ? {} : isBinary ? { text: SBNetPreview.Body.base64(body) || "", encoding: "base64" } : { text: body }),
+        },
+        cache: {},
+        timings: { blocked: t ? phase(t.fetchStart || 0.0001, t.domainLookupStart || t.connectStart || t.requestStart) : -1, dns: phase(t?.domainLookupStart, t?.domainLookupEnd), connect: phase(t?.connectStart, t?.connectEnd), ssl: phase(t?.secureConnectionStart, t?.connectEnd), send: 0, wait: phase(t?.requestStart, t?.responseStart), receive: phase(t?.responseStart, t?.responseEnd) },
+        _resourceType: r.resourceType,
+      };
+      if (r.requestBody != null) entry.request.postData = { mimeType: SBNet.header(r.requestHeaders, "content-type") || "", text: r.requestBody };
+      if (this.ext(r).remoteAddress) entry.serverIPAddress = String(this.ext(r).remoteAddress).replace(/:\d+$/, "");
+      if (r.initiator) entry._initiator = { type: r.initiator };
+      if (r.failure) entry._error = r.failure;
+      return entry;
+    },
+
+    harFromRequests(list) {
+      return { log: { version: "1.2", creator: { name: "SimpleBrowser", version: "0.1" }, pages: [], entries: list.map((r) => this.harEntry(r)) } };
+    },
+
+    allAsCurl() { return this.visibleRequests().map((r) => this.asCurl(r)).join(" ;\n"); },
 
     blockDomainPattern(url) { try { return new URL(url).host; } catch (_) { return url; } },
     blockURLPattern(url) { try { const u = new URL(url); return u.host + u.pathname + u.search; } catch (_) { return url; } },
@@ -391,14 +535,34 @@
     },
   });
 
-  const originalCopyItems = network.copyItems;
+  // Chrome's Copy submenu: this request in every form, then the whole log.
+  const baseCopyItems = network.copyItems;
   network.copyItems = function (r) {
-    const items = originalCopyItems.call(this, r);
-    items.push("-",
+    const items = baseCopyItems.call(this, r);
+    const at = items.findIndex((i) => i.label === "Copy as fetch") + 1;
+    items.splice(at, 0,
+      { label: "Copy as fetch (Node.js)", action: () => copy(this.asNodeFetch(r)) },
+      { label: "Copy as PowerShell", action: () => copy(this.asPowerShell(r)) });
+    items.push(
+      { label: "Copy as HAR entry", action: async () => copy(JSON.stringify(this.harEntry(await this.withBody(r)), null, 2)) },
       { label: "Copy as Markdown (for AI)", action: async () => copy(this.asMarkdown(await this.withBody(r))) },
-      { label: "Copy all as Markdown summary", action: () => copy(this.summaryMarkdown()) },
-      { label: "Copy all as HAR", action: async () => { try { copy(await DevTools.rpc("Network.getHAR")); } catch (e) { note("error", e.message); } } },
       "-",
+      { label: "Copy all URLs", action: () => copy(this.visibleRequests().map((x) => x.url).join("\n")) },
+      { label: "Copy all as cURL", action: () => copy(this.allAsCurl()) },
+      { label: "Copy all as HAR", action: async () => {
+        if (this.session) { copy(JSON.stringify(this.harFromRequests(this.all()), null, 2)); return; }
+        try { copy(await DevTools.rpc("Network.getHAR")); } catch (e) { note("error", e.message); }
+      } },
+      { label: "Copy all as Markdown summary", action: () => copy(this.summaryMarkdown()) },
+      { label: "Copy failures for AI (Markdown)", action: async () => copy(await this.failuresMarkdown()) });
+    return items;
+  };
+
+  const baseContextItems = network.contextItems;
+  network.contextItems = function (r) {
+    const items = baseContextItems.call(this, r);
+    if (r.imported) return items;
+    items.push("-",
       { label: "Block request URL", action: () => { SBBlocking.add(this.blockURLPattern(r.url)); Drawer.show("blocking"); } },
       { label: "Block request domain", action: () => { SBBlocking.add(this.blockDomainPattern(r.url)); Drawer.show("blocking"); } },
       { label: "Override content…", action: () => this.overrideFrom(r, false) },
@@ -406,9 +570,12 @@
     return items;
   };
 
+  // ⌘F: in the response pane, find in it; anywhere else in Network, search every request.
   document.addEventListener("keydown", (e) => {
     if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key === "f" && DevTools.activePanel === "network") {
       e.preventDefault();
+      const inDetail = network.selectedId && (network.pointerInDetail || (document.activeElement && document.activeElement.closest && document.activeElement.closest("#network-detail")));
+      if (inDetail && network.findInDetail()) return;
       Drawer.show("search");
     }
   });

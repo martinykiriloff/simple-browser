@@ -241,10 +241,12 @@
     <div class="toolbar">
       <button class="icon-button record on" id="network-record" title="Stop recording network log">&#9679;</button>
       <button class="icon-button" id="network-clear" title="Clear">&#128683;</button>
-      <input type="search" id="network-filter" placeholder="Filter">
+      <input type="search" id="network-filter" placeholder="Filter" title="Text, /regex/, or keys: status-code:404 domain:*.example.com method:POST mime-type:application/json larger-than:100k is:running is:from-cache has-response-header:etag resource-type:script scheme:https cookie-name:… set-cookie-name:… priority:high protocol:h2 remote-address:… — prefix with - to negate">
+      <label class="check" title="Show the requests the filter does not match"><input type="checkbox" id="network-invert"> Invert</label>
       <label class="check"><input type="checkbox" id="network-preserve"> Preserve log</label>
       <label class="check" title="Disable the cache while DevTools is open"><input type="checkbox" id="network-disable-cache"> Disable cache</label>
       <span class="toolbar-spacer"></span>
+      <button class="text-button" id="network-import" title="Open a HAR file as a read-only log (or drop one on the panel)">Import HAR…</button>
       <button class="text-button" id="network-har" title="Export HAR">Export HAR…</button>
     </div>
     <div class="toolbar chips" id="network-types">
@@ -258,16 +260,16 @@
       <button class="chip" data-type="media">Media</button>
       <button class="chip" data-type="websocket">WS</button>
       <button class="chip" data-type="other">Other</button>
+      <span class="toolbar-spacer"></span>
+      <button class="chip nv-explain-chip" id="network-explain" title="Show only failed, blocked, CORS-failed, 4xx/5xx and slow (over 1 s) requests, each with its reason">Explain failures</button>
     </div>
+    <div class="nv-banner" id="network-session-bar" hidden></div>
+    <div class="nv-banner nv-explain-bar" id="network-explain-bar" hidden></div>
     <div class="split horizontal" id="network-split">
       <div class="split-main" id="network-main">
         <div class="scroll" id="network-table-wrap">
           <table class="data-table" id="network-table">
-            <thead><tr>
-              <th data-sort="name">Name</th><th data-sort="status">Status</th><th data-sort="type">Type</th>
-              <th data-sort="initiator">Initiator</th><th data-sort="size">Size</th><th data-sort="time">Time</th>
-              <th class="waterfall-col">Waterfall</th>
-            </tr></thead>
+            <thead></thead>
             <tbody></tbody>
           </table>
         </div>
@@ -281,7 +283,9 @@
           <button class="subtab" data-subpanel="payload">Payload</button>
           <button class="subtab" data-subpanel="preview">Preview</button>
           <button class="subtab" data-subpanel="response">Response</button>
+          <button class="subtab" data-subpanel="initiator">Initiator</button>
           <button class="subtab" data-subpanel="timing">Timing</button>
+          <button class="subtab" data-subpanel="cookies" hidden>Cookies</button>
           <button class="subtab" data-subpanel="messages" hidden>Messages</button>
         </div>
         <div class="scroll" id="network-detail-body"></div>
@@ -521,6 +525,7 @@
 <script src="agent-panel.js"></script>
 <script src="drawer.js"></script>
 <script src="markdown.js"></script>
+<script src="network-preview.js"></script>
 <script src="network-tools.js"></script>
 <script src="rendering.js"></script>
 <script src="animations.js"></script>
