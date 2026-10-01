@@ -10,7 +10,7 @@
 // The body runs as an async function inside the DevTools web view.
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const out = { failures: [] };
-const check = (name, ok, detail) => { if (!ok) out.failures.push(name + (detail !== undefined ? ": " + JSON.stringify(detail) : "")); };
+const check = (name, ok, detail) => { out.checks = (out.checks || 0) + 1; if (!ok) out.failures.push(name + (detail !== undefined ? ": " + JSON.stringify(detail) : "")); };
 try {
   // ---- Elements ---------------------------------------------------------------
   DevTools.showPanel("elements"); await wait(600);
@@ -738,6 +738,379 @@ try {
     check("and is remembered", JSON.parse(localStorage.getItem("devtools.console.live")).includes("window.__liveCounter * 2"));
     cons.removeLive(cons.live[0]);
     check("removing it", document.querySelector("#console-live").hidden && !cons.live.length);
+  }
+
+  // ---- Console v2 ---------------------------------------------------------------
+  {
+    DevTools.showPanel("console"); await wait(500);
+    const cons = DevTools.panels.console;
+    const results = () => Array.from(document.querySelectorAll("#console-messages .console-message.type-result"));
+    const evalShown = async (expression) => {
+      const before = results().length;
+      cons.evaluate(expression);
+      for (let i = 0; i < 30 && results().length === before; i++) await wait(50);
+      await wait(100);
+      return results()[results().length - 1];
+    };
+    const text = (el) => el ? el.querySelector(".body").textContent : null;
+    check("console: arrays render as Array(3) [1, 2, 3]", text(await evalShown("[1, 2, 3]")) === "Array(3) [1, 2, 3]", text(results().at(-1)));
+    check("console: objects preview nested values as {…}", text(await evalShown("({a: 1, b: {c: 2}, s: 'x'})")) === "{a: 1, b: {…}, s: 'x'}", text(results().at(-1)));
+    check("console: maps preview their entries", text(await evalShown("new Map([['a', 1]])")) === "Map(1) {'a' => 1}", text(results().at(-1)));
+    check("console: promises show their state", text(await evalShown("Promise.resolve(3)")) === "Promise {<fulfilled>: 3}", text(results().at(-1)));
+    check("console: class instances are named", /^CartThing \{n: 1\}$/.test(text(await evalShown("new (class CartThing { constructor() { this.n = 1; } })()"))), text(results().at(-1)));
+    const nodeResult = await evalShown("document.getElementById('title')");
+    const node = nodeResult && nodeResult.querySelector(".v-node");
+    check("console: DOM nodes render as inline elements", !!node && node.textContent.startsWith("<h1 id=\"title\"") && !!node.querySelector(".tag") && !!node.querySelector(".attr-value"), node && node.textContent);
+    if (node) {
+      node.click(); await wait(900);
+      check("console: clicking a node reveals it in Elements", DevTools.activePanel === "elements" && /h1#title/.test(document.querySelector("#breadcrumbs").textContent), document.querySelector("#breadcrumbs").textContent);
+      DevTools.showPanel("console"); await wait(200);
+    }
+    const fnResult = await evalShown("(function add(a, b) { return a + b; })");
+    fnResult?.querySelector(".obj-toggle")?.click(); await wait(500);
+    check("console: functions show their source when expanded", /return a \+ b/.test(fnResult?.querySelector(".obj-source")?.textContent || ""), fnResult && fnResult.textContent.slice(0, 120));
+    const errResult = await evalShown("new Error('v2 boom')");
+    check("console: errors show their stack as links", !!errResult?.querySelector(".v-error .link") || /v2 boom/.test(text(errResult) || ""), text(errResult));
+
+    // prompt: highlighting, multi-line, eager evaluation, autocomplete
+    const prompt = document.querySelector("#console-prompt");
+    const type = async (value) => { prompt.focus(); prompt.value = value; prompt.setSelectionRange(value.length, value.length); prompt.dispatchEvent(new Event("input")); await wait(450); };
+    await type("const greeting = 'hi' + 1");
+    const mirror = document.querySelector("#console-prompt-row .code-input-mirror");
+    check("prompt: syntax highlighting while typing", !!mirror && !!mirror.querySelector(".tok-keyword") && !!mirror.querySelector(".tok-string") && !!mirror.querySelector(".tok-number"));
+    await type("function twice(x) {");
+    prompt.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })); await wait(100);
+    check("prompt: Enter with an open bracket continues on a new line", prompt.value.startsWith("function twice(x) {\n"), prompt.value);
+    await type("[1, 2, 3].map((n) => n * 2).join('-')");
+    for (let i = 0; i < 20 && document.querySelector("#console-eager")?.textContent !== "\"2-4-6\""; i++) await wait(100);
+    check("prompt: eager evaluation previews a pure expression", document.querySelector("#console-eager")?.textContent === "\"2-4-6\"", [cons.eagerResult, cons.lastEager]);
+    await DevTools.rpc("Console.evaluate", { expression: "window.__eagerHits = 0; 1" });
+    await type("window.__eagerHits = 5");
+    const hits = await DevTools.rpc("Runtime.evaluateLive", { expression: "window.__eagerHits" });
+    check("prompt: eager evaluation never runs side effects", hits?.result?.description === "0" && document.querySelector("#console-eager").hidden, hits);
+    check("prompt: the side-effect check", EagerEval.isSafe("document.title.toUpperCase()") && EagerEval.isSafe("$0") && !EagerEval.isSafe("alert(1)") && !EagerEval.isSafe("a = 1") && !EagerEval.isSafe("list.push(1)") && !EagerEval.isSafe("i++") && !EagerEval.isSafe("arr.map(sideEffect)") && !EagerEval.isSafe("fetch('/x')"));
+    await type("document.getElementById('title').getAttr");
+    const items = Array.from(document.querySelectorAll("#console-completions .item")).map((i) => i.querySelector(".completion-name").textContent + ":" + i.querySelector(".completion-type").textContent);
+    check("prompt: autocomplete completes the expression before the dot, with types", !document.querySelector("#console-completions").hidden && items.some((i) => i === "getAttribute:method"), items.slice(0, 5));
+    prompt.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true })); await wait(100);
+    check("prompt: Tab accepts the completion", prompt.value === "document.getElementById('title').getAttribute", prompt.value);
+    await type("");
+    const saved = JSON.parse(await DevTools.rpc("Settings.get", { key: "consoleHistory" }) || "[]");
+    check("prompt: history is kept by the app across sessions", saved.includes("[1, 2, 3]"), saved.slice(-3));
+
+    // sidebar, group similar, hide network, log XHR
+    cons.setSetting("sidebar", true); await wait(150);
+    const errorsRow = document.querySelector("#console-side-error");
+    check("sidebar: shows counts by kind", !document.querySelector("#console-sidebar").hidden && /^\d+ errors$/.test(errorsRow?.textContent.trim() || "") && /\d+ user messages/.test(document.querySelector("#console-side-user")?.textContent || ""), errorsRow?.textContent);
+    errorsRow.click(); await wait(150);
+    const visible = Array.from(document.querySelectorAll("#console-messages .console-message")).filter((m) => !m.hidden && m.offsetParent && !m.classList.contains("type-command") && !m.classList.contains("type-result"));
+    check("sidebar: selecting errors shows only errors", visible.length > 0 && visible.every((m) => m.classList.contains("level-error")), visible.map((m) => m.dataset.level));
+    document.querySelector("#console-side-all").click(); await wait(100);
+    cons.setSetting("sidebar", false);
+    await DevTools.rpc("Console.evaluate", { expression: "for (var i = 0; i < 4; i++) console.log('similar item', i); 1" }); await wait(500);
+    const badge = Array.from(document.querySelectorAll("#console-messages .console-similar-badge")).find((b) => b.closest(".console-message").textContent.includes("similar item"));
+    check("group similar: consecutive similar messages collapse with a count", badge?.textContent === "4", badge?.textContent);
+    cons.setSetting("hideNetwork", true); await wait(100);
+    const failing = Array.from(document.querySelectorAll("#console-messages .console-message")).filter((m) => m.textContent.includes("Failed to load resource"));
+    check("hide network: network messages are hidden", failing.length > 0 && failing.every((m) => m.hidden), failing.length);
+    cons.setSetting("hideNetwork", false);
+    cons.setSetting("logXHR", true);
+    await DevTools.rpc("Console.evaluate", { expression: "await fetch('/api/data.json?xhrlog=1').then((r) => r.status)" }); await wait(1200);
+    check("log XMLHttpRequests: finished fetches are logged", Array.from(document.querySelectorAll("#console-messages .console-message")).some((m) => /Fetch finished loading: GET ".*xhrlog=1"/.test(m.textContent)));
+    cons.setSetting("logXHR", false);
+
+    // message actions
+    const errItem = cons.entries.find((i) => i.entry.level === "error" && cons.plainText(i).includes("boom from console.error"));
+    const labels = errItem ? cons.contextItems(errItem, errItem.el).filter((i) => i !== "-").map((i) => i.label) : [];
+    check("message menu: Copy message, Copy for AI, Copy stack, Store as global, Reveal in Sources, Save as…",
+      ["Copy message", "Copy for AI (Markdown)", "Copy stack", "Store as global variable", "Reveal in Sources panel", "Save as…"].every((l) => labels.includes(l)), labels);
+    const md = errItem ? await cons.entryMarkdownForAI(errItem) : "";
+    check("Copy for AI includes the source lines around the location", /Source around `/.test(md) && /→ +\d+ \|.*boom from console\.error/.test(md), md.slice(-400));
+    check("Copy stack", errItem && /@ http:\/\/127\.0\.0\.1:8765\//.test(cons.stackText(errItem)), errItem && cons.stackText(errItem));
+    const objItem = cons.entries.find((i) => i.entry.type === "result" && i.entry.args[0]?.description === "Object");
+    const name = objItem ? await cons.storeAsGlobal(objItem.entry.args[0]) : null;
+    await wait(300);
+    const stored = name ? await DevTools.rpc("Runtime.evaluateLive", { expression: name + ".a" }) : null;
+    check("Store as global variable makes temp1", /^temp\d+$/.test(name || "") && stored?.result?.description === "1", { name, stored });
+    check("Save as… writes the whole console as text", /boom from console\.error/.test(cons.consoleText()) && /^.*> \[1, 2, 3\]$/m.test(cons.consoleText()));
+  }
+
+  // ---- Elements v2 ----------------------------------------------------------------
+  {
+    const el = DevTools.panels.elements;
+    DevTools.showPanel("elements"); await wait(600);
+    const pageEvalV2 = async (expression) => (await DevTools.rpc("Console.evaluate", { expression }))?.result?.description;
+    await pageEvalV2(`(() => {
+      const wrap = document.createElement('section'); wrap.id = 'v2';
+      wrap.innerHTML = '<div id="v2-grid" style="display:grid;grid-template-columns:50px 80px;gap:4px"><span>a</span><span>b</span></div>' +
+        '<div id="v2-flex" style="display:flex"><i>1</i><i>2</i></div>' +
+        '<div id="v2-scroll" style="height:30px;overflow:auto"><div style="height:200px">tall</div></div>' +
+        '<p id="v2-move">move me</p><p id="v2-target" class="one two" style="color: #ff0000; margin-top: 3px">target</p><button id="v2-listener">L</button>' +
+        '<div id="v2-host"><b slot="s" id="v2-slotted">slotted</b></div>';
+      document.body.appendChild(wrap);
+      wrap.querySelector('#v2-listener').addEventListener('click', () => {});
+      const root = wrap.querySelector('#v2-host').attachShadow({ mode: 'open' });
+      root.innerHTML = '<span id="in-shadow">inside</span><slot name="s"></slot>';
+      window.__v2move = wrap.querySelector('#v2-move');
+      return 'ok';
+    })()`);
+    await wait(800);
+    const idOf = async (selector) => { const r = await DevTools.rpc("DOM.performSearch", { query: selector }); return r.nodeIds[0]; };
+    const show = async (selector) => { const id = await idOf(selector); if (id != null) { await el.revealNode(id); await wait(250); } return id; };
+    const gridId = await show("#v2-grid");
+    const line = (id) => el.elements.get(id)?.querySelector(":scope > .node-line");
+    check("elements: grid badge", !!line(gridId)?.querySelector(".dom-badge.grid"), line(gridId)?.textContent);
+    line(gridId)?.querySelector(".dom-badge.grid")?.click(); await wait(400);
+    let overlays = await DevTools.rpc("Overlay.getLayoutOverlays");
+    check("elements: the grid badge turns on the grid overlay", overlays.some((o) => o.nodeId === gridId && o.kind === "grid") && line(gridId).querySelector(".dom-badge.grid.on"), overlays);
+    const flexId = await show("#v2-flex");
+    line(flexId)?.querySelector(".dom-badge.flex")?.click(); await wait(300);
+    overlays = await DevTools.rpc("Overlay.getLayoutOverlays");
+    check("elements: flex badge and overlay", overlays.some((o) => o.nodeId === flexId && o.kind === "flex"), overlays);
+    const overlayDrawn = await pageEvalV2("document.getElementById('__sb-devtools-layout-overlay') ? 'none' : 'hidden from the page world? ' + !!document.querySelector('[id^=__sb-devtools-layout]')");
+    line(gridId).querySelector(".dom-badge.grid").click(); line(flexId).querySelector(".dom-badge.flex").click(); await wait(300);
+    check("elements: overlays switch off again", (await DevTools.rpc("Overlay.getLayoutOverlays")).length === 0);
+    const scrollId = await show("#v2-scroll");
+    check("elements: scroll badge", !!line(scrollId)?.querySelector(".dom-badge.scroll"));
+    const listenerId = await show("#v2-listener");
+    check("elements: event badge for a node with listeners", !!line(listenerId)?.querySelector(".dom-badge.event") && !line(scrollId)?.querySelector(".dom-badge.event"));
+    const hostId = await show("#v2-host");
+    await el.expand(hostId); await wait(300);
+    const hostLi = el.elements.get(hostId);
+    const shadowLine = hostLi?.querySelector(":scope > ol.children > li.node > .node-line");
+    check("elements: #shadow-root (open)", /#shadow-root \(open\)/.test(shadowLine?.textContent || ""), shadowLine?.textContent);
+    const slottedId = Array.from(el.nodes.values()).find((n) => (n.attributes || []).join(" ").includes("v2-slotted"))?.nodeId;
+    if (slottedId == null) await el.expand(hostId);
+    const slotted = Array.from(el.nodes.values()).find((n) => (n.attributes || []).join(" ").includes("v2-slotted"));
+    check("elements: slot badge on a slotted node", !!(slotted && line(slotted.nodeId)?.querySelector(".dom-badge.slot")), slotted && line(slotted.nodeId)?.textContent);
+    if (slotted) {
+      line(slotted.nodeId).querySelector(".dom-badge.slot")?.click(); await wait(500);
+      check("elements: the slot badge reveals the slot", el.nodes.get(el.selectedId)?.nodeName === "slot" && /#shadow-root/.test(document.querySelector("#breadcrumbs").textContent), document.querySelector("#breadcrumbs").textContent);
+    }
+    const shadowRootId = +shadowLine?.parentElement.dataset.nodeId;
+    await el.expand(shadowRootId); await wait(300);
+    const inShadow = Array.from(el.nodes.values()).find((n) => (n.attributes || []).includes("in-shadow"));
+    if (inShadow) {
+      const jsPath = await DevTools.rpc("DOM.copyPath", { nodeId: inShadow.nodeId, kind: "jsPath" });
+      check("copy JS path steps into shadow roots", jsPath === 'document.querySelector("#v2-host").shadowRoot.querySelector("#in-shadow")', jsPath);
+    } else check("node inside the shadow root is in the tree", false);
+
+    // copy
+    const targetId = await show("#v2-target");
+    check("copy selector", await DevTools.rpc("DOM.copyPath", { nodeId: targetId, kind: "selector" }) === "#v2-target");
+    check("copy JS path", await DevTools.rpc("DOM.copyPath", { nodeId: targetId, kind: "jsPath" }) === 'document.querySelector("#v2-target")');
+    check("copy XPath", await DevTools.rpc("DOM.copyPath", { nodeId: targetId, kind: "xpath" }) === '//*[@id="v2-target"]');
+    const full = await DevTools.rpc("DOM.copyPath", { nodeId: targetId, kind: "fullXPath" });
+    check("copy full XPath", /^\/html\/body\/section(\[\d+\])?\/p\[2\]$/.test(full), full);
+    const md = await el.elementMarkdown(targetId);
+    check("copy element for AI", md.startsWith("## Element `<p>`") && /\*\*Accessibility\*\*: role/.test(md) && /### Matched rules/.test(md) && /element\.style/.test(md) && /\| color \| rgb\(255, 0, 0\) \|/.test(md), md.slice(0, 600));
+    check("copy styles", /color: #ff0000;|color: rgb\(255, 0, 0\);/.test(await el.stylesText(targetId)), await el.stylesText(targetId));
+    const items = el.copyItems(targetId).map((i) => i.label);
+    check("the Copy items", ["Copy selector", "Copy JS path", "Copy XPath", "Copy full XPath", "Copy styles", "Copy outerHTML", "Copy element for AI (Markdown)"].every((l) => items.includes(l)), items);
+    const global = await el.storeAsGlobal(targetId); await wait(300);
+    check("store a node as a global variable", /^temp\d+$/.test(global || "") && await pageEvalV2(global + ".id") === "v2-target", global);
+    DevTools.showPanel("elements"); await wait(200);
+
+    // undo / redo
+    await el.mutate("DOM.setAttributeValue", { nodeId: targetId, name: "title", value: "undo me" });
+    await el.undo();
+    check("⌘Z undoes an attribute edit", await pageEvalV2("document.getElementById('v2-target').hasAttribute('title')") === "false");
+    await el.redo();
+    check("⇧⌘Z redoes it", await pageEvalV2("document.getElementById('v2-target').title") === "undo me");
+    const moveId = await idOf("#v2-move");
+    await el.mutate("DOM.removeNode", { nodeId: moveId }); await wait(200);
+    check("delete removes the node", await pageEvalV2("document.getElementById('v2-move') === null") === "true");
+    document.querySelector("#dom-tree").focus();
+    document.querySelector("#dom-tree").dispatchEvent(new KeyboardEvent("keydown", { key: "z", metaKey: true, bubbles: true, cancelable: true })); await wait(500);
+    check("⌘Z brings the same node back, in place", await pageEvalV2("document.getElementById('v2-move') === window.__v2move && window.__v2move.nextElementSibling.id === 'v2-target'") === "true");
+    await el.mutate("CSS.updateStyle", { nodeId: targetId, edits: [{ name: "color", value: "blue" }] });
+    await el.undo();
+    check("⌘Z undoes a style edit", await pageEvalV2("getComputedStyle(document.getElementById('v2-target')).color") === "rgb(255, 0, 0)");
+
+    // drag and drop
+    check("element lines are draggable", line(targetId)?.draggable === true && line(Array.from(el.nodes.values()).find((n) => n.nodeName === "body").nodeId)?.draggable === false);
+    const moved = await el.moveNode(moveId, targetId, "after"); await wait(300);
+    check("drop after a node moves it there", moved && await pageEvalV2("document.getElementById('v2-target').nextElementSibling === window.__v2move") === "true");
+    check("the tree shows the new order", (() => { const li = el.elements.get(targetId); return li && li.nextElementSibling && +li.nextElementSibling.dataset.nodeId === moveId; })());
+    await el.undo(); await wait(300);
+    check("⌘Z undoes the move", await pageEvalV2("window.__v2move.nextElementSibling.id") === "v2-target");
+
+    // search highlighting
+    el.openSearch(); document.querySelector("#elements-search").value = "move me"; await el.runSearch(); await wait(400);
+    check("search highlights the match in the tree", Array.from(document.querySelectorAll("#dom-tree mark.dom-search-mark")).some((m) => m.textContent.toLowerCase() === "move me"));
+    el.closeSearch();
+    check("closing the search removes the highlight", !document.querySelector("#dom-tree mark.dom-search-mark"));
+
+    // styles: colour picker, .cls, copy menu
+    el.select(targetId); document.querySelector('#styles-tabs [data-subpanel="styles"]').click(); await wait(500);
+    const swatch = document.querySelector("#styles-list .styles-section .color-swatch[role=button]");
+    swatch?.click(); await wait(200);
+    check("a colour swatch opens the colour picker", !!document.querySelector(".color-picker") && ["HEX", "RGB"].includes(ColorPicker.parts.kind.textContent), ColorPicker.parts && ColorPicker.parts.kind.textContent);
+    ColorPicker.setText("rgb(0, 128, 0)"); await wait(500);
+    check("the picker applies the colour live", await pageEvalV2("getComputedStyle(document.getElementById('v2-target')).color") === "rgb(0, 128, 0)");
+    ColorPicker.parts.kind.click();
+    check("the format switches between hex, rgb and hsl", ColorPicker.parts.kind.textContent === "HSL" && /^hsl\(120, 100%, 25%\)$/.test(ColorPicker.parts.value.value), ColorPicker.parts.value.value);
+    check("colour conversions", ColorPicker.format({ r: 255, g: 0, b: 0, a: 0.5 }, "rgb") === "rgba(255, 0, 0, 0.5)" && ColorPicker.format({ r: 255, g: 0, b: 0, a: 1 }, "hex") === "#ff0000" && ColorPicker.parse("hsl(240, 100%, 50%)").b === 255);
+    ColorPicker.close(true); await wait(400);
+    document.querySelector("#styles-cls").click(); await wait(100);
+    const clsBoxes = Array.from(document.querySelectorAll("#styles-cls-list input")).map((b) => b.dataset.class);
+    check(".cls lists the element's classes", clsBoxes.join() === "one,two", clsBoxes);
+    const one = document.querySelector('#styles-cls-list input[data-class="one"]');
+    one.checked = false; one.dispatchEvent(new Event("change")); await wait(500);
+    check(".cls toggles a class off and keeps it listed", await pageEvalV2("document.getElementById('v2-target').className") === "two" && !!document.querySelector('#styles-cls-list input[data-class="one"]'));
+    const input = document.querySelector("#styles-cls-input");
+    input.value = "three"; input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); await wait(500);
+    check(".cls adds a class", await pageEvalV2("document.getElementById('v2-target').className") === "two three");
+    document.querySelector("#styles-cls").click();
+    const prop = Array.from(document.querySelectorAll("#styles-list .styles-prop")).find((p) => p.textContent.startsWith("color"));
+    prop?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 20, clientY: 20 })); await wait(100);
+    const labels = (el.lastStylesMenu?.items || []).filter((i) => i !== "-").map((i) => i.label);
+    ContextMenu.hide();
+    check("styles menu: Copy declaration, rule, all declarations, as JS", ["Copy declaration", "Copy rule", "Copy all declarations", "Copy declaration as JS", "Copy all declarations as JS"].every((l) => labels.includes(l)), labels);
+    check("Copy as JS uses camelCase", el.jsDeclaration({ name: "font-size", value: "22px" }) === "fontSize: '22px'" && el.jsDeclaration({ name: "-webkit-line-clamp", value: "2" }) === "WebkitLineClamp: '2'");
+
+    // computed
+    document.querySelector('#styles-tabs [data-subpanel="computed"]').click(); await wait(600);
+    const names = () => Array.from(document.querySelectorAll("#computed-list .computed-row .name")).map((n) => n.textContent);
+    const setOnly = names();
+    check("computed: only properties a rule sets, by default", setOnly.includes("color") && setOnly.includes("margin-top") && !setOnly.includes("accent-color"), setOnly.slice(0, 12));
+    const colorRow = document.querySelector('#computed-list .computed-row[data-name="color"]');
+    colorRow?.click(); await wait(100);
+    const traceText = colorRow?.nextElementSibling?.textContent || "";
+    check("computed: the trace names the rules that set a value", /element\.style/.test(traceText) && /inherited from body/.test(traceText), traceText.slice(0, 200));
+    document.querySelector("#computed-show-all").click(); await wait(200);
+    check("computed: Show all", names().length > setOnly.length + 50 && names().includes("accent-color"));
+    document.querySelector("#computed-group").click(); await wait(200);
+    const groups = Array.from(document.querySelectorAll("#computed-list .computed-group-title")).map((g) => g.textContent);
+    check("computed: Group by category", ["Layout", "Text", "Appearance"].every((g) => groups.includes(g)), groups);
+    document.querySelector("#computed-show-all").click(); document.querySelector("#computed-group").click();
+
+    // layout: editable box model
+    document.querySelector('#styles-tabs [data-subpanel="layout"]').click(); await wait(500);
+    const marginTop = document.querySelector('#layout-view .box-num[data-prop="margin-top"]');
+    check("layout: box-model numbers are editable", marginTop?.textContent === "3");
+    await el.editBox(targetId, "margin-top", "7"); await wait(300);
+    check("layout: editing a number sets it on the element", await pageEvalV2("getComputedStyle(document.getElementById('v2-target')).marginTop") === "7px" && document.querySelector('#layout-view .box-num[data-prop="margin-top"]').textContent === "7");
+    document.querySelector('#styles-tabs [data-subpanel="styles"]').click();
+    await pageEvalV2("document.getElementById('v2').remove(); delete window.__v2move; 1");
+  }
+
+  // ---- Sources v2 ------------------------------------------------------------------
+  {
+    const s = DevTools.panels.sources;
+    const dbg = SBDebugger;
+    DevTools.showPanel("sources"); await wait(500);
+    const scriptURL = new URL("/script.js", DevTools.info.url).href;
+    const cartURL = new URL("/src/cart.js", DevTools.info.url).href;
+    for (let i = 0; i < 50 && !SBSourceMaps.maps.has(new URL("/bundle.js", DevTools.info.url).href); i++) await wait(100);
+
+    // search across all sources
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "f", code: "KeyF", metaKey: true, altKey: true, bubbles: true })); await wait(300);
+    check("⌥⌘F opens Search in the drawer", Drawer.current === "source-search" && !document.querySelector("#drawer").hidden);
+    document.querySelector("#srcsearch-input").value = "function greet";
+    const found = await s.runSearchAll();
+    const files = Array.from(document.querySelectorAll("#srcsearch-results .srcsearch-file")).map((f) => f.querySelector(".srcsearch-name").textContent);
+    check("search finds matches across sources", found && found.total >= 1 && files.includes("script.js") && !!document.querySelector("#srcsearch-results .srcsearch-hit mark"), files);
+    document.querySelector("#srcsearch-input").value = "cartTotal";
+    await s.runSearchAll();
+    const cartHits = Array.from(document.querySelectorAll("#srcsearch-results .srcsearch-file")).find((f) => f.querySelector(".srcsearch-name").textContent === "cart.js");
+    check("search covers original (source-mapped) files", !!cartHits && cartHits.querySelectorAll(".srcsearch-hit").length === 2, cartHits && cartHits.textContent.slice(0, 200));
+    cartHits?.querySelectorAll(".srcsearch-hit")[1].click(); await wait(700);
+    check("a result opens the file at the line", s.current === cartURL && document.querySelector('#sources-code .code-line.highlight')?.dataset.line === "9", [s.current, document.querySelector('#sources-code .code-line.highlight')?.dataset.line]);
+    document.querySelector("#srcsearch-regex").checked = true; document.querySelector("#srcsearch-input").value = "total\\s\\+=";
+    const rx = await s.runSearchAll();
+    check("search with a regular expression", rx && rx.total >= 1);
+    document.querySelector("#srcsearch-regex").checked = false;
+    Drawer.hide();
+
+    // go to line / symbol
+    s.openGoto("line"); await wait(50);
+    const gotoInput = document.querySelector("#sources-goto-input");
+    gotoInput.value = ":6"; gotoInput.dispatchEvent(new Event("input"));
+    gotoInput.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); await wait(100);
+    check("go to line", document.querySelector("#sources-goto").hidden && document.querySelector('#sources-code .code-line.current-line')?.dataset.line === "6");
+    s.openGoto("symbol"); await wait(50);
+    const symbols = s.gotoList.map((i) => i.name + ":" + i.line);
+    check("go to symbol lists functions", symbols.includes("cartTotal:1") && symbols.includes("checkout:8"), symbols);
+    gotoInput.value = "@check"; gotoInput.dispatchEvent(new Event("input"));
+    gotoInput.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); await wait(100);
+    check("go to symbol jumps", document.querySelector('#sources-code .code-line.current-line')?.dataset.line === "8");
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "l", metaKey: true, bubbles: true })); await wait(50);
+    check("⌘L opens go to line", !document.querySelector("#sources-goto").hidden && gotoInput.value === ":");
+    s.closeGoto();
+
+    // brackets, word highlight, folding
+    const partner = s.matchBracket(1, s.lines[0].indexOf("{"));
+    check("bracket matching", partner && partner.line === 7 && document.querySelectorAll("#sources-code .code-mark.bracket-match").length === 2, partner);
+    const words = s.highlightWord("total");
+    check("highlights every occurrence of the selected word", words === 4 && document.querySelectorAll("#sources-code .code-mark.word-hit").length === 4, words);
+    check("folding ranges for {} blocks", s.foldRanges && s.foldRanges.get(1) === 7 && s.foldRanges.get(8) === 12, s.foldRanges && Array.from(s.foldRanges));
+    check("fold toggles in the gutter", !!document.querySelector('#sources-code .code-line[data-line="1"] .fold-toggle'));
+    s.toggleFold(1);
+    check("folding hides the block", document.querySelector('#sources-code .code-line[data-line="3"]').classList.contains("folded") && !document.querySelector('#sources-code .code-line[data-line="8"]').classList.contains("folded"));
+    s.toggleFold(1);
+    check("unfolding shows it again", !document.querySelector("#sources-code .code-line.folded"));
+
+    // snippets
+    const snippet = s.newSnippet("const v2 = 41;\nv2 + 1"); await wait(400);
+    check("a new snippet opens in an editor", s.current === s.snippetURL(snippet.name) && !!document.querySelector("#sources-code .snippet-editor textarea") && !document.querySelector("#sources-nav-snippets").hidden);
+    check("the snippet editor highlights", !!document.querySelector("#sources-code .snippet-editor .code-input-mirror .tok-keyword"));
+    const ran = await s.runSnippet(snippet);
+    check("running a snippet", ran?.result?.description === "42" && document.querySelector("#snippet-result").textContent === "< 42", ran);
+    const stored = JSON.parse(await DevTools.rpc("Settings.get", { key: "snippets" }) || "[]");
+    check("snippets are kept by the app", stored.some((x) => x.name === snippet.name && x.content.includes("v2 + 1")));
+    check("renaming a snippet", s.renameSnippet(snippet, "v2 snippet") && JSON.parse(await DevTools.rpc("Settings.get", { key: "snippets" })).some((x) => x.name === "v2 snippet"));
+    s.deleteSnippet(snippet); await wait(200);
+    check("deleting a snippet", !JSON.parse(await DevTools.rpc("Settings.get", { key: "snippets" }) || "[]").some((x) => x.name === "v2 snippet") && !s.files.has(s.snippetURL("v2 snippet")));
+    s.showNav("page");
+
+    // debugger
+    if (dbg.available) {
+      for (const bp of dbg.breakpoints.slice()) await dbg.toggle(bp.url, bp.line);
+      await s.open(cartURL); await wait(300);
+      await dbg.toggle(cartURL, 4);
+      await dbg.send("Runtime.evaluate", { expression: "setTimeout(function () { checkout([{ price: 2, qty: 3 }, { price: 1, qty: 1 }]); }, 0); 1" });
+      for (let i = 0; i < 50 && !dbg.paused; i++) await wait(100);
+      await wait(900);
+      check("debugger: paused in cartTotal", dbg.paused && dbg.frames[0]?.functionName === "cartTotal");
+      const inlineText = Array.from(document.querySelectorAll("#sources-code .inline-values")).map((e) => e.closest(".code-line").dataset.line + ": " + e.textContent);
+      check("debugger: inline values at the end of the lines", inlineText.some((t) => /^4: .*total = 0/.test(t) && /i = 0/.test(t)) && inlineText.some((t) => /^1: items = Array\(2\)/.test(t)), inlineText);
+      const hit = dbg.expressionInLine("    total += items[i].price * items[i].qty;", 5, 4);
+      check("debugger: the expression under the pointer", hit?.expression === "total", hit);
+      const member = dbg.expressionInLine("    total += items[i].price * items[i].qty;", 24, 4);
+      check("debugger: a property chain under the pointer", member === null || member.expression === "price" || /price/.test(member.expression), member);
+      const value = await dbg.evaluateHover("items.length");
+      check("debugger: hover evaluates on the paused frame", value?.description === "2", value);
+      const lineEl = document.querySelector('#sources-code .code-line[data-line="4"] .code-text');
+      dbg.showPopover({ expression: "items", line: 4 }, await dbg.evaluateHover("items"), 100, 100); await wait(400);
+      check("debugger: the value popover", /items/.test(document.querySelector(".dbg-popover")?.textContent || "") && /Array\(2\)/.test(document.querySelector(".dbg-popover")?.textContent || ""), document.querySelector(".dbg-popover")?.textContent);
+      dbg.hidePopover();
+      check("debugger: Copy call stack", /^cartTotal \(.*cart\.js:4:\d+\) \[generated: .*bundle\.js:\d+:\d+\]\ncheckout \(/.test(dbg.callStackText()), dbg.callStackText().slice(0, 200));
+      const md = await dbg.pauseMarkdown();
+      check("debugger: Copy for AI", md.startsWith("## Paused in the debugger") && /Paused on breakpoint/.test(md) && /→ +4 \| +total \+=/.test(md) && /### Call stack/.test(md) && /`total` = 0/.test(md) && /`items` = Array\(2\)/.test(md), md.slice(0, 900));
+      const menu = dbg.onGutterMenu(6, 10, 10); ContextMenu.hide();
+      check("debugger: Continue to here and Never pause here in the gutter menu", menu.some((i) => i.label === "Continue to here") && menu.some((i) => i.label === "Never pause here"), menu.filter((i) => i !== "-").map((i) => i.label));
+      await dbg.toggle(cartURL, 4);
+      const continued = await dbg.continueToHere(cartURL, 6);
+      for (let i = 0; i < 30 && !(dbg.paused && dbg.frames[0] && dbg.frames[0].line === 6); i++) await wait(100);
+      check("debugger: Continue to here runs to the line", continued && dbg.paused && dbg.frames[0]?.line === 6, dbg.frames.map((f) => f.functionName + ":" + f.line));
+      await dbg.setIgnored(cartURL, true);
+      check("debugger: Add script to ignore list", dbg.ignoreList.includes(new URL("/bundle.js", DevTools.info.url).href) && dbg.isIgnoredURL(cartURL) && /bundle\.js/.test(document.querySelector("#dbg-ignore").textContent));
+      check("debugger: ignore-listed frames fold away in the call stack", dbg.frames.length >= 2 && document.querySelectorAll("#dbg-stack .dbg-frame").length < dbg.frames.length && /ignore-listed frame/.test(document.querySelector("#dbg-stack").textContent), document.querySelector("#dbg-stack").textContent);
+      const persisted = JSON.parse(await DevTools.rpc("Settings.get", { key: "ignoreList" }) || "[]");
+      await dbg.setIgnored(cartURL, false);
+      check("debugger: the ignore list is kept and can be emptied", persisted.length === 1 && dbg.ignoreList.length === 0);
+      await dbg.send("Debugger.resume");
+      for (let i = 0; i < 40 && dbg.paused; i++) await wait(100);
+      check("debugger: inline values go away on resume", !document.querySelector("#sources-code .inline-values") && !dbg.paused);
+      await dbg.neverPauseHere(cartURL, 4);
+      check("debugger: Never pause here is a breakpoint that never pauses", dbg.breakpoints.some((b) => b.url === cartURL && b.line === 4 && b.condition === "false") && !!document.querySelector('#sources-code .code-line.breakpoint.never[data-line="4"]') && /Never pause here/.test(document.querySelector("#dbg-breakpoints").textContent));
+      await dbg.send("Runtime.evaluate", { expression: "setTimeout(function () { checkout([{ price: 2, qty: 3 }]); }, 0); 1" });
+      await wait(1000);
+      check("debugger: …and it does not pause", !dbg.paused);
+      if (dbg.paused) { await dbg.send("Debugger.resume"); await wait(500); }
+      await dbg.toggle(cartURL, 4);
+    }
   }
 
   // ---- Disable JavaScript, Clear site data (last: they reload and wipe the fixture's state) ----
