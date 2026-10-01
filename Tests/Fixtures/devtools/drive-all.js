@@ -1124,7 +1124,7 @@ try {
     const net = DevTools.panels.network;
     DevTools.showPanel("network"); await wait(300);
     net.setFilter(""); net.setExplain(false);
-    out.fxSetup = await pageEval(`(async () => {
+    out.fxSetup = await pageEval(`await new Promise((resolve) => (async () => {
       const paths = ['/fx/page.html', '/fx/feed.xml', '/fx/logo.svg', '/fx/font.ttf', '/fx/blob.bin', '/fx/tone.wav', '/fx/events', '/fx/ndjson',
         '/fx/jsonp?callback=cb_123', '/fx/form', '/fx/style.css', '/fx/big.js', '/fx/cookies', '/fx/timing', '/fx/error', '/fx/redirect'];
       const statuses = [];
@@ -1132,7 +1132,7 @@ try {
       const fd = new FormData(); fd.append('title', 'Hello'); fd.append('file', new Blob(['file body'], { type: 'text/plain' }), 'a.txt');
       statuses.push((await fetch('/fx/upload', { method: 'POST', body: fd })).status);
       return statuses.join(',');
-    })()`);
+    })().then(resolve))`);
     await wait(1500);
     const reqs = () => Array.from(net.requests.values());
     // The request the page made (a Link: preload header can add another row for the same URL).
