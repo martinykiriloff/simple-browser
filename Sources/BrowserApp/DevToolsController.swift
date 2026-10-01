@@ -17,10 +17,12 @@ import InspectKit
 final class DevToolsController: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
 
     let view: WKWebView
-    private weak var page: WKWebView?
-    private let recorder: InspectorRecorder
-    private let tab: TabID
-    private let networkLog = NetworkRequestLog()
+    private(set) weak var page: WKWebView?
+    let recorder: InspectorRecorder
+    let tab: TabID
+    let networkLog = NetworkRequestLog()
+    /// State of the tools in `DevToolsController+Tools.swift`.
+    let tools = DevToolsToolState()
     private let isolatedWorld = WKContentWorld.world(name: InspectorAgent.isolatedWorldName)
     private var observation: UUID?
     private var isReady = false
@@ -30,9 +32,9 @@ final class DevToolsController: NSObject, WKScriptMessageHandler, WKNavigationDe
 
     /// WebKit Inspector Protocol access: the real debugger and resource
     /// contents. Nil-safe: everything else works without it.
-    private let protocolBridge: InspectorProtocolBridge
+    let protocolBridge: InspectorProtocolBridge
     /// `pending`, `attached`, or the reason it is unavailable.
-    private var protocolState = "pending"
+    private(set) var protocolState = "pending"
     /// While the page is paused its JavaScript cannot run, so agent calls
     /// would hang until resume. They fail fast instead.
     private var isPaused = false
@@ -108,6 +110,7 @@ final class DevToolsController: NSObject, WKScriptMessageHandler, WKNavigationDe
     func didHide() {
         let wasPaused = isPaused
         isPaused = false
+        toolsDidHide()
         Task {
             if protocolState == "attached" {
                 _ = try? await protocolBridge.send("Debugger.setBreakpointsActive", ["active": false])
@@ -120,6 +123,7 @@ final class DevToolsController: NSObject, WKScriptMessageHandler, WKNavigationDe
     }
 
     func didShow() {
+        toolsDidShow()
         guard protocolState == "attached" else { return }
         emit("Protocol.shown", [:])
     }
@@ -311,6 +315,9 @@ final class DevToolsController: NSObject, WKScriptMessageHandler, WKNavigationDe
             for cookie in try await cookies() { await store.deleteCookie(cookie) }
             return true
 
+        case _ where Self.toolMethods.contains(method):
+            return try await handleTool(method, params)
+
         // Features that only the inspector protocol has. Our tree's node ids
         // are the agent's, so each call first finds the protocol's id.
         case "DOM.getEventListeners":
@@ -379,8 +386,9 @@ final class DevToolsController: NSObject, WKScriptMessageHandler, WKNavigationDe
         default:
             break
         }
+        if method == "Network.requestIntercepted" { handleInterceptedRequest(params); return }
         if method.hasPrefix("Network.") { handleNetworkEvent(method, params); return }
-        guard method.hasPrefix("Debugger.") || method.hasPrefix("ScriptProfiler.") || method.hasPrefix("Timeline.") else { return }
+        guard ["Debugger.", "ScriptProfiler.", "Timeline.", "Heap.", "Memory.", "Animation."].contains(where: method.hasPrefix) else { return }
         emit("Protocol.event", ["method": method, "params": params])
     }
 
@@ -693,11 +701,24 @@ final class DevToolsController: NSObject, WKScriptMessageHandler, WKNavigationDe
 
     // MARK: - Agents
 
-    private func callIsolated(_ method: String, _ params: [String: Any]) async throws -> Any? {
-        try await call(global: "__sbAgent", world: isolatedWorld, method, params)
+    func callIsolated(_ method: String, _ params: [String: Any]) async throws -> Any? {
+        if Self.toolsAgentPrefixes.contains(where: method.hasPrefix) { try await loadToolsAgent() }
+        return try await call(global: "__sbAgent", world: isolatedWorld, method, params)
     }
 
-    private func callPage(_ method: String, _ params: [String: Any]) async throws -> Any? {
+    /// The tools agent is injected on first use, not at document start: pages
+    /// pay nothing for the audits, a11y, storage and animation tools until
+    /// someone opens them.
+    private func loadToolsAgent() async throws {
+        guard let page else { throw DevToolsError.noPage }
+        if isPaused { throw DevToolsError.pausedInDebugger }
+        let source = try InspectorAgent.onDemandSource(.tools)
+        _ = try await page.callAsyncJavaScript(
+            "if (window.__sbAgent && !window.__sbAgent.has(\"Tools.loaded\")) { \(source) }\nreturn true;",
+            arguments: [:], in: nil, contentWorld: isolatedWorld)
+    }
+
+    func callPage(_ method: String, _ params: [String: Any]) async throws -> Any? {
         try await call(global: "__sbInspector", world: .page, method, params)
     }
 
@@ -830,7 +851,7 @@ final class DevToolsController: NSObject, WKScriptMessageHandler, WKNavigationDe
     /// Fetches with the profile's cookies and the page's user agent, from the
     /// app rather than the page: no CORS, but also no guarantee the server
     /// returns what the page originally received.
-    private func fetchNatively(_ url: URL, method: String? = nil) async throws -> (String?, String?, Int) {
+    func fetchNatively(_ url: URL, method: String? = nil) async throws -> (String?, String?, Int) {
         var request = URLRequest(url: url)
         request.httpMethod = method == "POST" ? "GET" : (method ?? "GET")
         // Only this profile's cookies, set below. `URLSession.shared` keeps
@@ -929,7 +950,7 @@ final class DevToolsController: NSObject, WKScriptMessageHandler, WKNavigationDe
         send(["id": id, "error": error])
     }
 
-    private func emit(_ method: String, _ params: Any) {
+    func emit(_ method: String, _ params: Any) {
         guard isReady else { return }
         send(["method": method, "params": params])
     }
@@ -941,19 +962,19 @@ final class DevToolsController: NSObject, WKScriptMessageHandler, WKNavigationDe
         view.evaluateJavaScript("window.DevTools && DevTools.dispatch(\(json))") { _, _ in }
     }
 
-    private static func jsonObject<T: Encodable>(_ value: T) throws -> Any {
+    static func jsonObject<T: Encodable>(_ value: T) throws -> Any {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .millisecondsSince1970
         return try JSONSerialization.jsonObject(with: encoder.encode(value))
     }
 
-    private static func describe(_ error: any Error) -> String {
+    static func describe(_ error: any Error) -> String {
         let nsError = error as NSError
         if let message = nsError.userInfo["WKJavaScriptExceptionMessage"] as? String { return message }
         return error.localizedDescription
     }
 
-    private func copyToPasteboard(_ text: String) {
+    func copyToPasteboard(_ text: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
     }

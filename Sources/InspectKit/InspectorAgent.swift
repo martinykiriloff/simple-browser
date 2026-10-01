@@ -37,6 +37,20 @@ public enum InspectorAgent {
         }
     }
 
+    /// Isolated-world scripts the DevTools inject on first use rather than
+    /// at document start. They extend the DOM agent's dispatcher.
+    public enum OnDemandScript: String, Sendable {
+        /// Audits, accessibility, IndexedDB, Cache Storage, manifest, animations, overlays.
+        case tools = "tools-agent"
+    }
+
+    public static func onDemandSource(_ script: OnDemandScript) throws -> String {
+        guard let url = resourceBundle.url(forResource: script.rawValue, withExtension: "js") else {
+            throw LoadError.resourceMissing("\(script.rawValue).js")
+        }
+        return try String(contentsOf: url, encoding: .utf8)
+    }
+
     public enum LoadError: Error, Sendable {
         case resourceMissing(String)
     }

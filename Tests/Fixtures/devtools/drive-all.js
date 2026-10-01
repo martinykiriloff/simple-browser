@@ -394,6 +394,68 @@ try {
     }
   }
 
+  // ---- Network power tools: blocking, overrides, search, Copy for AI -------------------
+  {
+    const net = DevTools.panels.network;
+    DevTools.showPanel("network"); await wait(200);
+    const pageFetch = async (path) => (await DevTools.rpc("Console.evaluate", { expression: `await fetch('${path}').then(async (r) => r.status + ' ' + (r.headers.get('x-override') || '-') + ' ' + await r.text(), (e) => 'failed ' + e.message)` }))?.result?.description || "";
+    SBBlocking.patterns = [];
+    check("an unblocked request goes through", /^200 /.test(await pageFetch("/api/data.json?blockme=1")));
+    await SBBlocking.add("*/api/data.json?blockme*"); await wait(400);
+    out.blocked = await pageFetch("/api/data.json?blockme=2");
+    check("a blocking pattern blocks the request", /^failed/.test(out.blocked), out.blocked);
+    Drawer.show("blocking"); await wait(200);
+    check("the blocking pane lists the pattern", document.querySelector("#blocking-list").textContent.includes("*/api/data.json?blockme*"));
+    await SBBlocking.setEnabled(false); await wait(400);
+    check("unticking Enable lets requests through", /^200 /.test(await pageFetch("/api/data.json?blockme=3")));
+    await SBBlocking.setEnabled(true);
+    await SBBlocking.remove("*/api/data.json?blockme*"); await wait(400);
+    check("removing the pattern unblocks", /^200 /.test(await pageFetch("/api/data.json?blockme=4")));
+    check("no blocking patterns left in settings", (await DevTools.rpc("Settings.get", { key: "blockedPatterns" })) === "[]");
+    const dataReq = Array.from(net.requests.values()).find((r) => r.url.endsWith("/api/data.json"));
+    const labels = net.copyItems(dataReq).filter((i) => i !== "-").map((i) => i.label);
+    check("request menu offers blocking, overrides and Copy for AI", ["Block request URL", "Block request domain", "Override content…", "Override headers…", "Copy as Markdown (for AI)", "Copy all as HAR"].every((l) => labels.includes(l)), labels);
+    check("Block request domain blocks the host", net.blockDomainPattern(dataReq.url) === "127.0.0.1:8765");
+
+    if (SBDebugger.available) {
+      SBOverrides.list = [];                // start clean, whatever an earlier session saved
+      await SBOverrides.add({ url: "http://127.0.0.1:8765/api/override.json", status: 202, mimeType: "application/json", headersText: "X-Override: yes", body: '{"overridden":true}' });
+      out.override = await pageFetch("/api/override.json");
+      check("a local override answers the request", out.override === '202 yes {"overridden":true}', out.override);
+      await SBOverrides.add({ url: "http://127.0.0.1:8765/api/data.json?headers=*", status: 200, headersText: "X-Override: headers-only", keepBody: true });
+      out.override2 = await pageFetch("/api/data.json?headers=1");
+      check("a headers-only override keeps the real body", /^200 headers-only \{"ok": true/.test(out.override2), out.override2);
+      Drawer.show("overrides"); await wait(200);
+      check("the overrides pane lists both", document.querySelectorAll("#overrides-list .override-item").length === 2);
+      SBOverrides.list = []; await SBOverrides.apply();
+      check("without overrides the server answers again", /^404 /.test(await pageFetch("/api/override.json")));
+    }
+
+    const bodyHits = await SBNetSearch.run("items");
+    check("search finds response bodies", bodyHits.some((r) => r.url.includes("/api/data.json") && r.hits.some((x) => x.where === "Response")), bodyHits.map((r) => r.url));
+    const headerHits = await SBNetSearch.run("devtools-fixture");
+    check("search finds headers", headerHits.some((r) => r.hits.some((x) => x.where === "Response header")), headerHits.length);
+    Drawer.show("search"); await wait(200);
+    check("search results are listed", document.querySelectorAll("#netsearch-results .search-hit").length > 0);
+
+    const post = Array.from(net.requests.values()).find((r) => r.method === "POST");
+    out.markdown = post && net.asMarkdown(post);
+    check("Copy as Markdown has method, status, payload and response", out.markdown && out.markdown.startsWith("## POST 201 http://127.0.0.1:8765/api/post") && out.markdown.includes("### Request payload") && out.markdown.includes('"hello": "world"') && out.markdown.includes("created:"), out.markdown && out.markdown.slice(0, 300));
+    const summary = net.summaryMarkdown();
+    check("Copy all as Markdown is a table with failures", /\| # \| Method \| Status/.test(summary) && summary.includes("## Failed requests"), summary.slice(0, 200));
+    const har = JSON.parse(await DevTools.rpc("Network.getHAR"));
+    check("Copy all as HAR", har.log && har.log.entries.length >= 8, har.log && har.log.entries.length);
+
+    const cons = DevTools.panels.console;
+    const errItem = cons.entries.find((i) => i.entry.level === "error" && cons.plainText(i).includes("boom from console.error"));
+    out.consoleMarkdown = errItem && cons.entryMarkdown(errItem);
+    check("console Copy for AI has the message, location and stack", !!out.consoleMarkdown && out.consoleMarkdown.startsWith("**Console error**") && out.consoleMarkdown.includes("boom from console.error") && out.consoleMarkdown.includes("Stack:") && out.consoleMarkdown.includes("127.0.0.1:8765"), out.consoleMarkdown);
+    const errorsMd = cons.errorsMarkdown();
+    check("Copy all errors as Markdown", errorsMd.startsWith("# Console errors") && errorsMd.includes("unhandled rejection sample"), errorsMd.slice(0, 200));
+    check("console context menu", cons.contextItems(errItem).filter((i) => i !== "-").map((i) => i.label).slice(0, 2).join() === "Copy message,Copy for AI (Markdown)");
+    Drawer.hide();
+  }
+
   // ---- Performance -------------------------------------------------------------------
   DevTools.showPanel("performance"); await wait(400);
   out.perf = document.querySelector("#vitals").textContent;

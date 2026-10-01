@@ -32,6 +32,7 @@ let package = Package(
                 .copy("Resources/dom-agent.js"),
                 .copy("Resources/agent.js"),
                 .copy("Resources/page-hooks.js"),
+                .copy("Resources/tools-agent.js"),
             ],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),

@@ -85,6 +85,8 @@ const DevTools = window.DevTools = {
     // breakpoint can hit before Sources has ever been opened.
     if (window.SBDebugger) SBDebugger.init();
     if (window.SBCacheControl) SBCacheControl.start();
+    if (window.Drawer) Drawer.init();
+    if (window.SBNetworkTools) SBNetworkTools.start();
 
     let panel = "elements";
     try { panel = localStorage.getItem("devtools.panel") || panel; } catch (_) {}

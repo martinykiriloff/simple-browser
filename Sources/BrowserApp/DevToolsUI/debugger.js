@@ -193,6 +193,11 @@ const SBDebugger = window.SBDebugger = {
     this.frames = this.withoutAgentFrames(frames);
     document.body.classList.add("debugger-paused");
 
+    // A pause that began in blackboxed code (our own hooks) is reported as
+    // such by WebKit, with the real cause inside.
+    if (params.reason === "BlackboxedScript" && params.data && params.data.originalReason) {
+      params = Object.assign({}, params, { reason: params.data.originalReason, data: params.data.originalData || {} });
+    }
     const reasons = { Breakpoint: "Paused on breakpoint", DebuggerStatement: "Paused on debugger statement",
                       exception: "Paused on exception", PauseOnNextStatement: "Paused", assert: "Paused on assertion",
                       CSPViolation: "Paused on CSP violation", Microtask: "Paused on microtask", Timer: "Paused on timer",

@@ -172,6 +172,21 @@ final class ContentBlocker {
 
     // MARK: - Tabs
 
+    /// Rule lists that belong to a tab rather than to blocking, such as
+    /// DevTools' request blocking: they survive blocking being re-applied.
+    private static let pinned = NSMapTable<WKUserContentController, NSArray>.weakToStrongObjects()
+
+    static func pinnedLists(for controller: WKUserContentController) -> [WKContentRuleList] {
+        pinned.object(forKey: controller) as? [WKContentRuleList] ?? []
+    }
+
+    /// Replaces the tab's pinned lists, and installs them now.
+    static func setPinnedLists(_ lists: [WKContentRuleList], for controller: WKUserContentController) {
+        pinnedLists(for: controller).forEach(controller.remove)
+        if lists.isEmpty { pinned.removeObject(forKey: controller) } else { pinned.setObject(lists as NSArray, forKey: controller) }
+        lists.forEach(controller.add)
+    }
+
     /// Called for every tab as it is made, before its web view exists.
     func register(_ controller: WKUserContentController) {
         tabs.add(controller)
@@ -190,6 +205,7 @@ final class ContentBlocker {
 
     private func apply(to controller: WKUserContentController) {
         controller.removeAllContentRuleLists()
+        Self.pinnedLists(for: controller).forEach(controller.add)
         guard isOn, !suspended.contains(controller) else { return }
         ruleLists.forEach(controller.add)
     }

@@ -46,9 +46,13 @@
   let overlay = null;
   let inspectorSheet = null;
 
+  // Overlays the tools agent adds (FPS meter, audit highlights).
+  const owned = new Set();
+
   function isOurs(node) {
     if (!node) return false;
     if (overlay && (node === overlay || overlay.contains(node))) return true;
+    for (const el of owned) if (node === el || el.contains(node)) return true;
     if (inspectorSheet && node === inspectorSheet) return true;
     return false;
   }
@@ -675,8 +679,17 @@
     if (e.target && e.target.nodeType) post("inspect", { nodeId: nodeId(e.target) });
   }, true);
 
+  // The tools agent (tools-agent.js, injected on demand) adds its commands
+  // here, and shares the node registry so its node ids are the tree's.
+  const api = {
+    handle, nodeId, nodeFor, isOurs, describe, shortName, uniqueSelector,
+    has: (method) => Object.prototype.hasOwnProperty.call(handlers, method),
+    extend: (more) => { Object.assign(handlers, more); },
+    own: (el) => { owned.add(el); return el; },
+    disown: (el) => { owned.delete(el); },
+  };
   Object.defineProperty(window, "__sbAgent", {
-    value: { handle, nodeId, isOurs, describe },
+    value: Object.freeze(api),
     enumerable: false, configurable: false, writable: false,
   });
 })();

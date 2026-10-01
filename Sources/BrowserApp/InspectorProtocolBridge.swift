@@ -261,6 +261,11 @@ final class InspectorProtocolBridge: NSObject, WKScriptMessageHandler {
           // Profiles and timelines are only ever started by us; the frontend
           // did not ask for them and asserts when they turn up.
           if (inner.method.indexOf("ScriptProfiler.") === 0 || inner.method.indexOf("Timeline.") === 0) return true;
+          // Same for memory and animation tracking.
+          if (["Heap.tracking", "Memory.tracking", "Animation.tracking"].some(function (p) { return inner.method.indexOf(p) === 0; })) return true;
+          // Intercepted requests are answered by us; the frontend would
+          // continue them unchanged, racing our override.
+          if (inner.method === "Network.requestIntercepted" || inner.method === "Network.responseIntercepted") return true;
         }
         return false;
       }

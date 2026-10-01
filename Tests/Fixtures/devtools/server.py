@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import struct
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -60,7 +61,9 @@ def build_bundle():
 
 
 class Handler(BaseHTTPRequestHandler):
-    cacheable_hits = 0
+    # The app's HTTP cache outlives this process: start above anything a
+    # previous run could have left in it, so every real fetch counts higher.
+    cacheable_hits = int(time.time())
 
     def _send(self, code, body, ctype="text/plain", extra=None):
         self.send_response(code)

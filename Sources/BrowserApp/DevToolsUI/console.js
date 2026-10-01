@@ -34,6 +34,12 @@
       $("#console-preserve").addEventListener("change", (e) => { this.preserve = e.target.checked; });
       $("#console-timestamps").addEventListener("change", (e) => { this.timestamps = e.target.checked; this.messagesEl.classList.toggle("show-timestamps", this.timestamps); this.rerender(); });
       this.messagesEl.addEventListener("click", () => { if (!getSelection().toString()) this.prompt.focus(); });
+      this.messagesEl.addEventListener("contextmenu", (e) => {
+        const el = e.target.closest(".console-message");
+        const item = el && this.entries.find((i) => i.el === el);
+        e.preventDefault();
+        ContextMenu.show(e.clientX, e.clientY, this.contextItems(item));
+      });
 
       this.prompt.addEventListener("keydown", (e) => this.onPromptKey(e));
       this.prompt.addEventListener("input", () => { this.autoGrow(); this.requestCompletions(); });
@@ -211,6 +217,65 @@
       const items = this.entries.slice();
       this.clearView();
       for (const item of items) this.add(item, true);
+    },
+
+    // ---- Copy for AI -------------------------------------------------------------
+    contextItems(item) {
+      const copy = (text) => DevTools.rpc("Clipboard.write", { text }).catch(() => {});
+      const items = [];
+      if (item) {
+        items.push({ label: "Copy message", action: () => copy(this.plainText(item)) },
+                   { label: "Copy for AI (Markdown)", action: () => copy(this.entryMarkdown(item)) });
+      }
+      const errors = this.entries.filter((i) => i.entry.level === "error");
+      if (errors.length) items.push({ label: `Copy all errors as Markdown (${errors.length})`, action: () => copy(this.errorsMarkdown()) });
+      items.push({ label: "Copy console as Markdown", action: () => copy(this.consoleMarkdown()) });
+      items.push("-", { label: "Clear console", action: () => this.clear() });
+      return items;
+    },
+
+    plainText(item) {
+      const e = item.entry;
+      if (e.type === "table" || !e.args.length || e.isUncaught || e.type === "result") return e.message;
+      return e.args.map((a) => a.description).join(" ");
+    },
+
+    // Where an entry came from: the first stack frame, mapped to the original source.
+    entryLocation(item) {
+      if (typeof item.location === "string") return { url: item.location, line: 0, column: 0 };
+      const frame = item.location || (item.entry.stack || []).find((f) => f.url);
+      return frame ? this.originalPosition(frame) : null;
+    },
+
+    // One message as Markdown: level, text, source location and stack.
+    entryMarkdown(item) {
+      const e = item.entry;
+      const kind = { error: "Error", warn: "Warning", info: "Info", debug: "Verbose", log: "Log" }[e.level] || e.level;
+      const where = this.entryLocation(item);
+      const head = [`**Console ${kind.toLowerCase()}**`];
+      if (e.isUncaught) head.push("(uncaught)");
+      if (item.repeat > 1) head.push(`×${item.repeat}`);
+      if (where && where.url) head.push("at `" + where.url + (where.line ? ":" + where.line + (where.column ? ":" + where.column : "") : "") + "`");
+      const out = [head.join(" "), Markdown.fence(Markdown.truncate(this.plainText(item), 4000), "text")];
+      const stack = (e.stack || []).slice(0, 20);
+      if (stack.length) {
+        out.push("Stack:");
+        for (const frame of stack) {
+          const p = frame.url ? this.originalPosition(frame) : null;
+          out.push(`- \`${frame.functionName || "(anonymous)"}\`` + (p ? ` — ${p.url}:${p.line}:${p.column}` : ""));
+        }
+      }
+      return out.join("\n");
+    },
+
+    errorsMarkdown() {
+      const errors = this.entries.filter((i) => i.entry.level === "error");
+      return [`# Console errors — ${DevTools.info.url || ""}`, "", `${errors.length} error(s)`, "",
+        ...errors.map((item, i) => `## ${i + 1}.\n\n` + this.entryMarkdown(item))].join("\n");
+    },
+
+    consoleMarkdown() {
+      return [`# Console — ${DevTools.info.url || ""}`, "", ...this.entries.slice(-500).map((item) => this.entryMarkdown(item))].join("\n\n");
     },
 
     // ---- filtering ------------------------------------------------------------

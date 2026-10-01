@@ -298,12 +298,61 @@
   </section>
 </div>
 
+<!-- Drawer: Chrome's bottom drawer, for the tools that sit beside any panel -->
+<div id="drawer" hidden>
+  <div class="drawer-resizer" id="drawer-resizer"></div>
+  <div class="subtabs" id="drawer-tabs">
+    <span class="toolbar-spacer" id="drawer-tabs-end"></span>
+    <button class="icon-button" id="drawer-close" title="Close drawer">&#10005;</button>
+  </div>
+  <div id="drawer-body">
+    <section class="drawer-pane" id="drawer-blocking">
+      <div class="toolbar">
+        <label class="check"><input type="checkbox" id="blocking-enabled" checked> Enable network request blocking</label>
+        <span class="toolbar-spacer"></span>
+        <button class="icon-button" id="blocking-add" title="Add pattern">+</button>
+        <button class="icon-button" id="blocking-clear" title="Remove all patterns">&#128683;</button>
+      </div>
+      <div class="scroll" id="blocking-list"></div>
+      <div class="statusbar" id="blocking-status"></div>
+    </section>
+    <section class="drawer-pane" id="drawer-overrides">
+      <div class="toolbar">
+        <label class="check"><input type="checkbox" id="overrides-enabled" checked> Enable local overrides</label>
+        <span class="toolbar-spacer"></span>
+        <button class="icon-button" id="overrides-add" title="Add override">+</button>
+      </div>
+      <div class="split horizontal" id="overrides-split">
+        <div class="split-side" id="overrides-nav"><div class="scroll" id="overrides-list"></div></div>
+        <div class="split-divider" data-split="overrides-split"></div>
+        <div class="split-main"><div class="scroll" id="overrides-editor"></div></div>
+      </div>
+      <div class="statusbar" id="overrides-status"></div>
+    </section>
+    <section class="drawer-pane" id="drawer-search">
+      <div class="toolbar">
+        <input type="search" id="netsearch-input" placeholder="Search URLs, headers and response bodies">
+        <label class="check" title="Match case"><input type="checkbox" id="netsearch-case"> Aa</label>
+        <label class="check" title="Use regular expression"><input type="checkbox" id="netsearch-regex"> .*</label>
+        <span class="toolbar-spacer"></span>
+        <span class="muted" id="netsearch-count"></span>
+      </div>
+      <div class="scroll" id="netsearch-results"></div>
+    </section>
+  </div>
+</div>
+
 <div id="context-menu" hidden></div>
 <div id="device-menu" class="popup" hidden></div>
 <div id="more-menu" class="popup" hidden>
   <div class="popup-item" data-theme="system">Theme: System</div>
   <div class="popup-item" data-theme="light">Theme: Light</div>
   <div class="popup-item" data-theme="dark">Theme: Dark</div>
+  <div class="popup-sep"></div>
+  <div class="popup-label">More tools</div>
+  <div class="popup-item" data-drawer="blocking">Network request blocking</div>
+  <div class="popup-item" data-drawer="overrides">Local overrides</div>
+  <div class="popup-item" data-drawer="search">Search network</div>
   <div class="popup-sep"></div>
   <div class="popup-item" id="more-webkit">Open WebKit Web Inspector</div>
 </div>
@@ -321,6 +370,9 @@
 <script src="performance.js"></script>
 <script src="profiler.js"></script>
 <script src="application.js"></script>
+<script src="drawer.js"></script>
+<script src="markdown.js"></script>
+<script src="network-tools.js"></script>
 <script>DevTools.start();</script>
 </body>
 </html>
