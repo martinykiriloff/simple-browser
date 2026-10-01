@@ -74,6 +74,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         controller.extensionsPane.store = { [weak self] in self?.extensionStore }
         controller.extensionsPane.profile = { [weak self] in self?.frontmostBrowser?.profile ?? self?.currentProfile }
         controller.extensionsPane.running = { [weak self] profile in self?.extensions(for: profile) }
+        controller.developerPane.server = { [weak self] in self?.agentServer }
+        agentServer.onChange = { [weak pane = controller.developerPane] in pane?.refresh() }
         controller.willShow = { [weak self] in self?.syncSettingsProfile() }
         return controller
     }()
@@ -125,6 +127,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Settings → Extensions, from an extension's button.
     @objc func showExtensionsSettings(_ sender: Any?) { settingsWindow.show(.extensions) }
+
+    /// Settings → Developer, from Develop → AI Agent Server….
+    @objc func showDeveloperSettings(_ sender: Any?) { settingsWindow.show(.developer, sender: sender) }
+
+    /// MCP for AI agents. Made on first use; listens only once turned on.
+    private(set) lazy var agentServer: AgentServer = {
+        let toolbox = AgentToolbox(recorder: recorder)
+        toolbox.tabs = { [weak self] in self?.controllers ?? [] }
+        toolbox.openTab = { [weak self] beside, url, inFront in
+            guard let self else { return nil }
+            guard let beside = beside ?? self.frontmostBrowser else {
+                let window = self.makeWindow()
+                window.showWindow(nil)
+                if let url { window.load(url) } else { self.loadNewTabContent(in: window) }
+                return window
+            }
+            return self.newTab(beside: beside, url: url, inFront: inFront)
+        }
+        return AgentServer(toolbox: toolbox)
+    }()
 
     /// Pinned tabs and tab groups, for every window.
     let tabOrganizer = TabOrganizer()
@@ -277,6 +299,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if launch.url == nil { welcomeIfFirstLaunch() }
         startUpdater()
         memorySaver.start()
+        if let port = launch.mcpPort {
+            agentServer.portOverride = port
+            if let token = launch.mcpToken { agentServer.tokenOverride = .some(token) }
+        }
+        if AgentServer.isEnabled || launch.mcpPort != nil { agentServer.sync() }
         if let path = launch.dumpRecordingPath {
             startDumping(to: URL(fileURLWithPath: path))
         }
@@ -1324,6 +1351,10 @@ struct LaunchOptions {
     var performanceOutput: String?
     var performanceTabs = [20, 50]
     var performanceIdle: Double = 20
+    /// `--mcp-port <n>`: run the agent server on this port whatever Settings say.
+    var mcpPort: Int?
+    /// `--mcp-token <t>` sets the token; `--mcp-no-auth` turns it off. Only with `--mcp-port`.
+    var mcpToken: String??
 
     static func parse(_ arguments: [String]) -> LaunchOptions {
         var options = LaunchOptions()
@@ -1386,6 +1417,12 @@ struct LaunchOptions {
                 options.snapshotDirectory = iterator.next()
             case "--protocol-probe":
                 options.protocolProbeOutput = iterator.next()
+            case "--mcp-port":
+                options.mcpPort = iterator.next().flatMap(Int.init)
+            case "--mcp-token":
+                options.mcpToken = .some(iterator.next())
+            case "--mcp-no-auth":
+                options.mcpToken = .some(nil)
             case "--devtools-delay":
                 options.devToolsDelay = iterator.next().flatMap(Double.init) ?? 4
             case let value where value.hasPrefix("-"):

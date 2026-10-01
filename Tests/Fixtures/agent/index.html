@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Agent fixture</title>
+<style>
+  .card { padding: 12px; border: 1px solid #ccc; margin: 8px 0; }
+  #cta { color: white; background: rgb(10, 100, 200); font-size: 18px; }
+  .hidden { display: none; }
+  #cover { position: relative; }
+  #cover .shield { position: absolute; inset: 0; background: rgba(0,0,0,.2); }
+  .clickable { cursor: pointer; }
+</style></head>
+<body>
+<header><nav aria-label="Main"><a href="/page2.html">Second page</a> <a href="https://example.com/">External</a></nav></header>
+<main>
+  <h1>Agent fixture</h1>
+  <p>Hello <strong>agents</strong>. This paragraph has a <a href="/page2.html">link</a>.</p>
+  <form id="signup" onsubmit="event.preventDefault(); document.getElementById('result').textContent = 'Submitted ' + this.email.value + ' / ' + this.plan.value + ' / ' + this.terms.checked;">
+    <label for="email">Email</label> <input id="email" name="email" type="email" placeholder="you@example.com" required>
+    <label>Name <input name="name" id="name"></label>
+    <select name="plan" id="plan"><option value="free">Free</option><option value="pro">Pro</option></select>
+    <label><input type="checkbox" name="terms" id="terms"> I agree</label>
+    <textarea id="notes" aria-label="Notes"></textarea>
+    <input type="file" id="upload" aria-label="Attachment">
+    <button type="submit">Sign up</button>
+  </form>
+  <p id="result" role="status"></p>
+  <button id="cta" onclick="this.textContent='Clicked ' + (++window.clicks || (window.clicks = 1)); console.error('cta failure', {n: window.clicks}); fetch('/missing.json')">Call to action</button>
+  <button id="ask" onclick="document.getElementById('answer').textContent = confirm('Proceed?') ? 'yes' : 'no'">Ask</button>
+  <span id="answer"></span>
+  <div class="clickable" onclick="this.textContent='div clicked'">Fake button div</div>
+  <div id="keys" tabindex="0" aria-label="Key log" style="min-height:20px;border:1px solid #999"></div>
+  <div id="cover" class="card"><button id="covered">Covered button</button><div class="shield"></div></div>
+  <div class="hidden"><button>Invisible</button></div>
+  <ul><li>One</li><li>Two <ul><li>Two point one</li></ul></li></ul>
+  <table><tr><th>Name</th><th>Qty</th></tr><tr><td>Apple</td><td>3</td></tr></table>
+  <my-widget></my-widget>
+  <iframe src="/frame.html" title="Inner frame" width="300" height="80"></iframe>
+  <div style="height:1500px"></div>
+  <footer><button id="bottom">Bottom button</button></footer>
+</main>
+<script>
+  customElements.define('my-widget', class extends HTMLElement {
+    constructor() { super(); this.attachShadow({mode: 'open'}).innerHTML = '<button id="shadow-btn">Shadow button</button>'; }
+  });
+  document.getElementById('keys').addEventListener('keydown', e => { e.currentTarget.textContent += e.key + (e.isTrusted ? '' : '(untrusted)') + ' '; });
+  document.addEventListener('click', e => { window.lastClickTrusted = e.isTrusted; }, true);
+  localStorage.setItem('fixture', 'yes');
+  console.log('fixture loaded');
+  fetch('/data.json').then(r => r.json()).then(d => console.info('data', d.items.length));
+</script>
+</body></html>

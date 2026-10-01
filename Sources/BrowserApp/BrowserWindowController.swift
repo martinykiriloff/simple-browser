@@ -76,6 +76,10 @@ final class BrowserWindowController: NSWindowController,
 
     // Dev tools. The recorder starts with the tab, not with the panel.
     let tab = TabID()
+    /// The `alert()`, `confirm()` or `prompt()` showing, if any.
+    var pageDialog: PageDialog?
+    /// What the agent endpoint knows about this tab while an agent drives it.
+    var agentState: AgentTabState?
     private let recorder: InspectorRecorder
     private let bridge: InspectorBridge
     private(set) var devTools: DevToolsController?

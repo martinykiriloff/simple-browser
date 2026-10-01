@@ -34,7 +34,7 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate, N
     let memorySaverCheckbox = NSButton(checkboxWithTitle: "Put inactive tabs to sleep to save memory", target: nil, action: nil)
     let keepActiveField = NSTextField()
 
-    enum Pane: Int { case general, tabs, passwords, autofill, privacy, websites, extensions, advanced }
+    enum Pane: Int { case general, tabs, passwords, autofill, privacy, websites, extensions, developer, advanced }
     let shortcutsPane = ShortcutsSettingsPane()
 
     private let tabs = SettingsTabViewController()
@@ -43,6 +43,7 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate, N
     let websitesPane = WebsitesSettingsPane()
     let extensionsPane = ExtensionsSettingsPane()
     let autofillPane = AutofillSettingsPane()
+    let developerPane = DeveloperSettingsPane()
 
     init(passwords: PasswordService, blocker: ContentBlocker) {
         passwordsPane = PasswordsSettingsPane(service: passwords)
@@ -73,6 +74,7 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate, N
         tabs.addChild(privacyPane)
         tabs.addChild(websitesPane)
         tabs.addChild(extensionsPane)
+        tabs.addChild(developerPane)
         tabs.addChild(shortcutsPane)
         window.contentViewController = tabs
         // The pane chooser is AppKit's; VoiceOver needs a name for it.

@@ -39,7 +39,7 @@ extension FeatureSelfTest {
         settings.show(.advanced)
         let pane = settings.shortcutsPane
         check("polish: Settings has General, Tabs, Passwords, AutoFill, Privacy, Websites, Extensions and Advanced",
-              settings.paneTitles == ["General", "Tabs", "Passwords", "AutoFill", "Privacy", "Websites", "Extensions", "Advanced"], settings.paneTitles)
+              settings.paneTitles == ["General", "Tabs", "Passwords", "AutoFill", "Privacy", "Websites", "Extensions", "Developer", "Advanced"], settings.paneTitles)
         check("polish: Advanced lists every shortcut beside Safari's and Chrome's", pane.table.numberOfRows == pane.commands.count && pane.table.tableColumns.map(\.title) == ["Command", "SimpleBrowser", "Safari", "Chrome"])
         if let row = pane.commands.firstIndex(where: { $0.id == "reload:" }) {
             pane.table.selectRowIndexes([row], byExtendingSelection: false)
@@ -70,7 +70,7 @@ extension FeatureSelfTest {
 
         // Every control VoiceOver reads has a name, in every pane and the browser window.
         var unnamed: [String] = []
-        for pane in [SettingsWindowController.Pane.general, .tabs, .passwords, .autofill, .privacy, .websites, .extensions, .advanced] {
+        for pane in [SettingsWindowController.Pane.general, .tabs, .passwords, .autofill, .privacy, .websites, .extensions, .developer, .advanced] {
             settings.show(pane)
             await pause(0.1)
             if let view = settings.window?.contentView { unnamed += Accessibility.unnamedControls(in: view).map { "Settings \(pane): \($0)" } }

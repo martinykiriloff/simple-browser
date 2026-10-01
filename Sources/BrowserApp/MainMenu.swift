@@ -282,6 +282,9 @@ enum MainMenu {
         userAgentItem.submenu = userAgents
 
         menu.addItem(.separator())
+        menu.addItem(withTitle: "AI Agent Server…", action: #selector(AppDelegate.showDeveloperSettings(_:)), keyEquivalent: "")
+
+        menu.addItem(.separator())
         menu.addItem(withTitle: "WebKit Web Inspector",
                      action: #selector(BrowserWindowController.showWebKitInspector(_:)),
                      keyEquivalent: "")

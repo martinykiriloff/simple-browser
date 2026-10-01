@@ -691,6 +691,50 @@ closed nothing is attached, so pages run at full speed.
 scripts/test-devtools.sh      # runs every check below against the debug build
 ```
 
+### AI agents (MCP)
+
+The browser is also an MCP server, so Claude Code, Cursor, Codex or any
+other MCP client can drive it and see what DevTools sees. Turn it on in
+**Settings → Developer** (or Develop → AI Agent Server…), then use
+*Copy Claude Code Command*, which copies something like:
+
+```sh
+claude mcp add --transport http simplebrowser http://127.0.0.1:9333/mcp \
+  --header "Authorization: Bearer <token>"
+```
+
+*Copy JSON Config* gives the `mcpServers` entry Cursor, Windsurf and VS Code
+take. Clients that only speak stdio can reach it through
+`npx mcp-remote http://127.0.0.1:9333/mcp --header "Authorization: Bearer <token>"`.
+
+| Tools | What they do |
+|---|---|
+| `list_tabs` `new_tab` `select_tab` `close_tab` | Tabs across every window. Tools act on the tab the agent last opened or selected, else the front one; each takes a `tabId`. |
+| `navigate` `wait_for` | Go to a URL, back, forward, reload; wait for the load, text, a selector, network idle. Results give the final URL, title and HTTP status. |
+| `snapshot` | The page as an accessibility tree with a ref on every element, the way Playwright's MCP server does it: roles, names, states, values, link targets; open shadow roots and same-origin iframes included. 10–20 ms on a large page. |
+| `click` `hover` `fill` `fill_form` `type_text` `press_key` `select_option` `scroll` `drag` `upload_files` | Act by ref or CSS selector. Clicks and keys are real `NSEvent`s delivered to the web view (`isTrusted`), not DOM events, at the element's centre after scrolling it into view; a click on something covered is refused and names what covers it. Each result reports a navigation it started, new console errors and failed requests, and a dialog it opened. |
+| `handle_dialog` | `alert`, `confirm` and `prompt` now show as sheets (they were dropped before); an agent answers them with the same buttons. |
+| `console_messages` `network_requests` `network_request` | Everything the recorder has kept since the tab opened: console with stacks, requests with headers, bodies, timing. `afterId` returns only what is new. |
+| `evaluate` `inspect_element` `performance_metrics` `storage` | JavaScript in the page or the isolated world (a function receives the element); the box model, computed styles and matched CSS rules in cascade order; Core Web Vitals rated, navigation timing, slowest resources; cookies including HttpOnly, local and session storage. |
+| `screenshot` `get_page_content` | Viewport, element or full page as PNG or JPEG, optionally saved; the page as Markdown, text or HTML. |
+| `emulate` `devtools` | Device mode presets or a size; open DevTools for the person, with the element the agent means selected in Elements. |
+
+It listens on 127.0.0.1 only, and every request needs the bearer token
+unless the person turns that off; a request from a web page (an `Origin`
+header) is refused unless it carries the token and comes from this machine,
+and a `Host` that is not loopback is refused, so DNS rebinding goes nowhere.
+The first time an agent acts on a tab, the tab says so. Agents act in the
+person's profile, signed in as them, which is the point and the risk.
+
+Right and middle clicks are DOM events: a real right click opens a context
+menu that holds the main thread. HTML5 drag and drop needs a drag session
+`drag` cannot start; pointer-driven dragging works.
+
+```sh
+scripts/test-agent.sh         # AgentKit's checks, then an MCP client drives the real app through every tool
+.build/debug/SimpleBrowser --mcp-port 9399 --mcp-token secret   # or --mcp-no-auth; overrides Settings for this run
+```
+
 ### Testing the DevTools
 
 There is no XCTest on a Command Line Tools-only Mac, so the DevTools are
@@ -733,6 +777,7 @@ BrowserApp          AppKit shell, SwiftUI panels          (not yet written)
   ├─ ProfileKit     Data-store lifecycle, config factory   (not yet written)
   ├─ BlockKit       filter parse → partition → compile
   ├─ InspectKit     agent bridge, recorder, debug backends
+  ├─ AgentKit       MCP for AI agents: JSON-RPC, HTTP, access, tool catalog
   ├─ NetProbe       loopback proxy                         (not yet written)
   └─ Persistence    GRDB, one database per profile         (not yet written)
 ```

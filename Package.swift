@@ -10,14 +10,15 @@ let package = Package(
         .library(name: "BlockKit",   targets: ["BlockKit"]),
         .library(name: "InspectKit", targets: ["InspectKit"]),
         .library(name: "PasswordKit", targets: ["PasswordKit"]),
+        .library(name: "AgentKit", targets: ["AgentKit"]),
     ],
     targets: [
         // The only target allowed to import AppKit / WebKit. Everything it
         // needs from the model layer comes through BrowserKit and InspectKit.
         .executableTarget(
             name: "BrowserApp",
-            dependencies: ["BrowserKit", "InspectKit", "PasswordKit", "TranslateKit", "UpdateKit", "DataKit", "BlockKit"],
-            resources: [.copy("DevToolsUI"), .copy("PasswordAgent"), .copy("TranslateAgent"), .copy("PageMenuAgent"), .copy("ReaderAgent"), .copy("AutofillAgent"), .copy("MediaAgent"), .copy("AppIcon")],
+            dependencies: ["BrowserKit", "InspectKit", "PasswordKit", "TranslateKit", "UpdateKit", "DataKit", "BlockKit", "AgentKit"],
+            resources: [.copy("DevToolsUI"), .copy("AutomationAgent"), .copy("PasswordAgent"), .copy("TranslateAgent"), .copy("PageMenuAgent"), .copy("ReaderAgent"), .copy("AutofillAgent"), .copy("MediaAgent"), .copy("AppIcon")],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         // Pure Foundation. No WebKit, no AppKit. Buildable and testable on any
@@ -59,6 +60,14 @@ let package = Package(
         .executableTarget(
             name: "DataKitChecks",
             dependencies: ["DataKit"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        // The MCP endpoint for AI agents: JSON values, HTTP framing, the
+        // access policy, JSON-RPC dispatch and the tool catalog. Foundation only.
+        .target(name: "AgentKit", swiftSettings: [.swiftLanguageMode(.v6)]),
+        .executableTarget(
+            name: "AgentKitChecks",
+            dependencies: ["AgentKit"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         // Self-update: versions, GitHub's release answer, Ed25519 signatures.
