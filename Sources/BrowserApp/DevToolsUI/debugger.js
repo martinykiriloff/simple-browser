@@ -383,7 +383,10 @@ const SBDebugger = window.SBDebugger = {
       items.push({ label: existing.logMessage ? "Edit logpoint\u2026" : "Edit condition\u2026", action: () => this.edit(file.url, line, existing.logMessage ? "logMessage" : "condition") });
       items.push({ label: existing.enabled ? "Disable breakpoint" : "Enable breakpoint", action: () => this.setEnabled(existing, !existing.enabled) });
     }
+    if (!existing || existing.condition !== "false") items.push({ label: "Never pause here", action: () => this.neverPauseHere(file.url, line) });
+    if (this.paused) items.push("-", { label: "Continue to here", action: () => this.continueToHere(file.url, line) });   // debugger-tools.js
     ContextMenu.show(x, y, items);
+    return items;
   },
 
   // Chrome-style inline editor under the line.
@@ -474,7 +477,8 @@ const SBDebugger = window.SBDebugger = {
         h("div", { style: "min-width:0;flex:1" },
           h("div", { class: "where", onclick: () => DevTools.openSource(bp.url, bp.line, 0) }, fileName(bp.url) + ":" + bp.line),
           bp.logMessage ? h("div", { class: "snippet bp-log" }, "log: " + bp.logMessage) : null,
-          bp.condition ? h("div", { class: "snippet bp-cond" }, "if: " + bp.condition) : null,
+          bp.condition === "false" ? h("div", { class: "snippet bp-never" }, "Never pause here")
+            : bp.condition ? h("div", { class: "snippet bp-cond" }, "if: " + bp.condition) : null,
           snippet ? h("div", { class: "snippet" }, snippet) : null),
         h("span", { class: "remove", title: "Remove breakpoint", onclick: () => this.toggle(bp.url, bp.line) }, "✕")));
     }
@@ -483,14 +487,14 @@ const SBDebugger = window.SBDebugger = {
   // Marks breakpoints and the execution line in whatever file is showing.
   decorate(file) {
     const code = $("#sources-code");
-    for (const el of $$(".code-line.breakpoint, .code-line.exec", code)) el.classList.remove("breakpoint", "disabled", "unresolved", "conditional", "logpoint", "exec");
+    for (const el of $$(".code-line.breakpoint, .code-line.exec", code)) el.classList.remove("breakpoint", "disabled", "unresolved", "conditional", "logpoint", "never", "exec");
     if (!file || file.pretty) return;
     for (const bp of this.breakpoints) {
       if (bp.url !== file.url) continue;
       const el = code.querySelector(`.code-line[data-line="${bp.line}"]`);
       if (!el) continue;
       el.classList.add("breakpoint");
-      if (bp.logMessage) el.classList.add("logpoint"); else if (bp.condition) el.classList.add("conditional");
+      if (bp.logMessage) el.classList.add("logpoint"); else if (bp.condition === "false") el.classList.add("never"); else if (bp.condition) el.classList.add("conditional");
       if (!bp.enabled) el.classList.add("disabled");
       else if (this.available && !bp.resolved) el.classList.add("unresolved");
     }
@@ -511,11 +515,23 @@ const SBDebugger = window.SBDebugger = {
   renderStack() {
     const list = $("#dbg-stack");
     list.textContent = "";
+    let hidden = 0;
     this.frames.forEach((frame, index) => {
-      list.appendChild(h("div", { class: "dbg-frame" + (index === this.selectedFrame ? " selected" : ""), onclick: () => this.selectFrame(index), title: this.fileURL(frame) + ":" + frame.line },
+      // Frames in ignore-listed scripts (debugger-tools.js) fold away, as in Chrome.
+      const ignored = this.isIgnored && this.isIgnored(frame);
+      if (ignored && !this.showIgnoredFrames && index !== this.selectedFrame) { hidden++; return; }
+      const row = h("div", { class: "dbg-frame" + (index === this.selectedFrame ? " selected" : "") + (ignored ? " ignored" : ""), tabindex: "0", role: "button",
+          onclick: () => this.selectFrame(index), title: this.fileURL(frame) + ":" + frame.line },
         h("span", { class: "fn" }, frame.functionName),
-        h("span", { class: "loc" }, (frame.url ? fileName(frame.url) : "(program)") + ":" + frame.line)));
+        h("span", { class: "loc" }, (frame.url ? fileName(frame.url) : "(program)") + ":" + frame.line));
+      row.addEventListener("keydown", (e) => { if (e.key === "Enter") this.selectFrame(index); });
+      row.__frame = frame;
+      list.appendChild(row);
     });
+    if (hidden) {
+      list.appendChild(h("div", { class: "dbg-empty link", role: "button", tabindex: "0", onclick: () => { this.showIgnoredFrames = true; this.renderStack(); } },
+        `Show ${hidden} ignore-listed frame${hidden === 1 ? "" : "s"}`));
+    }
     if (!this.frames.length) list.appendChild(h("div", { class: "dbg-empty" }, "Not paused"));
   },
 
@@ -560,11 +576,20 @@ const SBDebugger = window.SBDebugger = {
     if (o.preview) {
       if (o.subtype === "array" && o.preview.size != null) description = "Array(" + o.preview.size + ")";
       out.preview = { overflow: !!o.preview.overflow,
-                      properties: (o.preview.properties || []).map((p) => ({ name: p.name, type: p.type, subtype: p.subtype, value: p.type === "string" ? JSON.stringify(p.value) : p.value })) };
+                      properties: (o.preview.properties || []).map((p) => ({ name: p.name, type: p.type, subtype: p.subtype, value: p.type === "string" ? JSON.stringify(p.value) : p.value != null ? p.value : this.nestedPreview(p) })) };
     }
     if (o.subtype === "null") description = "null";
     out.description = description == null ? (o.type === "undefined" ? "undefined" : "") : description;
     return out;
+  },
+
+  // WebKit gives a nested object in a preview only as its own preview: `{…}`, `Array(2)`, `Map(1)`.
+  nestedPreview(p) {
+    const d = (p.valuePreview && p.valuePreview.description) || "";
+    if (p.subtype === "array" && p.valuePreview && p.valuePreview.size != null) return "Array(" + p.valuePreview.size + ")";
+    if (p.type === "function") return "ƒ";
+    if (p.type === "object" && (!d || d === "Object")) return "{…}";
+    return d;
   },
 
   // ---- watches ---------------------------------------------------------------------------------------

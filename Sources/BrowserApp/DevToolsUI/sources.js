@@ -40,6 +40,7 @@
       DevTools.on("DOM.documentUpdated", () => {
         // Keep open tabs' entries so a reload does not close what you are reading.
         for (const [url, file] of Array.from(this.files)) {
+          if (file.type === "snippet") continue;                    // snippets belong to DevTools, not the page
           if (this.tabs.includes(url)) { file.content = null; file.prettyContent = null; } else this.files.delete(url);
         }
         this.refresh();

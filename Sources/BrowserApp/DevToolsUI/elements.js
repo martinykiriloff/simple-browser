@@ -31,6 +31,8 @@
     computed: null,
     disabled: new Map(),
     sidebarTab: "styles",
+    COLOR_RE,
+    INHERITED,
 
     init() {
       this.tree = $("#dom-tree");
@@ -401,12 +403,12 @@
         onCommit: async (text) => {
           const t = text.trim();
           try {
-            if (!t) await DevTools.rpc("DOM.removeAttribute", { nodeId: id, name });
+            if (!t) await this.mutate("DOM.removeAttribute", { nodeId: id, name });
             else {
               const m = t.match(/^([^\s=]+)(?:=(?:"([^"]*)"|'([^']*)'|(\S*)))?$/);
               if (!m) throw new Error("Could not parse attribute");
-              if (m[1] !== name) await DevTools.rpc("DOM.removeAttribute", { nodeId: id, name });
-              await DevTools.rpc("DOM.setAttributeValue", { nodeId: id, name: m[1], value: m[2] ?? m[3] ?? m[4] ?? "" });
+              if (m[1] !== name) await this.mutate("DOM.removeAttribute", { nodeId: id, name });
+              await this.mutate("DOM.setAttributeValue", { nodeId: id, name: m[1], value: m[2] ?? m[3] ?? m[4] ?? "" });
             }
           } catch (err) { this.notify(err.message); }
           this.refreshNode(id);
@@ -428,7 +430,7 @@
       inlineEdit(editor, {
         initial: parts.join(" "),
         onCommit: async (text) => {
-          try { await DevTools.rpc("DOM.setAttributesAsText", { nodeId: id, text }); }
+          try { await this.mutate("DOM.setAttributesAsText", { nodeId: id, text }); }
           catch (err) { this.notify(err.message); }
           this.refreshNode(id);
         },
@@ -442,7 +444,7 @@
       inlineEdit(el, {
         initial: current, multiline: true,
         onCommit: async (text) => {
-          try { await DevTools.rpc("DOM.setNodeValue", { nodeId: textId, value: text }); }
+          try { await this.mutate("DOM.setNodeValue", { nodeId: textId, value: text }); }
           catch (err) { this.notify(err.message); }
           this.refreshNode(inline ? this.textParents.get(textId) : textId);
         },
@@ -468,7 +470,7 @@
         const parentLi = li.parentElement.closest("li.node");
         const parentId = parentLi ? +parentLi.dataset.nodeId : null;
         if (commit && area.value !== html) {
-          try { await DevTools.rpc("DOM.setOuterHTML", { nodeId: id, outerHTML: area.value }); }
+          try { await this.mutate("DOM.replaceWithHTML", { nodeId: id, outerHTML: area.value }); }
           catch (err) { this.notify(err.message); }
         }
         if (parentId != null) { this.refreshNode(parentId, true); } else { this.loadDocument(); }
@@ -485,7 +487,7 @@
       const li = this.elements.get(id);
       const parentLi = li && li.parentElement.closest("li.node");
       const next = li && (li.nextElementSibling || li.previousElementSibling || parentLi);
-      try { await DevTools.rpc("DOM.removeNode", { nodeId: id }); } catch (err) { this.notify(err.message); return; }
+      try { await this.mutate("DOM.removeNode", { nodeId: id }); } catch (err) { this.notify(err.message); return; }
       if (parentLi) this.refreshNode(+parentLi.dataset.nodeId, true);
       if (next) this.select(+next.dataset.nodeId);
     },
@@ -546,7 +548,7 @@
         case "Backspace": case "Delete":
           e.preventDefault(); this.deleteNode(id); break;
         case "h": case "H":
-          if (!meta) { e.preventDefault(); DevTools.rpc("DOM.toggleHidden", { nodeId: id }).catch(() => {}); }
+          if (!meta) { e.preventDefault(); this.mutate("DOM.toggleHidden", { nodeId: id }).catch(() => {}); }
           break;
         case "Enter":
           e.preventDefault();
@@ -574,10 +576,9 @@
         items.push({ label: "Add attribute", action: () => this.editAttributesAsText(id, line.classList.contains("node-line") ? line : this.elements.get(id).querySelector(":scope > .node-line")) });
         items.push({ label: "Edit as HTML", action: () => this.editAsHTML(id) });
         items.push("-");
-        items.push({ label: "Copy outerHTML", action: () => this.copyOuterHTML(id) });
-        items.push({ label: "Copy selector", action: () => this.copySelector(id) });
-        items.push("-");
-        items.push({ label: "Hide element", action: () => DevTools.rpc("DOM.toggleHidden", { nodeId: id }) });
+        items.push(...this.copyItems(id), "-");                                // elements-tools.js
+        items.push({ label: "Store as global variable", action: () => this.storeAsGlobal(id) });
+        items.push({ label: "Hide element", action: () => this.mutate("DOM.toggleHidden", { nodeId: id }).catch(() => {}) });
         items.push({ label: "Scroll into view", action: () => DevTools.rpc("DOM.scrollIntoView", { nodeId: id }) });
         items.push({ label: "Focus", action: () => DevTools.rpc("DOM.focus", { nodeId: id }) });
         if (window.SBScreenshots) items.push({ label: "Capture node screenshot", action: () => SBScreenshots.capture("node", id) });
@@ -858,7 +859,7 @@
 
     async applyEdits(section, nodeId, edits) {
       const params = section.kind === "inline" ? { nodeId, edits } : { styleId: section.styleId, edits };
-      try { await DevTools.rpc("CSS.updateStyle", params); }
+      try { await this.mutate("CSS.updateStyle", params); }
       catch (err) { this.notify(err.message); }
       this.loadStyles(this.selectedId);
     },

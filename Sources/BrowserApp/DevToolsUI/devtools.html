@@ -68,17 +68,24 @@
             <input type="search" id="styles-filter" placeholder="Filter">
             <span class="toolbar-spacer"></span>
             <button class="text-button" id="styles-hov" title="Toggle element state">:hov</button>
+            <button class="text-button" id="styles-cls" title="Element classes" aria-expanded="false">.cls</button>
             <button class="icon-button" id="styles-add-rule" title="New Style Rule">+</button>
           </div>
           <div class="hov-pane" id="styles-hov-pane" hidden>
             <div class="hov-title">Force element state</div>
             <div class="hov-grid" id="styles-hov-grid"></div>
           </div>
+          <div class="hov-pane" id="styles-cls-pane" hidden>
+            <input type="text" id="styles-cls-input" spellcheck="false" placeholder="Add new class" aria-label="Add new class">
+            <div class="cls-list" id="styles-cls-list"></div>
+          </div>
           <div class="scroll" id="styles-list"></div>
         </div>
         <div class="subpanel" id="subpanel-computed">
           <div class="toolbar">
             <input type="search" id="computed-filter" placeholder="Filter">
+            <label class="check" title="Show every property, including ones no rule sets"><input type="checkbox" id="computed-show-all"> Show all</label>
+            <label class="check" title="Group properties by category"><input type="checkbox" id="computed-group"> Group</label>
           </div>
           <div class="scroll" id="computed-list"></div>
         </div>
@@ -103,6 +110,7 @@
   <!-- Console -->
   <section class="panel" id="panel-console">
     <div class="toolbar">
+      <button class="icon-button" id="console-sidebar-toggle" title="Show console sidebar" aria-pressed="false"><svg viewBox="0 0 20 20" width="16" height="16"><path fill="currentColor" d="M3 4h14v12H3V4zm1.5 1.5v9H8v-9H4.5zm5 0v9h6v-9h-6z"/></svg></button>
       <button class="icon-button" id="console-clear" title="Clear console (⌘K)">&#128683;</button>
       <button class="icon-button" id="console-live-add" title="Create live expression"><svg viewBox="0 0 20 20" width="16" height="16"><path fill="currentColor" d="M10 5c4 0 7 3.2 8 5-1 1.8-4 5-8 5s-7-3.2-8-5c1-1.8 4-5 8-5zm0 1.6c-2.8 0-5 2-6.1 3.4 1.1 1.4 3.3 3.4 6.1 3.4s5-2 6.1-3.4C15 8.6 12.8 6.6 10 6.6zM10 7.5a2.5 2.5 0 1 1 0 5 2.5 2.5 0 0 1 0-5z"/></svg></button>
       <input type="search" id="console-filter" placeholder="Filter">
@@ -117,13 +125,26 @@
       <label class="check"><input type="checkbox" id="console-timestamps"> Timestamps</label>
       <span class="toolbar-spacer"></span>
       <span class="muted" id="console-status"></span>
+      <button class="icon-button" id="console-save" title="Save console as…"><svg viewBox="0 0 20 20" width="16" height="16"><path fill="currentColor" d="M9.2 3h1.6v8.1l2.7-2.7 1.1 1.1-4.6 4.6-4.6-4.6 1.1-1.1 2.7 2.7V3zM4 15h12v1.6H4V15z"/></svg></button>
+      <button class="icon-button" id="console-settings-toggle" title="Console settings"><svg viewBox="0 0 20 20" width="16" height="16"><path fill="currentColor" d="M8.6 2h2.8l.4 2.2c.5.2 1 .5 1.4.8l2.1-.8 1.4 2.4-1.7 1.5c.1.5.1 1.1 0 1.6l1.7 1.5-1.4 2.4-2.1-.8c-.4.3-.9.6-1.4.8L11.4 18H8.6l-.4-2.2c-.5-.2-1-.5-1.4-.8l-2.1.8-1.4-2.4 1.7-1.5a4.7 4.7 0 0 1 0-1.6L3.3 7.4l1.4-2.4 2.1.8c.4-.3.9-.6 1.4-.8L8.6 2zM10 7.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z"/></svg></button>
     </div>
-    <div id="console-live" hidden></div>
-    <div class="scroll" id="console-messages"></div>
-    <div id="console-prompt-row">
-      <span class="prompt-chevron">&gt;</span>
-      <textarea id="console-prompt" rows="1" spellcheck="false" placeholder=""></textarea>
-      <div id="console-completions" hidden></div>
+    <div class="toolbar console-settings" id="console-settings" hidden>
+      <label class="check" title="Hide network messages"><input type="checkbox" data-setting="hideNetwork"> Hide network</label>
+      <label class="check" title="Log every finished fetch and XMLHttpRequest"><input type="checkbox" data-setting="logXHR"> Log XMLHttpRequests</label>
+      <label class="check" title="Collapse consecutive messages from the same line"><input type="checkbox" data-setting="groupSimilar"> Group similar</label>
+      <label class="check" title="Preview the result of side-effect-free expressions while typing"><input type="checkbox" data-setting="eager"> Eager evaluation</label>
+    </div>
+    <div id="console-main">
+      <div id="console-sidebar" role="tree" aria-label="Console message categories" hidden></div>
+      <div id="console-column">
+        <div id="console-live" hidden></div>
+        <div class="scroll" id="console-messages" role="log"></div>
+        <div id="console-prompt-row">
+          <span class="prompt-chevron">&gt;</span>
+          <textarea id="console-prompt" rows="1" spellcheck="false" placeholder=""></textarea>
+          <div id="console-completions" hidden></div>
+        </div>
+      </div>
     </div>
   </section>
 
@@ -131,8 +152,18 @@
   <section class="panel" id="panel-sources">
     <div class="split horizontal" id="sources-split">
       <div class="split-side sources-nav" id="sources-nav">
-        <div class="toolbar"><input type="search" id="sources-filter" placeholder="Filter files"></div>
-        <div class="scroll" id="sources-tree"></div>
+        <div class="subtabs" id="sources-nav-tabs" role="tablist">
+          <button class="subtab active" data-nav="page" role="tab">Page</button>
+          <button class="subtab" data-nav="snippets" role="tab">Snippets</button>
+        </div>
+        <div class="sources-nav-pane" id="sources-nav-page">
+          <div class="toolbar"><input type="search" id="sources-filter" placeholder="Filter files"></div>
+          <div class="scroll" id="sources-tree"></div>
+        </div>
+        <div class="sources-nav-pane" id="sources-nav-snippets" hidden>
+          <div class="toolbar"><button class="text-button" id="snippet-new" title="New snippet">+ New snippet</button></div>
+          <div class="scroll" id="snippet-list" role="listbox" aria-label="Snippets"></div>
+        </div>
       </div>
       <div class="split-divider" data-split="sources-split"></div>
       <div class="split-main sources-row" id="sources-main">
@@ -148,7 +179,9 @@
         <div class="scroll code-container" id="sources-code"><div class="empty-state">Select a file from the navigator, or click a link in the Console or Network panel.</div></div>
         <div class="statusbar" id="sources-status">
           <button class="icon-button" id="sources-pretty" title="Pretty print">{ }</button>
+          <button class="text-button" id="snippet-run" title="Run snippet (⌘↩)" hidden>▶ Run</button>
           <span id="sources-position"></span>
+          <span class="muted snippet-result" id="snippet-result"></span>
           <span class="toolbar-spacer"></span>
           <span class="muted" id="debugger-note">Click a line number to set a breakpoint.</span>
         </div>
@@ -184,6 +217,10 @@
           <div class="dbg-section collapsed" id="dbg-section-events">
             <div class="dbg-head">Event Listener Breakpoints</div>
             <div class="dbg-body" id="dbg-events"></div>
+          </div>
+          <div class="dbg-section collapsed" id="dbg-section-ignore">
+            <div class="dbg-head">Ignore List</div>
+            <div class="dbg-body" id="dbg-ignore"><div class="dbg-empty">No ignored scripts</div></div>
           </div>
           <div class="dbg-section" id="dbg-section-scope">
             <div class="dbg-head">Scope</div>
@@ -418,6 +455,16 @@
     <section class="drawer-pane" id="drawer-rendering">
       <div class="scroll" id="rendering-body"></div>
     </section>
+    <section class="drawer-pane" id="drawer-source-search">
+      <div class="toolbar">
+        <input type="search" id="srcsearch-input" placeholder="Search all sources (Enter)" aria-label="Search all sources">
+        <label class="check" title="Match case"><input type="checkbox" id="srcsearch-case"> Aa</label>
+        <label class="check" title="Use regular expression"><input type="checkbox" id="srcsearch-regex"> .*</label>
+        <span class="toolbar-spacer"></span>
+        <span class="muted" id="srcsearch-count"></span>
+      </div>
+      <div class="scroll" id="srcsearch-results" role="tree" aria-label="Search results"></div>
+    </section>
   </div>
 </div>
 
@@ -450,14 +497,22 @@
 <script src="core.js"></script>
 <script src="elements.js"></script>
 <script src="console.js"></script>
+<script src="code-input.js"></script>
+<script src="console-values.js"></script>
+<script src="console-prompt.js"></script>
 <script src="network.js"></script>
 <script src="highlight.js"></script>
 <script src="sourcemaps.js"></script>
 <script src="sources.js"></script>
+<script src="sources-tools.js"></script>
 <script src="debugger.js"></script>
 <script src="breakpoints.js"></script>
+<script src="debugger-tools.js"></script>
 <script src="elements-extras.js"></script>
 <script src="elements-a11y.js"></script>
+<script src="color-picker.js"></script>
+<script src="elements-tools.js"></script>
+<script src="elements-styles.js"></script>
 <script src="performance.js"></script>
 <script src="profiler.js"></script>
 <script src="application.js"></script>

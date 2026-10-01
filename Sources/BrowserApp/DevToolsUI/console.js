@@ -1,8 +1,22 @@
-// SimpleBrowser DevTools — Console panel.
+// SimpleBrowser DevTools — Console panel: messages, filtering, the sidebar,
+// settings and message actions. The prompt (editor, history, autocomplete,
+// eager evaluation) is in console-prompt.js; value rendering in
+// console-values.js.
 "use strict";
 
 (function () {
   const URL_RE = /\bhttps?:\/\/[^\s"'<>)]+/g;
+  const LEVEL_NAMES = { error: "Error", warn: "Warning", info: "Info", debug: "Verbose", log: "Log", trace: "Info" };
+  // The sidebar's categories, as in Chrome.
+  const CATEGORIES = [
+    ["all", "messages", "console-side-all"],
+    ["user", "user messages", "console-side-user"],
+    ["error", "errors", "console-side-error"],
+    ["warn", "warnings", "console-side-warn"],
+    ["info", "info", "console-side-info"],
+    ["debug", "verbose", "console-side-debug"],
+  ];
+  const DEFAULT_SETTINGS = { sidebar: false, groupSimilar: true, hideNetwork: false, logXHR: false, eager: true, timestamps: false, preserve: false };
 
   const panel = {
     initialized: false,
@@ -15,35 +29,41 @@
     timestamps: false,
     groupStack: [],
     reportedFailures: new Set(),
-    history: [],
-    historyIndex: 0,
-    draft: "",
+    loggedXHR: new Set(),
     counts: { errors: 0, warnings: 0 },
-    completions: [],
-    completionIndex: -1,
+    settings: Object.assign({}, DEFAULT_SETTINGS),
+    side: { category: "all", url: null },
+    sideCounts: null,
+    lastTop: null,
+    pendingLocal: [],
 
     init() {
       this.messagesEl = $("#console-messages");
       this.prompt = $("#console-prompt");
-      try { this.history = JSON.parse(localStorage.getItem("devtools.console.history") || "[]"); } catch (_) {}
-      this.historyIndex = this.history.length;
+      this.resetSideCounts();
 
       $("#console-clear").addEventListener("click", () => this.clear());
       this.loadLive();
       $("#console-filter").addEventListener("input", debounce(() => { this.filterText = $("#console-filter").value.toLowerCase(); this.applyFilter(); }, 100));
       $("#console-levels").addEventListener("change", () => { this.level = $("#console-levels").value; this.applyFilter(); });
-      $("#console-preserve").addEventListener("change", (e) => { this.preserve = e.target.checked; });
-      $("#console-timestamps").addEventListener("change", (e) => { this.timestamps = e.target.checked; this.messagesEl.classList.toggle("show-timestamps", this.timestamps); this.rerender(); });
-      this.messagesEl.addEventListener("click", () => { if (!getSelection().toString()) this.prompt.focus(); });
+      $("#console-preserve").addEventListener("change", (e) => { this.preserve = e.target.checked; this.setSetting("preserve", this.preserve); });
+      $("#console-timestamps").addEventListener("change", (e) => { this.setTimestamps(e.target.checked); this.setSetting("timestamps", this.timestamps); });
+      $("#console-sidebar-toggle").addEventListener("click", () => this.setSetting("sidebar", !this.settings.sidebar));
+      $("#console-settings-toggle").addEventListener("click", () => {
+        $("#console-settings").hidden = !$("#console-settings").hidden;
+        $("#console-settings-toggle").classList.toggle("active", !$("#console-settings").hidden);
+      });
+      for (const box of $$("#console-settings input[data-setting]")) {
+        box.addEventListener("change", () => this.setSetting(box.dataset.setting, box.checked));
+      }
+      $("#console-save").addEventListener("click", () => this.saveAs());
+      this.messagesEl.addEventListener("click", (e) => { if (!getSelection().toString() && !e.target.closest(".obj, .link, .v-node, .console-similar-badge")) this.prompt.focus(); });
       this.messagesEl.addEventListener("contextmenu", (e) => {
         const el = e.target.closest(".console-message");
         const item = el && this.entries.find((i) => i.el === el);
         e.preventDefault();
-        ContextMenu.show(e.clientX, e.clientY, this.contextItems(item));
+        ContextMenu.show(e.clientX, e.clientY, this.contextItems(item, e.target));
       });
-
-      this.prompt.addEventListener("keydown", (e) => this.onPromptKey(e));
-      this.prompt.addEventListener("input", () => { this.autoGrow(); this.requestCompletions(); });
       document.addEventListener("keydown", (e) => {
         if ((e.metaKey || e.ctrlKey) && e.key === "k" && DevTools.activePanel === "console") { e.preventDefault(); this.clear(); }
       });
@@ -52,18 +72,54 @@
       DevTools.on("Page.navigated", (p) => {
         if (p.phase === "started") {
           this.reportedFailures.clear();
+          this.loggedXHR.clear();
           if (!this.preserve) this.clearView();
         }
         if (p.phase === "committed") this.addLocal("info", "Navigated to " + p.url, { type: "navigation" });
       });
-      DevTools.on("Network.requestAdded", ({ request }) => this.reportFailure(request));
-      DevTools.on("Network.requestUpdated", ({ request }) => this.reportFailure(request));
+      DevTools.on("Network.requestAdded", ({ request }) => { this.reportFailure(request); this.logXHR(request); });
+      DevTools.on("Network.requestUpdated", ({ request }) => { this.reportFailure(request); this.logXHR(request); });
       DevTools.on("Recorder.cleared", () => this.clearView());
-      this.load();
+      if (this.initPrompt) this.initPrompt();                     // console-prompt.js
+      this.loadSettings().then(() => this.load());
     },
 
     show() { this.prompt.focus(); this.scrollToBottom(); this.startLive(); },
     hide() { this.stopLive(); },
+
+    // ---- settings ---------------------------------------------------------------
+    // Kept by the app (the DevTools web view's own storage does not outlive it).
+    async loadSettings() {
+      try {
+        const saved = await DevTools.rpc("Settings.get", { key: "consoleSettings" });
+        if (saved) Object.assign(this.settings, JSON.parse(saved));
+      } catch (_) {}
+      this.applySettings();
+    },
+    setSetting(name, value) {
+      this.settings[name] = value;
+      DevTools.rpc("Settings.set", { key: "consoleSettings", value: JSON.stringify(this.settings) }).catch(() => {});
+      this.applySettings();
+      if (name === "groupSimilar" || name === "hideNetwork") this.rerender();
+    },
+    applySettings() {
+      const s = this.settings;
+      for (const box of $$("#console-settings input[data-setting]")) box.checked = !!s[box.dataset.setting];
+      $("#console-sidebar").hidden = !s.sidebar;
+      $("#console-sidebar-toggle").classList.toggle("active", !!s.sidebar);
+      $("#console-sidebar-toggle").setAttribute("aria-pressed", s.sidebar ? "true" : "false");
+      this.preserve = !!s.preserve;
+      $("#console-preserve").checked = this.preserve;
+      if (!!s.timestamps !== this.timestamps) this.setTimestamps(!!s.timestamps);
+      $("#console-timestamps").checked = this.timestamps;
+      if (this.onSettingsChanged) this.onSettingsChanged();     // console-prompt.js (eager evaluation)
+      this.renderSidebar();
+    },
+    setTimestamps(on) {
+      this.timestamps = on;
+      this.messagesEl.classList.toggle("show-timestamps", on);
+      this.rerender();
+    },
 
     // ---- live expressions ------------------------------------------------------
     // Pinned above the messages and re-evaluated every 250 ms while the
@@ -75,9 +131,17 @@
       try { this.live = JSON.parse(localStorage.getItem("devtools.console.live") || "[]").map((expression) => ({ expression, value: null })); } catch (_) { this.live = []; }
       $("#console-live-add").addEventListener("click", () => this.addLive(""));
       this.renderLive();
+      // The app's copy survives a restart; the web view's does not.
+      DevTools.rpc("Settings.get", { key: "consoleLive" }).then((saved) => {
+        if (!saved || this.live.length) return;
+        try { this.live = JSON.parse(saved).map((expression) => ({ expression, value: null })); } catch (_) {}
+        this.renderLive();
+      }).catch(() => {});
     },
     saveLive() {
-      try { localStorage.setItem("devtools.console.live", JSON.stringify(this.live.map((l) => l.expression).filter(Boolean))); } catch (_) {}
+      const list = JSON.stringify(this.live.map((l) => l.expression).filter(Boolean));
+      try { localStorage.setItem("devtools.console.live", list); } catch (_) {}
+      DevTools.rpc("Settings.set", { key: "consoleLive", value: list }).catch(() => {});
     },
     addLive(expression) {
       const item = { expression, value: null };
@@ -148,15 +212,27 @@
     stopLive() { clearInterval(this.liveTimer); this.liveTimer = null; },
 
     async load() {
-      let entries = [];
+      let entries = [], requests = [];
       try { entries = await DevTools.rpc("Console.getEntries"); } catch (_) {}
+      // Requests that failed before the Console was first shown: their
+      // "Failed to load resource" lines go where they happened.
+      try { requests = await DevTools.rpc("Network.getRequests"); } catch (_) {}
+      this.reportedFailures.clear();
+      const failures = (requests || []).map((r) => this.failureItem(r)).filter(Boolean)
+        .sort((a, b) => this.timeOf(a.entry) - this.timeOf(b.entry));
       this.clearView();
-      for (const item of entries) this.add(item, true);
+      for (const item of entries) {
+        while (failures.length && this.timeOf(failures[0].entry) <= this.timeOf(item.entry)) this.add(failures.shift(), true);
+        this.add(item, true);
+      }
+      for (const item of failures) this.add(item, true);
+      for (const item of this.pendingLocal.splice(0)) this.add(item, true);
       this.scrollToBottom();
     },
 
     // ---- entries --------------------------------------------------------------
     add(item, initial) {
+      if (!this.initialized || !this.messagesEl) { this.pendingLocal.push(item); return; }
       const e = item.entry;
       if (e.type === "clear") {
         if (!this.preserve) this.clearView();
@@ -168,7 +244,7 @@
       const prev = this.entries[this.entries.length - 1];
       if (prev && this.canCoalesce(prev, item)) {
         prev.repeat = (prev.repeat || 1) + 1;
-        const badge = prev.el.querySelector(".repeat");
+        const badge = prev.el.querySelector(":scope > .repeat");
         if (badge) badge.textContent = String(prev.repeat);
         else prev.el.insertBefore(h("span", { class: "repeat" }, String(prev.repeat)), prev.el.firstChild.nextSibling);
         return;
@@ -178,18 +254,23 @@
       if (e.level === "error") this.counts.errors++;
       if (e.level === "warn") this.counts.warnings++;
       DevTools.setBadges(this.counts);
+      this.countForSidebar(item);
 
       const wasAtBottom = this.isAtBottom();
       const el = this.render(item);
       item.el = el;
       const parent = this.groupStack[this.groupStack.length - 1] || this.messagesEl;
-      parent.appendChild(el);
+      if (!this.joinSimilar(item, parent)) {
+        parent.appendChild(el);
+        if (parent === this.messagesEl) this.lastTop = item;
+      }
       if (e.type === "group" || e.type === "groupCollapsed") {
         const container = h("div", { class: "console-group" + (e.type === "groupCollapsed" ? " collapsed" : "") });
         if (e.type === "groupCollapsed") el.classList.add("collapsed");
         parent.appendChild(container);
         this.groupStack.push(container);
         el.addEventListener("click", () => { el.classList.toggle("collapsed"); container.classList.toggle("collapsed"); });
+        if (parent === this.messagesEl) this.lastTop = null;
       }
       this.applyFilterTo(item);
       if (wasAtBottom || initial) this.scrollToBottom();
@@ -200,32 +281,95 @@
       if (a.type !== "log" || b.type !== "log") return false;
       if (a.level !== b.level || a.message !== b.message) return false;
       if (a.args.length !== b.args.length) return false;
+      if (prev.source !== item.source) return false;
       return a.args.every((arg, i) => !arg.objectId && !b.args[i].objectId && arg.description === b.args[i].description);
     },
 
+    // "Group similar": consecutive messages logged by the same line with the
+    // same format collapse under the first one, with a count.
+    similarKey(item) {
+      const e = item.entry;
+      if (e.type !== "log" || item.local) return null;
+      const where = this.entryLocation(item);
+      const first = e.args[0] && e.args[0].type === "string" ? e.args[0].description : e.message.replace(/\d+/g, "#");
+      return [e.level, item.source, where ? where.url + ":" + where.line : "", first, e.args.length].join("|");
+    },
+
+    joinSimilar(item, parent) {
+      if (!this.settings.groupSimilar || parent !== this.messagesEl) return false;
+      const key = this.similarKey(item);
+      item.similarKey = key;
+      const head = this.lastTop;
+      if (!key || !head || head.similarKey !== key || !head.el.isConnected) return false;
+      if (!head.similar) {
+        const container = h("div", { class: "console-similar collapsed" });
+        head.el.after(container);
+        const badge = h("span", { class: "console-similar-badge", role: "button", tabindex: "0", title: "Show the similar messages" });
+        badge.addEventListener("click", (ev) => { ev.stopPropagation(); this.toggleSimilar(head); });
+        badge.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); this.toggleSimilar(head); } });
+        head.el.classList.add("similar-head", "collapsed");
+        head.el.insertBefore(badge, head.el.querySelector(".body"));
+        head.similar = { container, badge, items: [] };
+      }
+      head.similar.items.push(item);
+      item.similarOf = head;
+      head.similar.container.appendChild(item.el);
+      head.similar.badge.textContent = String(head.similar.items.length + 1);
+      return true;
+    },
+
+    toggleSimilar(head) {
+      const open = head.similar.container.classList.toggle("collapsed") === false;
+      head.el.classList.toggle("collapsed", !open);
+      head.similar.badge.setAttribute("aria-expanded", open ? "true" : "false");
+    },
+
     addLocal(level, message, extra = {}) {
-      this.add({ entry: { level, type: extra.type || "log", message, args: [], stack: [], timestamp: Date.now(), isUncaught: false }, source: "user", sequence: -1, local: true });
+      this.add({ entry: { level, type: extra.type || "log", message, args: [], stack: [], timestamp: Date.now(), isUncaught: false },
+                 source: extra.source || "user", sequence: -1, local: true, location: extra.location });
     },
 
     reportFailure(request) {
-      if (!request.isFailure && !request.failure && !(request.statusCode >= 400)) return;
-      if (this.reportedFailures.has(request.id)) return;
+      const item = this.failureItem(request, Date.now());
+      if (item) this.add(item);
+    },
+
+    failureItem(request, timestamp) {
+      if (!request || (!request.isFailure && !request.failure && !(request.statusCode >= 400))) return null;
+      if (this.reportedFailures.has(request.id)) return null;
       this.reportedFailures.add(request.id);
       const message = request.failure
         ? "Failed to load resource: " + request.failure
         : `Failed to load resource: the server responded with a status of ${request.statusCode} ()`;
-      this.add({ entry: { level: "error", type: "log", message, args: [], stack: [], timestamp: Date.now(), isUncaught: false },
-                 source: "network", sequence: -1, location: request.url });
+      return { entry: { level: "error", type: "log", message, args: [], stack: [], timestamp: timestamp || request.startedAt || Date.now(), isUncaught: false },
+               source: "network", sequence: -1, location: request.url };
+    },
+
+    // "Log XMLHttpRequests": one verbose line per finished fetch / XHR, as Chrome writes it.
+    logXHR(r) {
+      if (!this.settings.logXHR || !r || this.loggedXHR.has(r.id)) return;
+      const isXHR = r.initiator === "xmlhttprequest" || r.resourceType === "xhr";
+      const isFetch = r.initiator === "fetch" || r.resourceType === "fetch";
+      if (!isXHR && !isFetch) return;
+      if (r.statusCode == null && !r.failure) return;
+      this.loggedXHR.add(r.id);
+      const verb = r.failure ? "failed loading" : "finished loading";
+      this.add({ entry: { level: "debug", type: "log", message: `${isXHR ? "XHR" : "Fetch"} ${verb}: ${r.method || "GET"} "${r.url}".`, args: [], stack: [], timestamp: Date.now(), isUncaught: false },
+                 source: "network", sequence: -1, location: r.url, local: true });
     },
 
     render(item) {
       const e = item.entry;
       const el = h("div", { class: `console-message level-${e.level} type-${e.type}`, dataset: { level: e.level } }, h("span", { class: "icon" }));
-      if (this.timestamps) el.appendChild(h("span", { class: "timestamp" }, formatTime(e.timestamp)));
+      if (this.timestamps) el.appendChild(h("span", { class: "timestamp" }, formatTime(this.timeOf(e))));
       const body = h("div", { class: "body" });
 
       if (e.type === "command") {
-        body.appendChild(h("span", { class: "selectable" }, e.message));
+        const code = h("span", { class: "selectable console-command" });
+        const tokens = Highlighter.tokenize(e.message, "js");
+        if (tokens) for (const [cls, raw] of tokens) code.appendChild(cls ? h("span", { class: cls }, raw) : document.createTextNode(raw));
+        else code.textContent = e.message;
+        body.appendChild(code);
       } else if (e.type === "table" && e.table) {
         const table = h("table", { class: "data-table console-table" });
         table.appendChild(h("thead", {}, h("tr", {}, e.table.columns.map((c) => h("th", {}, c)))));
@@ -236,7 +380,8 @@
       } else if (e.type === "result") {
         if (e.args.length) body.appendChild(ObjectTree.render(e.args[0], { quoteStrings: true }));
         else body.appendChild(document.createTextNode(e.message));
-      } else if (e.args.length && !e.isUncaught && !(e.args[0].type === "string" && /%[sdifoOjc]/.test(e.args[0].description))) {
+      } else if (e.args.length && !(e.isUncaught && e.args[0].subtype !== "error") && !(e.args[0].type === "string" && /%[sdifoOjc]/.test(e.args[0].description))) {
+        if (e.isUncaught) body.appendChild(document.createTextNode("Uncaught " + (/^Uncaught \(in promise\)/.test(e.message) ? "(in promise) " : "")));
         e.args.forEach((arg, i) => {
           if (i) body.appendChild(document.createTextNode(" "));
           if (arg.type === "string") body.appendChild(this.linkify(arg.description));
@@ -246,25 +391,32 @@
         body.appendChild(this.linkify(e.message));
       }
 
-      if (e.stack && e.stack.length && (e.level === "error" || e.type === "trace" || e.isUncaught)) {
+      // An error argument shows its own stack; the captured one is only for the rest.
+      const errorArg = e.args.some((a) => a.subtype === "error" && /\n/.test(a.description || ""));
+      if (e.stack && e.stack.length && !errorArg && (e.level === "error" || e.type === "trace" || e.isUncaught)) {
         const frames = h("div", { class: "console-stack" });
         for (const frame of e.stack.slice(0, 20)) frames.appendChild(this.frameLine(frame));
         const expanded = e.isUncaught || e.type === "trace";
         frames.hidden = !expanded;
-        const toggle = h("span", { class: "stack-toggle" }, expanded ? "▼" : "▶");
+        const toggle = h("span", { class: "stack-toggle", role: "button", "aria-label": "Toggle stack" }, expanded ? "▼" : "▶");
         toggle.addEventListener("click", (ev) => { ev.stopPropagation(); frames.hidden = !frames.hidden; toggle.textContent = frames.hidden ? "▶" : "▼"; });
         body.insertBefore(toggle, body.firstChild);
         body.appendChild(frames);
       }
       el.appendChild(body);
 
-      const location = item.location || (e.stack && e.stack[0] && e.stack[0].url ? e.stack[0] : null);
-      if (location) {
-        const where = typeof location === "string" ? { url: location, line: 0, column: 0 } : this.originalPosition(location);
+      const where = this.entryLocation(item);
+      if (where && where.url) {
         const label = fileName(where.url) + (where.line ? ":" + where.line : "");
         el.appendChild(h("span", { class: "location", title: where.url, onclick: (ev) => { ev.stopPropagation(); DevTools.openSource(where.url, where.line, where.column); } }, label));
       }
       return el;
+    },
+
+    timeOf(e) {
+      // Recorded entries carry Swift's reference date (seconds since 2001).
+      const t = e.timestamp;
+      return typeof t === "number" && t < 2e9 ? (t + 978307200) * 1000 : t;
     },
 
     // Stack frames arrive with positions in the generated file; show the
@@ -298,30 +450,161 @@
     },
 
     rerender() {
+      if (!this.initialized) return;
       const items = this.entries.slice();
       this.clearView();
-      for (const item of items) this.add(item, true);
+      for (const item of items) { delete item.similar; delete item.similarOf; this.add(item, true); }
     },
 
-    // ---- Copy for AI -------------------------------------------------------------
-    contextItems(item) {
-      const copy = (text) => DevTools.rpc("Clipboard.write", { text }).catch(() => {});
+    // ---- sidebar ---------------------------------------------------------------------
+    resetSideCounts() {
+      this.sideCounts = {};
+      for (const [key] of CATEGORIES) this.sideCounts[key] = { count: 0, files: new Map() };
+    },
+
+    categoriesOf(item) {
+      const e = item.entry;
+      if (e.type === "command" || e.type === "result") return [];
+      const out = ["all"];
+      if (item.source === "pageWorld" && !e.isUncaught) out.push("user");
+      out.push(e.level === "trace" ? "info" : e.level);
+      return out;
+    },
+
+    countForSidebar(item) {
+      const where = this.entryLocation(item);
+      const file = where && where.url ? where.url : "";
+      for (const key of this.categoriesOf(item)) {
+        const bucket = this.sideCounts[key];
+        if (!bucket) continue;
+        bucket.count++;
+        bucket.files.set(file, (bucket.files.get(file) || 0) + 1);
+      }
+      if (!this.sidebarFrame) this.sidebarFrame = requestAnimationFrame(() => { this.sidebarFrame = 0; this.renderSidebar(); });
+    },
+
+    expandedSide: new Set(),
+
+    renderSidebar() {
+      const box = $("#console-sidebar");
+      if (!box || box.hidden) return;
+      box.textContent = "";
+      for (const [key, label, id] of CATEGORIES) {
+        const bucket = this.sideCounts[key];
+        const selected = this.side.category === key && !this.side.url;
+        const open = this.expandedSide.has(key);
+        const row = h("div", { class: "console-side-row level-" + key + (selected ? " selected" : "") + (open ? " expanded" : ""), id, role: "treeitem", tabindex: "0",
+          "aria-selected": selected ? "true" : "false", "aria-expanded": bucket.files.size ? (open ? "true" : "false") : null },
+          h("span", { class: "arrow" + (bucket.files.size ? "" : " none") }), h("span", { class: "console-side-icon" }),
+          h("span", { class: "console-side-label" }, (bucket.count === 0 ? "No" : String(bucket.count)) + " " + label));
+        row.addEventListener("click", (e) => {
+          if (e.target.classList.contains("arrow")) { this.toggleSide(key); return; }
+          this.selectSide(key, null);
+        });
+        row.addEventListener("keydown", (e) => {
+          if (e.key === "Enter" || e.key === " ") { e.preventDefault(); this.selectSide(key, null); }
+          else if (e.key === "ArrowRight" && !open) this.toggleSide(key);
+          else if (e.key === "ArrowLeft" && open) this.toggleSide(key);
+          else if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); this.moveSideFocus(row, e.key === "ArrowDown" ? 1 : -1); }
+        });
+        box.appendChild(row);
+        if (!open) continue;
+        const files = Array.from(bucket.files).sort((a, b) => b[1] - a[1]);
+        for (const [url, count] of files) {
+          const sel = this.side.category === key && this.side.url === url;
+          const fileRow = h("div", { class: "console-side-row file" + (sel ? " selected" : ""), role: "treeitem", tabindex: "0", title: url || "(no source)" },
+            h("span", { class: "console-side-label" }, (url ? fileName(url) : "(no source)")), h("span", { class: "console-side-count" }, String(count)));
+          fileRow.addEventListener("click", () => this.selectSide(key, url));
+          fileRow.addEventListener("keydown", (e) => {
+            if (e.key === "Enter" || e.key === " ") { e.preventDefault(); this.selectSide(key, url); }
+            else if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); this.moveSideFocus(fileRow, e.key === "ArrowDown" ? 1 : -1); }
+          });
+          box.appendChild(fileRow);
+        }
+      }
+    },
+    moveSideFocus(row, dir) {
+      const rows = $$("#console-sidebar .console-side-row");
+      const next = rows[rows.indexOf(row) + dir];
+      if (next) next.focus();
+    },
+    toggleSide(key) {
+      if (this.expandedSide.has(key)) this.expandedSide.delete(key); else this.expandedSide.add(key);
+      this.renderSidebar();
+      document.querySelector(`#console-sidebar .console-side-row.level-${key}`)?.focus();
+    },
+    selectSide(category, url) {
+      this.side = { category, url };
+      this.renderSidebar();
+      this.applyFilter();
+      const rows = $$("#console-sidebar .console-side-row.selected");
+      if (rows[0]) rows[0].focus();
+    },
+
+    // ---- message actions -------------------------------------------------------------
+    copy(text) { return DevTools.rpc("Clipboard.write", { text }).catch(() => {}); },
+
+    contextItems(item, target) {
       const items = [];
       if (item) {
-        items.push({ label: "Copy message", action: () => copy(this.plainText(item)) },
-                   { label: "Copy for AI (Markdown)", action: () => copy(this.entryMarkdown(item)) });
+        items.push({ label: "Copy message", action: () => this.copy(this.plainText(item)) },
+                   { label: "Copy for AI (Markdown)", action: async () => this.copy(await this.entryMarkdownForAI(item)) });
+        if (this.stackOf(item).length) items.push({ label: "Copy stack", action: () => this.copy(this.stackText(item)) });
+        const remote = this.remoteFor(target, item);
+        if (remote) items.push({ label: "Store as global variable", action: () => this.storeAsGlobal(remote) });
+        const where = this.entryLocation(item);
+        if (where && where.url) items.push({ label: "Reveal in Sources panel", action: () => DevTools.openSource(where.url, where.line, where.column) });
+        items.push("-");
       }
       const errors = this.entries.filter((i) => i.entry.level === "error");
-      if (errors.length) items.push({ label: `Copy all errors as Markdown (${errors.length})`, action: () => copy(this.errorsMarkdown()) });
-      items.push({ label: "Copy console as Markdown", action: () => copy(this.consoleMarkdown()) });
+      if (errors.length) items.push({ label: `Copy all errors as Markdown (${errors.length})`, action: () => this.copy(this.errorsMarkdown()) });
+      items.push({ label: "Copy console as Markdown", action: () => this.copy(this.consoleMarkdown()) });
+      items.push({ label: "Save as…", action: () => this.saveAs() });
       items.push("-", { label: "Clear console", action: () => this.clear() });
       return items;
+    },
+
+    // The value under the pointer, or the message's first object.
+    remoteFor(target, item) {
+      for (let el = target; el && el !== this.messagesEl; el = el.parentElement) if (el.__remote) return el.__remote;
+      const e = item.entry;
+      return e.args.find((a) => a.objectId) || (e.type === "result" && e.args[0]) || null;
+    },
+
+    async storeAsGlobal(remote) {
+      let params;
+      if (remote.objectId) params = { objectId: remote.objectId };
+      else if (remote.type === "number") params = { value: Number(remote.description) };
+      else if (remote.type === "boolean") params = { value: remote.description === "true" };
+      else if (remote.type === "string") params = { value: remote.description };
+      else if (remote.subtype === "null") params = { value: null };
+      else return;
+      try {
+        const { name } = await DevTools.rpc("Runtime.storeAsGlobal", params);
+        this.evaluate(name);
+        return name;
+      } catch (e) { this.addLocal("error", "Could not store the value: " + e.message); }
     },
 
     plainText(item) {
       const e = item.entry;
       if (e.type === "table" || !e.args.length || e.isUncaught || e.type === "result") return e.message;
       return e.args.map((a) => a.description).join(" ");
+    },
+
+    stackOf(item) {
+      const e = item.entry;
+      if (e.stack && e.stack.length) return e.stack.filter((f) => f.url || f.functionName);
+      const error = e.args.find((a) => a.subtype === "error");
+      if (!error) return [];
+      return String(error.description || "").split("\n").slice(1).map((l) => ObjectTree.parseFrame(l)).filter(Boolean);
+    },
+
+    stackText(item) {
+      return this.stackOf(item).map((frame) => {
+        const p = frame.url ? this.originalPosition(frame) : null;
+        return (frame.functionName || "(anonymous)") + (p ? " @ " + p.url + ":" + p.line + ":" + p.column : "");
+      }).join("\n");
     },
 
     // Where an entry came from: the first stack frame, mapped to the original source.
@@ -334,14 +617,14 @@
     // One message as Markdown: level, text, source location and stack.
     entryMarkdown(item) {
       const e = item.entry;
-      const kind = { error: "Error", warn: "Warning", info: "Info", debug: "Verbose", log: "Log" }[e.level] || e.level;
+      const kind = LEVEL_NAMES[e.level] || e.level;
       const where = this.entryLocation(item);
       const head = [`**Console ${kind.toLowerCase()}**`];
       if (e.isUncaught) head.push("(uncaught)");
       if (item.repeat > 1) head.push(`×${item.repeat}`);
       if (where && where.url) head.push("at `" + where.url + (where.line ? ":" + where.line + (where.column ? ":" + where.column : "") : "") + "`");
       const out = [head.join(" "), Markdown.fence(Markdown.truncate(this.plainText(item), 4000), "text")];
-      const stack = (e.stack || []).slice(0, 20);
+      const stack = this.stackOf(item).slice(0, 20);
       if (stack.length) {
         out.push("Stack:");
         for (const frame of stack) {
@@ -350,6 +633,33 @@
         }
       }
       return out.join("\n");
+    },
+
+    // Copy for AI: the message, plus the lines of code around where it came from.
+    async entryMarkdownForAI(item) {
+      let md = this.entryMarkdown(item);
+      const where = this.entryLocation(item);
+      if (!where || !where.url || !where.line) return md;
+      const text = await this.sourceText(where.url).catch(() => null);
+      if (!text) return md;
+      const lines = text.split("\n");
+      if (where.line > lines.length) return md;
+      const from = Math.max(1, where.line - 5), to = Math.min(lines.length, where.line + 5);
+      const width = String(to).length;
+      const excerpt = [];
+      for (let n = from; n <= to; n++) excerpt.push((n === where.line ? "→ " : "  ") + String(n).padStart(width) + " | " + lines[n - 1].slice(0, 300));
+      const lang = /\.css(\?|$)/.test(where.url) ? "css" : /\.html?(\?|$)/.test(where.url) || where.url === DevTools.info.url ? "html" : "js";
+      md += `\n\nSource around \`${fileName(where.url)}:${where.line}\`:\n` + Markdown.fence(excerpt.join("\n"), lang);
+      return md;
+    },
+
+    async sourceText(url) {
+      if (window.SBSourceMaps && SBSourceMaps.isOriginal(url) && SBSourceMaps.contentOf(url) != null) return SBSourceMaps.contentOf(url);
+      const sources = DevTools.panels.sources;
+      const file = sources && sources.files.get(url);
+      if (file && file.content != null) return file.content;
+      const result = await DevTools.rpc("Sources.fetch", { url });
+      return result && result.text;
     },
 
     errorsMarkdown() {
@@ -362,15 +672,40 @@
       return [`# Console — ${DevTools.info.url || ""}`, "", ...this.entries.slice(-500).map((item) => this.entryMarkdown(item))].join("\n\n");
     },
 
+    // Save as…: the whole console as text, the way Chrome saves it.
+    consoleText() {
+      return this.entries.map((item) => {
+        const e = item.entry;
+        const where = this.entryLocation(item);
+        const prefix = e.type === "command" ? "> " : e.type === "result" ? "< " : "";
+        const location = where && where.url ? fileName(where.url) + (where.line ? ":" + where.line : "") + " " : "";
+        const stack = this.stackOf(item).length && (e.level === "error" || e.type === "trace") ? "\n" + this.stackText(item).split("\n").map((l) => "    " + l).join("\n") : "";
+        return location + prefix + this.plainText(item) + (item.repeat > 1 ? ` (×${item.repeat})` : "") + stack;
+      }).join("\n");
+    },
+    saveAs() {
+      let host = "console";
+      try { host = new URL(DevTools.info.url).host || host; } catch (_) {}
+      return DevTools.rpc("DevTools.saveFile", { name: `${host}-${Date.now()}.log`, text: this.consoleText() }).catch((e) => this.addLocal("error", e.message));
+    },
+
     // ---- filtering ------------------------------------------------------------
     applyFilter() { for (const item of this.entries) this.applyFilterTo(item); },
 
     applyFilterTo(item) {
       const e = item.entry;
+      const always = e.type === "command" || e.type === "result";
       let visible = true;
-      if (this.level !== "all") {
-        const always = e.type === "command" || e.type === "result";
-        if (!always) visible = e.level === this.level || (this.level === "info" && (e.level === "info" || e.level === "trace"));
+      if (this.level !== "all" && !always) {
+        visible = e.level === this.level || (this.level === "info" && (e.level === "info" || e.level === "trace"));
+      }
+      if (visible && this.settings.hideNetwork && item.source === "network") visible = false;
+      if (visible && !always && (this.side.category !== "all" || this.side.url)) {
+        visible = this.categoriesOf(item).includes(this.side.category);
+        if (visible && this.side.url != null) {
+          const where = this.entryLocation(item);
+          visible = (where && where.url ? where.url : "") === this.side.url;
+        }
       }
       if (visible && this.filterText) {
         const text = (e.message + " " + e.args.map((a) => a.description).join(" ")).toLowerCase();
@@ -387,9 +722,12 @@
     clearView() {
       this.entries = [];
       this.groupStack = [];
-      this.messagesEl.textContent = "";
+      this.lastTop = null;
+      if (this.messagesEl) this.messagesEl.textContent = "";
       this.counts = { errors: 0, warnings: 0 };
       DevTools.setBadges(this.counts);
+      this.resetSideCounts();
+      this.renderSidebar();
     },
 
     isAtBottom() {
@@ -398,111 +736,15 @@
     },
     scrollToBottom() { this.messagesEl.scrollTop = this.messagesEl.scrollHeight; },
 
-    // ---- prompt --------------------------------------------------------------------
-    autoGrow() {
-      this.prompt.style.height = "auto";
-      this.prompt.style.height = Math.min(200, this.prompt.scrollHeight) + "px";
-    },
-
-    onPromptKey(e) {
-      const box = $("#console-completions");
-      if (!box.hidden) {
-        if (e.key === "ArrowDown") { e.preventDefault(); this.moveCompletion(1); return; }
-        if (e.key === "ArrowUp") { e.preventDefault(); this.moveCompletion(-1); return; }
-        if (e.key === "Tab" || (e.key === "Enter" && this.completionIndex >= 0) || e.key === "ArrowRight" && this.caretAtEnd()) {
-          e.preventDefault(); this.acceptCompletion(); return;
-        }
-        if (e.key === "Escape") { e.preventDefault(); this.hideCompletions(); return; }
-      }
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        const text = this.prompt.value.trim();
-        if (!text) return;
-        this.evaluate(text);
-        this.prompt.value = "";
-        this.autoGrow();
-        this.hideCompletions();
-      } else if (e.key === "ArrowUp" && this.caretOnFirstLine()) {
-        if (this.historyIndex > 0) {
-          e.preventDefault();
-          if (this.historyIndex === this.history.length) this.draft = this.prompt.value;
-          this.historyIndex--;
-          this.prompt.value = this.history[this.historyIndex];
-          this.autoGrow();
-          this.prompt.setSelectionRange(this.prompt.value.length, this.prompt.value.length);
-        }
-      } else if (e.key === "ArrowDown" && this.caretOnLastLine()) {
-        if (this.historyIndex < this.history.length) {
-          e.preventDefault();
-          this.historyIndex++;
-          this.prompt.value = this.historyIndex === this.history.length ? this.draft : this.history[this.historyIndex];
-          this.autoGrow();
-        }
-      } else if (e.key === "Escape") {
-        this.hideCompletions();
-      }
-    },
-
-    caretOnFirstLine() { return !this.prompt.value.slice(0, this.prompt.selectionStart).includes("\n"); },
-    caretOnLastLine() { return !this.prompt.value.slice(this.prompt.selectionEnd).includes("\n"); },
-    caretAtEnd() { return this.prompt.selectionEnd === this.prompt.value.length; },
-
+    // Runs `text` as if typed at the prompt (history, then the result logged).
     evaluate(text) {
-      if (this.history[this.history.length - 1] !== text) {
-        this.history.push(text);
-        if (this.history.length > 300) this.history.shift();
-        try { localStorage.setItem("devtools.console.history", JSON.stringify(this.history)); } catch (_) {}
-      }
-      this.historyIndex = this.history.length;
-      this.draft = "";
+      if (this.remember) this.remember(text);                    // console-prompt.js
       // While paused, the prompt evaluates in the selected call frame, so
       // locals are in scope exactly as in Chrome.
       const callFrameId = window.SBDebugger ? SBDebugger.currentCallFrameId() : undefined;
       DevTools.rpc("Console.evaluate", callFrameId ? { expression: text, callFrameId } : { expression: text })
         .catch((err) => this.addLocal("error", err.message));
       this.scrollToBottom();
-    },
-
-    requestCompletions: debounce(function () {
-      const self = DevTools.panels.console;
-      const text = self.prompt.value;
-      if (!text.trim() || text.includes("\n") || !self.caretAtEnd()) { self.hideCompletions(); return; }
-      const tail = text.match(/[\w$.\[\]'"]*$/)[0];
-      if (!tail || /\.\.$/.test(tail)) { self.hideCompletions(); return; }
-      DevTools.rpc("Runtime.getCompletions", { expression: tail }).then(({ names, prefix }) => {
-        if (self.prompt.value !== text) return;
-        const list = names.filter((n) => n !== prefix).slice(0, 50);
-        if (!list.length) { self.hideCompletions(); return; }
-        self.completions = list.map((name) => ({ name, prefix }));
-        self.completionIndex = 0;
-        const box = $("#console-completions");
-        box.textContent = "";
-        list.forEach((name, i) => box.appendChild(h("div", { class: "item" + (i === 0 ? " active" : ""), onmousedown: (e) => { e.preventDefault(); self.completionIndex = i; self.acceptCompletion(); } }, name)));
-        box.hidden = false;
-      }).catch(() => self.hideCompletions());
-    }, 120),
-
-    moveCompletion(dir) {
-      const items = $$("#console-completions .item");
-      if (!items.length) return;
-      this.completionIndex = (this.completionIndex + dir + items.length) % items.length;
-      items.forEach((el, i) => el.classList.toggle("active", i === this.completionIndex));
-      items[this.completionIndex].scrollIntoView({ block: "nearest" });
-    },
-
-    acceptCompletion() {
-      const c = this.completions[this.completionIndex];
-      if (!c) return;
-      const value = this.prompt.value;
-      this.prompt.value = value.slice(0, value.length - c.prefix.length) + c.name;
-      this.hideCompletions();
-      this.autoGrow();
-    },
-
-    hideCompletions() {
-      $("#console-completions").hidden = true;
-      this.completions = [];
-      this.completionIndex = -1;
     },
   };
 
