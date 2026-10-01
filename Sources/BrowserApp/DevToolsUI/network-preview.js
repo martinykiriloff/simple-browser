@@ -1184,6 +1184,36 @@
       return { kind: "binary" };
     }
     const kind = kindOf(r, text);
+    // JSON responses: the JSON Viewer's tree, or the code, as the person last chose.
+    const json = kind === "json" ? tryParseJSON(text) : kind === "jsonp" ? (parseJSONP(text) || {}).value : undefined;
+    if (json !== undefined && json !== null && typeof json === "object") {
+      let choice = "tree";
+      try { choice = localStorage.getItem("devtools.responseJSON") || "tree"; } catch (_) {}
+      const holder = h("div", { class: "nv-response-json" });
+      const result = { kind, view: null, jsonView: null };
+      const show = (which) => {
+        try { localStorage.setItem("devtools.responseJSON", which); } catch (_) {}
+        holder.textContent = "";
+        if (which === "tree") {
+          result.jsonView = new JSONView(json, { expandDepth: 2 });
+          result.view = null;
+          holder.appendChild(result.jsonView.el);
+          container.classList.remove("nv-fill");
+        } else {
+          result.view = new CodeView({ text, lang: langOf(r, text, kind), pretty: false, filename: filenameFor(r, mime) });
+          result.jsonView = null;
+          holder.appendChild(result.view.el);
+          container.classList.add("nv-fill");
+        }
+      };
+      const copy = h("button", { class: "text-button", title: "Copy the response as formatted JSON" }, "Copy JSON");
+      copy.addEventListener("click", () => { copyText(JSON.stringify(json, null, 2)); toast("Copied"); });
+      container.append(infoBar(segmented([["tree", "JSON tree"], ["code", "Code"]], choice, show),
+                               `${Array.isArray(json) ? "Array(" + json.length + ")" : Object.keys(json).length + " keys"} · ${formatBytes(new Blob([text]).size)}`,
+                               h("span", { class: "toolbar-spacer" }), copy), holder);
+      show(choice);
+      return result;
+    }
     const view = new CodeView({ text, lang: langOf(r, text, kind), pretty: false, filename: filenameFor(r, mime) });
     container.appendChild(view.el);
     container.classList.add("nv-fill");

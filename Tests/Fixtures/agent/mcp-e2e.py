@@ -276,6 +276,12 @@ call("devtools", action="close")
 err, text, _ = call("devtools_selection")
 check("devtools_selection when closed explains", "not open" in text, text)
 
+# --- JSON Viewer: a JSON document opened in a tab
+err, text, _ = call("navigate", url=SITE + "/data.json")
+err2, text2, _ = call("evaluate", expression="[document.documentElement.dataset.sbJsonViewer, !!document.getElementById('sb-json-viewer')?.shadowRoot?.querySelector('.row'), JSON.parse(document.querySelector('pre').textContent).items.length]")
+check("JSON Viewer replaces the plain-text view, keeping the raw JSON", '"on"' in text2 and "true" in text2 and "3" in text2, text2)
+call("navigate", action="back")
+
 # --- navigation
 err, snap, _ = call("snapshot")
 link = ref_for(snap, r'link "Second page"')

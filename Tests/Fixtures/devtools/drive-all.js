@@ -1434,6 +1434,149 @@ try {
     net.closeDetail();
   }
 
+  // ---- Developer extensions: Components, dataLayer, PHP, Node, Claude, JSON responses ----------------
+  {
+    const evalPage = (expression) => DevTools.rpc("Console.evaluate", { expression });
+    await SBExt.load();
+    check("extensions report which are on", SBExt.loaded && typeof SBExt.states.react === "boolean", SBExt.states);
+    check("the toolbar has the screen colour picker", !document.querySelector("#btn-colorpick").hidden);
+    check("PHP, Node and Claude tabs are there", ["php", "node", "claude"].every((p) => !document.querySelector(`#tabs .tab[data-panel="${p}"]`).hidden));
+
+    // Components: a renderer registered through the global hook, as react-dom does.
+    await evalPage(`(() => {
+      const hook = window.__REACT_DEVTOOLS_GLOBAL_HOOK__;
+      if (!hook) return "no hook";
+      const id = hook.inject({ version: "18.3.1", rendererPackageName: "react-dom", bundleType: 1 });
+      const host = document.createElement("div"); host.id = "react-fixture"; host.textContent = "React fixture"; document.body.appendChild(host);
+      const counterHook = { memoizedState: 3, next: null };
+      counterHook.queue = { dispatch(v) { counterHook.memoizedState = v; }, lastRenderedReducer: function basicStateReducer() {} };
+      const counter = { tag: 0, type: function Counter() {}, key: "c1", memoizedProps: { step: 1, label: "Clicks" }, memoizedState: counterHook, child: null, sibling: null };
+      const div = { tag: 5, type: "div", stateNode: host, key: null, memoizedProps: {}, child: counter, sibling: null };
+      const app = { tag: 0, type: function App() {}, key: null, memoizedProps: { title: "Fixture" }, memoizedState: null, child: div, sibling: null };
+      const rootFiber = { tag: 3, child: app };
+      counter.return = div; div.return = app; app.return = rootFiber; counter._debugOwner = app;
+      host["__reactFiber$fixture"] = div;
+      hook.onCommitFiberRoot(id, { current: rootFiber });
+      return "ok";
+    })()`);
+    await wait(200);
+    await SBReact.detect();
+    check("Components appears once React is seen", !document.querySelector('#tabs .tab[data-panel="components"]').hidden);
+    DevTools.showPanel("components"); await wait(500);
+    const names = SBReact.nodes.map((n) => n.name);
+    check("the tree lists components, not host elements", names.join(",") === "App,Counter", names);
+    const counterNode = SBReact.nodes.find((n) => n.name === "Counter");
+    const appNode = SBReact.nodes.find((n) => n.name === "App");
+    if (counterNode) {
+      await SBReact.inspect(counterNode.id); await wait(150);
+      check("props are shown", JSON.stringify(SBReact.info.props).includes("Clicks"), SBReact.info.props);
+      check("useState is listed and editable", SBReact.info.hooks.length === 1 && SBReact.info.hooks[0].kind === "useState" && SBReact.info.hooks[0].editable, SBReact.info.hooks);
+      check("its owner is App", SBReact.info.owners.length === 1 && SBReact.info.owners[0].name === "App", SBReact.info.owners);
+      check("its key is shown", document.querySelector("#react-detail").textContent.includes('key="c1"'));
+      await DevTools.rpc("React.call", { method: "React.setState", params: { id: counterNode.id, hookIndex: 0, value: 7 } });
+      const after = await DevTools.rpc("React.call", { method: "React.inspect", params: { id: counterNode.id } });
+      check("editing a hook dispatches the new state", after.hooks[0].value === 7, after.hooks);
+      check("hover highlights the component's DOM", (await DevTools.rpc("React.call", { method: "React.highlight", params: { id: appNode.id } })) === true);
+      await DevTools.rpc("React.call", { method: "React.unhighlight", params: {} });
+      check("a component copies as Markdown for AI", SBReact.markdown(SBReact.info).includes("<Counter>"));
+    }
+    const fromDOM = await DevTools.rpc("React.call", { method: "React.fromSelector", params: { selector: "#react-fixture" } });
+    check("Elements → Components finds the component that rendered an element", appNode && fromDOM === appNode.id, fromDOM);
+    $("#react-host").checked = true; SBReact.showHost = true; await SBReact.refresh(true);
+    check("host elements on request", SBReact.nodes.map((n) => n.name).join(",") === "App,div,Counter", SBReact.nodes.map((n) => n.name));
+    $("#react-host").checked = false; SBReact.showHost = false;
+
+    // dataLayer: pushes before and after Tag Manager replaces push, and gtag's arguments.
+    await evalPage(`window.dataLayer = window.dataLayer || []; dataLayer.push({ event: "page_view", page: "fixture" }); dataLayer.push({ event: "add_to_cart", value: 9.5 }); "ok"`);
+    await evalPage(`(() => { function gtag(){ dataLayer.push(arguments); } gtag("event", "sign_up", { method: "email" });
+      const own = dataLayer.push; dataLayer.push = function () { window.__gtmSaw = (window.__gtmSaw || 0) + 1; return Array.prototype.push.apply(this, arguments); };
+      dataLayer.push({ event: "after_gtm" }); return window.__gtmSaw; })()`);
+    await SBDataLayer.detect();
+    check("dataLayer appears once a page uses it", !document.querySelector('#tabs .tab[data-panel="datalayer"]').hidden);
+    DevTools.showPanel("datalayer"); await wait(300); await SBDataLayer.refresh();
+    const events = SBDataLayer.events.map((e) => e.event);
+    check("every push is recorded in order", ["page_view", "add_to_cart", "sign_up", "after_gtm"].every((e, i, all) => events.indexOf(e) >= 0 && (i === 0 || events.indexOf(e) > events.indexOf(all[i - 1]))), events);
+    check("gtag calls are read as events", SBDataLayer.events.some((e) => e.event === "sign_up" && e.gtag));
+    check("pushes after Tag Manager takes over push are still seen, and still reach it", events.includes("after_gtm") && (await evalPage("window.__gtmSaw")) !== null);
+    check("the list renders", $$("#dl-list .dl-row").length >= 4, $$("#dl-list .dl-row").length);
+    const model = await DevTools.rpc("DataLayer.call", { method: "DataLayer.state", params: {} });
+    check("the merged model folds the pushes together", model.value === 9.5 && model.page === "fixture", model);
+    DevTools.rpc("DataLayer.call", { method: "DataLayer.clear", params: {} });
+
+    // PHP: a Clockwork-instrumented response, its profile, N+1 detection, Xdebug cookies.
+    await evalPage(`fetch("/ext/clockwork-api").then((r) => r.text())`);
+    await wait(900);
+    DevTools.showPanel("php"); await wait(200); await SBPHP.refresh(); await wait(800);
+    check("PHP lists requests that carry a Clockwork profile", SBPHP.requests.length === 1, SBPHP.requests.map((r) => r.url));
+    const profile = SBPHP.requests[0] && SBPHP.profiles.get(SBPHP.requests[0].id);
+    check("the profile is fetched and read", profile && profile.queries.length === 4 && profile.controller.includes("OrderController"), profile && profile.controller);
+    if (profile) {
+      check("N+1 query shapes are found", SBPHP.duplicates(profile.queries).some((d) => d.count === 3));
+      SBPHP.tab = "database"; SBPHP.renderDetail(profile);
+      check("the database tab marks repeated queries", $$("#php-detail .php-dup").length === 3);
+      check("errors in the log are called out", SBPHP.markdown(profile, SBPHP.duplicates(profile.queries)).includes("Payment gateway timed out"));
+      SBPHP.tab = "overview";
+    }
+    const xdebugOn = await DevTools.rpc("PHP.setXdebug", { mode: "debug", on: true, ideKey: "VSCODE" });
+    check("Xdebug debug sets XDEBUG_SESSION for the site", xdebugOn.debug === "VSCODE", xdebugOn);
+    const xdebugOff = await DevTools.rpc("PHP.setXdebug", { mode: "debug", on: false });
+    check("…and clears it", !xdebugOff.debug, xdebugOff);
+
+    // Node: a process started with --inspect by the test script, when Node is installed.
+    const targets = await DevTools.rpc("Node.targets", { ports: [9339] });
+    if (targets.length) {
+      DevTools.showPanel("node"); await wait(100);
+      $("#node-ports").value = "9339"; await SBNode.discover();
+      check("Node targets are found on the inspector port", SBNode.targets.length === 1 && /node/i.test(SBNode.targets[0].version || "node"), SBNode.targets);
+      await SBNode.connect(SBNode.targets[0]); await wait(1600);
+      check("the console shows the process's output", $("#node-console").textContent.includes("node fixture tick"));
+      await SBNode.evaluate("fixtureValue * 2"); await wait(400);
+      check("the REPL evaluates in the process", $("#node-console").textContent.includes("42"), $("#node-console").textContent.slice(-200));
+      await SBNode.cdp.send("Debugger.pause"); await wait(900);
+      check("pause stops the process and shows the stack", !!SBNode.paused && $$("#node-stack .node-frame").length > 0);
+      if (SBNode.paused) { await SBNode.cdp.send("Debugger.resume"); await wait(300); }
+      check("resume runs it again", !SBNode.paused);
+      SBNode.disconnect();
+    } else {
+      out.notes = (out.notes || []).concat("Node panel: no node binary, live checks skipped");
+    }
+
+    // Claude: no network call in the tests; the panel and its state only.
+    const claude = await DevTools.rpc("Claude.state");
+    check("Claude reports its model", claude.model === "claude-opus-5-5", claude);
+    DevTools.showPanel("claude"); await wait(300);
+    check("Claude shows the key form or the chat", claude.hasKey ? !$("#claude-chat").hidden : !$("#claude-key-form").hidden);
+    check("context can be attached", $$("#claude-contexts input").length === 6);
+    const context = await SBClaude.gather();
+    check("attached context is wrapped as data", context.startsWith("<context>") && context.includes("<page>"), context.slice(0, 200));
+
+    // The JSON Viewer inside Network's Response tab.
+    await evalPage(`fetch("/ext/data.json").then((r) => r.json())`);
+    await wait(700);
+    DevTools.showPanel("network"); await wait(200);
+    const netPanel = DevTools.panels.network;
+    const jsonRequest = Array.from(netPanel.requests.values()).reverse().find((r) => r.url.includes("/ext/data.json"));
+    check("the JSON request is listed", !!jsonRequest);
+    if (jsonRequest) {
+      // The page hooks deliver the body a moment after the request finishes.
+      for (let i = 0; i < 20 && !(netPanel.requests.get(jsonRequest.id) || {}).responseBody; i++) {
+        try { const updated = await DevTools.rpc("Network.getResponseBody", { id: jsonRequest.id }); if (updated.responseBody) netPanel.requests.set(updated.id, updated); } catch (_) {}
+        await wait(150);
+      }
+      netPanel.select(jsonRequest.id); await wait(200);
+      netPanel.setDetailTab("response"); netPanel.renderDetail(); await wait(700);
+      const body = $("#network-detail-body");
+      check("Response shows JSON as a tree", !!body.querySelector(".nv-json-view") && body.textContent.includes("orders"), body.textContent.slice(0, 200));
+      const codeButton = Array.from(body.querySelectorAll(".nv-seg-item")).find((b) => b.textContent === "Code");
+      if (codeButton) { codeButton.click(); await wait(200); }
+      check("…or as code, at a click", !body.querySelector(".nv-json-view"));
+      const treeButton = Array.from(body.querySelectorAll(".nv-seg-item")).find((b) => b.textContent === "JSON tree");
+      if (treeButton) treeButton.click();
+      netPanel.closeDetail();
+    }
+    DevTools.showPanel("elements"); await wait(100);
+  }
+
   // ---- Disable JavaScript, Clear site data (last: they reload and wipe the fixture's state) ----
   if (SBDebugger.available) {
     const statusText = async () => {

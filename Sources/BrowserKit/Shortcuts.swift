@@ -158,6 +158,7 @@ public enum Shortcuts {
         ShortcutCommand("showDevToolsConsole:", "JavaScript Console", menu: "Develop", KeyShortcut("j", [.command, .option]), safari: "⌥⌘C", chrome: "⌥⌘J"),
         ShortcutCommand("inspectElementMode:", "Inspect Elements", menu: "Develop", KeyShortcut("c", [.command, .option]), safari: "—", chrome: "⌥⌘C"),
         ShortcutCommand("showRecorder:", "Show Recording Log", menu: "Develop", KeyShortcut("l", [.command, .option, .control]), safari: "—", chrome: "—"),
+        ShortcutCommand("pickColor:", "Pick Color…", menu: "Develop", KeyShortcut("c", [.command, .option, .control]), safari: "—", chrome: "— (Color Picker extension)"),
         ShortcutCommand("performMiniaturize:", "Minimize", menu: "Window", KeyShortcut("m"), safari: "⌘M", chrome: "⌘M"),
         ShortcutCommand("showDownloadsWindow:", "Downloads", menu: "Window", KeyShortcut("l", [.command, .option]), safari: "⌥⌘L", chrome: "⇧⌘J"),
         // Handled by the window: not in the menu, and not changeable.

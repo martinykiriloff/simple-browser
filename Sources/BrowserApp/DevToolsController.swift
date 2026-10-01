@@ -37,7 +37,7 @@ final class DevToolsController: NSObject, WKScriptMessageHandler, WKNavigationDe
     private(set) var protocolState = "pending"
     /// While the page is paused its JavaScript cannot run, so agent calls
     /// would hang until resume. They fail fast instead.
-    private var isPaused = false
+    private(set) var isPaused = false
     private var protocolRequests: [String: ProtocolRequest] = [:]
     /// Diagnostics: recent script calls into the page and how many are outstanding.
     private var pageCallLog: [String] = []
@@ -327,6 +327,8 @@ final class DevToolsController: NSObject, WKScriptMessageHandler, WKNavigationDe
 
         case _ where Self.toolMethods.contains(method):
             return try await handleTool(method, params)
+        case _ where Self.isExtensionMethod(method):
+            return try await handleExtension(method, params)
 
         // Features that only the inspector protocol has. Our tree's node ids
         // are the agent's, so each call first finds the protocol's id.
@@ -943,7 +945,7 @@ final class DevToolsController: NSObject, WKScriptMessageHandler, WKNavigationDe
 
     // MARK: - Cookies
 
-    private func cookieStore() throws -> WKHTTPCookieStore {
+    func cookieStore() throws -> WKHTTPCookieStore {
         guard let page else { throw DevToolsError.noPage }
         return page.configuration.websiteDataStore.httpCookieStore
     }

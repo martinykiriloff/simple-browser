@@ -26,6 +26,13 @@ if ! curl -s -m 2 -o /dev/null http://127.0.0.1:8765/; then
   sleep 1
 fi
 
+# A Node.js process to debug from the Node panel, when Node is installed.
+NODE_PID=""
+if command -v node >/dev/null 2>&1; then
+  node --inspect=127.0.0.1:9339 -e 'globalThis.fixtureValue = 21; setInterval(() => console.log("node fixture tick"), 700)' >/dev/null 2>&1 &
+  NODE_PID=$!
+fi
+
 pkill -x SimpleBrowser 2>/dev/null || true
 sleep 0.5
 "$APP" --show-devtools --devtools-script "$ROOT/Tests/Fixtures/devtools/drive-all.js" \
@@ -38,6 +45,7 @@ for _ in $(seq 1 360); do
 done
 sleep 1
 kill "$APP_PID" 2>/dev/null || true
+[ -n "$NODE_PID" ] && kill "$NODE_PID" 2>/dev/null || true
 
 if [ ! -f "$REPORT" ]; then
   echo "✘ no report was written (the app did not finish the driver)" >&2

@@ -128,6 +128,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Settings → Extensions, from an extension's button.
     @objc func showExtensionsSettings(_ sender: Any?) { settingsWindow.show(.extensions) }
 
+    /// Develop → Developer Extensions → one of them. DevTools that are open
+    /// show or hide its panel now; page hooks apply to tabs opened afterwards.
+    @objc func toggleDevExtension(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let ext = DevExtension(rawValue: raw) else { return }
+        ext.isEnabled.toggle()
+        for controller in controllers { controller.devTools?.emit("Ext.changed", ["extension": raw, "enabled": ext.isEnabled]) }
+    }
+
+    /// Develop → Pick Color: any pixel on screen, its hex on the clipboard.
+    @objc func pickColor(_ sender: Any?) {
+        Task { await DevExtension.pickColorToPasteboard(near: frontmostBrowser?.window) }
+    }
+
     /// Settings → Developer, from Develop → AI Agent Server….
     @objc func showDeveloperSettings(_ sender: Any?) { settingsWindow.show(.developer, sender: sender) }
 
@@ -523,6 +536,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case #selector(reopenClosedTab(_:)): return canReopenClosedTab
         case #selector(reopenLastClosedWindow(_:)): return !closedWindows.isEmpty
         case #selector(reopenLastSession(_:)): return !restoredPrevious && !(session.previous?.isEmpty ?? true)
+        case #selector(toggleDevExtension(_:)):
+            if let raw = menuItem.representedObject as? String, let ext = DevExtension(rawValue: raw) { menuItem.state = ext.isEnabled ? .on : .off }
+            return true
+        case #selector(pickColor(_:)): return DevExtension.colorPicker.isEnabled
         default: return true
         }
     }

@@ -243,6 +243,7 @@ final class BrowserWindowController: NSWindowController,
         translator.install(into: configuration)
         contextMenu.install(into: configuration)
         reader.install(into: configuration)
+        DevExtension.install(into: configuration)
         // Measured: in this app WebKit leaves `mediaDevicesEnabled` off, and
         // a page then has no `navigator.mediaDevices` at all, so no site can
         // even ask for the camera. A browser has to offer it; what a site

@@ -206,6 +206,26 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, SCRIPT, "application/javascript")
         elif self.path.startswith("/fx/"):
             self.fixture_get()
+        elif self.path == "/ext/clockwork-api":
+            # A response a Laravel app with Clockwork would send: its profile is at /__clockwork/<id>.
+            self._send(200, b'{"ok":true}', "application/json", {"X-Clockwork-Id": "1700000000-0001-123", "X-Clockwork-Path": "/__clockwork/", "X-Clockwork-Version": "5.2"})
+        elif self.path.startswith("/__clockwork/1700000000-0001-123"):
+            profile = {
+                "id": "1700000000-0001-123", "method": "GET", "uri": "/ext/clockwork-api", "controller": "App\\Http\\Controllers\\OrderController@index",
+                "responseStatus": 200, "responseDuration": 182.4, "memoryUsage": 18874368, "time": 1700000000.5, "databaseDuration": 31.5,
+                "databaseQueries": [
+                    {"query": "select * from `orders` where `user_id` = 7", "duration": 4.1, "connection": "mysql", "file": "app/Http/Controllers/OrderController.php", "line": 21},
+                    {"query": "select * from `items` where `order_id` = 1", "duration": 9.0, "connection": "mysql", "file": "app/Models/Order.php", "line": 40},
+                    {"query": "select * from `items` where `order_id` = 2", "duration": 9.2, "connection": "mysql", "file": "app/Models/Order.php", "line": 40},
+                    {"query": "select * from `items` where `order_id` = 3", "duration": 9.2, "connection": "mysql", "file": "app/Models/Order.php", "line": 40},
+                ],
+                "log": [{"level": "error", "message": "Payment gateway timed out", "file": "app/Services/Pay.php", "line": 88}],
+                "timelineData": {"total": {"description": "Total execution time", "start": 1700000000.5, "end": 1700000000.68, "duration": 182.4}},
+                "viewsData": [{"description": "orders.index", "data": {"name": "orders.index"}}],
+            }
+            self._send(200, json.dumps(profile).encode(), "application/json")
+        elif self.path == "/ext/data.json":
+            self._send(200, json.dumps({"user": {"id": 7, "name": "Ada"}, "orders": [{"id": 1, "total": 9.5}, {"id": 2, "total": 12}]}).encode(), "application/json")
         else:
             self._send(404, b"not found")
 

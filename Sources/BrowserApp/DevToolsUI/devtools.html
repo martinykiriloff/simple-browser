@@ -15,6 +15,9 @@
     <button class="icon-button" id="btn-device" title="Toggle device toolbar">
       <svg viewBox="0 0 20 20" width="16" height="16"><path fill="currentColor" d="M2 4h11v2H4v8h4v2H2V4zm12 3h4v9h-4V7zm1 1v7h2V8h-2z"/></svg>
     </button>
+    <button class="icon-button" id="btn-colorpick" title="Pick a colour from anywhere on screen (copies its hex)">
+      <svg viewBox="0 0 20 20" width="16" height="16"><path fill="currentColor" d="M14.6 2.6a2.3 2.3 0 013.2 3.2l-2.1 2.1.9.9-1.1 1.1-.9-.9-6.9 6.9c-.5.5-1.1.8-1.8.9l-1.7.3-.9.9-1.1-1.1.9-.9.3-1.7c.1-.7.4-1.3.9-1.8l6.9-6.9-.9-.9 1.1-1.1.9.9 2.2-2zM11.2 8.1l-6.8 6.8c-.3.3-.4.6-.5.9l-.2 1 1-.2c.3-.1.6-.2.9-.5l6.8-6.8-1.2-1.2z"/></svg>
+    </button>
     <div class="tabbar-divider"></div>
   </div>
   <div class="tabs" id="tabs">
@@ -27,6 +30,11 @@
     <button class="tab" data-panel="application">Application</button>
     <button class="tab" data-panel="agent" hidden title="What an AI agent connected over MCP is doing in this tab">Agent</button>
     <button class="tab" data-panel="audits">Audits</button>
+    <button class="tab" data-panel="components" hidden title="React Developer Tools: the component tree, props, hooks and state">Components</button>
+    <button class="tab" data-panel="datalayer" hidden title="Every push to window.dataLayer (Google Tag Manager, gtag) and the GA4 hits sent">dataLayer</button>
+    <button class="tab" data-panel="php" title="Laravel / PHP: Clockwork and Debugbar profiles, Xdebug triggers">PHP</button>
+    <button class="tab" data-panel="node" title="Debug a Node.js process started with --inspect">Node</button>
+    <button class="tab" data-panel="claude" title="Ask Claude about this page, with DevTools' context attached">Claude</button>
   </div>
   <div class="tabbar-right">
     <span class="badges" id="badges"></span>
@@ -367,6 +375,133 @@
     <div class="scroll" id="agent-list"></div>
   </section>
 
+  <!-- Components: React Developer Tools -->
+  <section class="panel" id="panel-components">
+    <div class="toolbar">
+      <input type="search" id="react-filter" placeholder="Search components">
+      <label class="check" title="Show host elements (div, span…) as well as components"><input type="checkbox" id="react-host"> Host elements</label>
+      <button class="text-button" id="react-from-elements" title="Select the component that rendered the element selected in Elements">From Elements</button>
+      <button class="icon-button" id="react-refresh" title="Refresh">&#8635;</button>
+      <span class="toolbar-spacer"></span>
+      <span class="muted" id="react-status"></span>
+    </div>
+    <div class="split horizontal ext-split" id="react-split">
+      <div class="split-main scroll" id="react-tree" tabindex="0"></div>
+      <div class="split-divider" data-split="react-split"></div>
+      <div class="split-side scroll" id="react-detail"></div>
+    </div>
+  </section>
+
+  <!-- dataLayer -->
+  <section class="panel" id="panel-datalayer">
+    <div class="toolbar">
+      <button class="icon-button" id="dl-clear" title="Clear">&#128683;</button>
+      <input type="search" id="dl-filter" placeholder="Filter events and values">
+      <label class="check"><input type="checkbox" id="dl-hits" checked> GA4 hits</label>
+      <span class="chips" id="dl-containers"></span>
+      <span class="toolbar-spacer"></span>
+      <button class="text-button" id="dl-model" title="Every push merged, as Tag Manager's variables read it">Merged model</button>
+      <button class="text-button" id="dl-push" title="Push a test event to the page's dataLayer">Push…</button>
+      <button class="text-button" id="dl-copy" title="Copy every push as JSON">Copy JSON</button>
+    </div>
+    <div class="split horizontal ext-split" id="dl-split">
+      <div class="split-main scroll" id="dl-list"></div>
+      <div class="split-divider" data-split="dl-split"></div>
+      <div class="split-side scroll" id="dl-detail"></div>
+    </div>
+  </section>
+
+  <!-- PHP: Clockwork, Laravel Debugbar, Xdebug -->
+  <section class="panel" id="panel-php">
+    <div class="toolbar">
+      <span class="muted">Xdebug</span>
+      <span class="nv-seg" id="php-xdebug">
+        <button class="nv-seg-item" data-mode="debug" title="Set XDEBUG_SESSION for this site">Debug</button>
+        <button class="nv-seg-item" data-mode="profile" title="Set XDEBUG_PROFILE for this site">Profile</button>
+        <button class="nv-seg-item" data-mode="trace" title="Set XDEBUG_TRACE for this site">Trace</button>
+      </span>
+      <input type="text" id="php-idekey" placeholder="IDE key" title="IDE key sent with the trigger" style="width:90px">
+      <span class="muted" id="php-host"></span>
+      <span class="toolbar-spacer"></span>
+      <button class="icon-button" id="php-refresh" title="Refresh">&#8635;</button>
+    </div>
+    <div class="split horizontal ext-split" id="php-split">
+      <div class="split-main scroll" id="php-list"></div>
+      <div class="split-divider" data-split="php-split"></div>
+      <div class="split-side" id="php-detail"></div>
+    </div>
+  </section>
+
+  <!-- Node.js -->
+  <section class="panel" id="panel-node">
+    <div class="toolbar">
+      <span class="muted">Ports</span>
+      <input type="text" id="node-ports" style="width:110px" title="Inspector ports to look on, comma-separated">
+      <button class="text-button" id="node-discover">Refresh</button>
+      <span class="muted" id="node-status"></span>
+      <span class="toolbar-spacer"></span>
+      <button class="text-button" id="node-disconnect" disabled>Disconnect</button>
+    </div>
+    <div id="node-targets" class="node-targets"></div>
+    <div id="node-connected" class="node-connected" hidden>
+      <div class="toolbar">
+        <button class="text-button" id="node-pause" disabled>⏸ Pause</button>
+        <button class="text-button" id="node-over" disabled title="Step over">Step over</button>
+        <button class="text-button" id="node-into" disabled title="Step into">Step into</button>
+        <button class="text-button" id="node-out" disabled title="Step out">Step out</button>
+        <label class="check"><input type="checkbox" id="node-pause-exceptions"> Pause on uncaught exceptions</label>
+        <span class="muted" id="node-reason"></span>
+      </div>
+      <div class="node-layout">
+        <div class="node-side">
+          <input type="search" id="node-script-filter" placeholder="Filter scripts">
+          <div class="scroll" id="node-scripts"></div>
+        </div>
+        <div class="node-main">
+          <div class="scroll" id="node-source"></div>
+          <div class="node-repl">
+            <div class="scroll" id="node-console"></div>
+            <textarea id="node-input" rows="1" spellcheck="false" placeholder="Evaluate in the Node process (in the selected frame while paused)"></textarea>
+          </div>
+        </div>
+        <div class="node-side node-right">
+          <div class="react-section-title">Call stack</div>
+          <div id="node-stack"></div>
+          <div class="scroll" id="node-scope"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Claude -->
+  <section class="panel" id="panel-claude">
+    <div class="toolbar">
+      <button class="text-button" id="claude-new" title="Start a new conversation">New chat</button>
+      <button class="text-button" id="claude-copy" title="Copy the conversation as Markdown">Copy</button>
+      <span class="toolbar-spacer"></span>
+      <span class="muted" id="claude-model"></span>
+      <button class="text-button" id="claude-forget-key" hidden title="Remove the API key from the keychain">Remove key</button>
+    </div>
+    <div id="claude-key-form" class="claude-key-form" hidden>
+      <div class="ext-empty-title">Connect Claude</div>
+      <div class="muted">Paste an Anthropic API key (console.anthropic.com → API Keys). It is kept in your macOS keychain and only the app sends it, to api.anthropic.com. <code>ANTHROPIC_API_KEY</code> in the app's environment works too.</div>
+      <div class="claude-key-row"><input type="password" id="claude-key" placeholder="sk-ant-…" autocomplete="off"><button class="text-button primary" id="claude-save-key">Save</button></div>
+    </div>
+    <div id="claude-chat" class="claude-chat" hidden>
+      <div class="scroll" id="claude-messages"></div>
+      <div class="claude-compose">
+        <div class="claude-contexts" id="claude-contexts"><span class="muted">Attach:</span></div>
+        <textarea id="claude-input" rows="3" spellcheck="true" placeholder="Ask about this page… (⌘↩ to send)"></textarea>
+        <div class="claude-actions">
+          <select id="claude-effort" title="How hard Claude thinks"><option value="low">Quick</option><option value="medium" selected>Balanced</option><option value="high">Thorough</option></select>
+          <span class="toolbar-spacer"></span>
+          <button class="text-button" id="claude-stop" hidden>Stop</button>
+          <button class="text-button primary" id="claude-send">Send</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <section class="panel" id="panel-audits">
     <div class="toolbar">
       <button class="text-button primary" id="audits-run">Analyze page</button>
@@ -530,6 +665,12 @@
 <script src="rendering.js"></script>
 <script src="animations.js"></script>
 <script src="command-menu.js"></script>
+<script src="ext-common.js"></script>
+<script src="ext-react.js"></script>
+<script src="ext-datalayer.js"></script>
+<script src="ext-php.js"></script>
+<script src="ext-node.js"></script>
+<script src="ext-claude.js"></script>
 <script>DevTools.start();</script>
 </body>
 </html>

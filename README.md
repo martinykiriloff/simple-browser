@@ -468,6 +468,7 @@ catalogue, and the feature self-test fails if the menu bar drifts from it.
 | JavaScript Console | ⌥⌘J | ⌥⌘C | ⌥⌘J |
 | Inspect Elements | ⌥⌘C | — | ⌥⌘C |
 | Show Recording Log | ⌃⌥⌘L | — | — |
+| Pick Color… | ⌃⌥⌘C | — | — (Color Picker extension) |
 | Downloads | ⌥⌘L | ⌥⌘L | ⇧⌘J |
 | Show tab 1–9 | ⌘1–⌘9 | ⌘1–9 | ⌘1–8, ⌘9 last |
 | Next tab | ⇧⌘] | ⇧⌘] / ⌃⇥ | ⌥⌘→ / ⌃⇥ |
@@ -708,6 +709,29 @@ closed nothing is attached, so pages run at full speed.
 ```sh
 scripts/test-devtools.sh      # runs every check below against the debug build
 ```
+
+### Developer extensions
+
+Seven developer extensions ship with the browser, each on by default and
+switched in **Develop → Developer Extensions**. They are built in rather than
+installed: React DevTools, Clockwork and their kind are Chrome extensions
+written against `chrome.devtools`, which WebKit's extension API does not
+have, so each is rebuilt on these DevTools.
+
+| Extension | What it does |
+|---|---|
+| **React Developer Tools** | A **Components** panel, shown once a page renders with React: the component tree (host elements on request), search, props, hooks with `useState` / `useReducer` values editable in place, class state, owners, source location, hover to highlight, *From Elements* to find the component that rendered the selected element, *Copy for AI*. It installs the same global hook React DevTools does, before the page's scripts run. |
+| **dataLayer Inspector** | A **dataLayer** panel, shown once a page uses one: every push to `window.dataLayer` from document start, including gtag's `arguments` and pushes made after Tag Manager replaces `push`, beside the GA4 hits the page sent (parsed from the network log). Containers found on the page, the merged model, a test push, export as JSON. Renamed layers (`gtm.js?l=…`) are followed. |
+| **Laravel / PHP Debug** | A **PHP** panel for apps with Clockwork or Laravel Debugbar: each instrumented request's server profile, fetched by the app with the page's cookies. Overview, database queries with repeated query shapes (N+1) marked, logs, timeline, views, *Copy for AI*. The Xdebug triggers the "Xdebug helper" extensions set — `XDEBUG_SESSION`, `XDEBUG_PROFILE`, `XDEBUG_TRACE` with your IDE key — are a click away and need neither. |
+| **Node.js Debugger** | A **Node** panel that finds processes started with `node --inspect` on the ports you list, as chrome://inspect does, and debugs them over the Chrome DevTools Protocol: console output, a REPL (in the paused frame when paused), scripts, breakpoints from the gutter, pause on uncaught exceptions, pause, resume, step, call stack and scope. |
+| **Claude** | A **Claude** panel: ask about the page with what DevTools sees attached — the page, the selected element with its HTML and matched CSS, console errors with stacks, failed requests, the selected request with its bodies, the selected React component. Answers stream in from Claude Opus 5.5. The app makes the call with your Anthropic API key, kept in the macOS keychain (or `ANTHROPIC_API_KEY`); pages never see it. |
+| **Color Picker** | **Develop → Pick Color…** (⌃⌥⌘C) and the eyedropper button in DevTools' toolbar sample any pixel on screen with macOS's colour sampler and copy its hex; RGB, HSL and SwiftUI forms one click away. The Styles colour picker's eyedropper uses it too, since WebKit has no `EyeDropper`. |
+| **JSON Viewer** | A JSON document opened in a tab shows as a collapsible tree with Raw and Pretty views, a filter, *Expand all*, and paths copied with a click (`orders[1].total`); light and dark. In DevTools, Network's Response tab shows JSON responses as the same kind of tree, or as code, as you last chose. |
+
+React, dataLayer and JSON Viewer add scripts to pages, so turning them on or
+off applies to tabs opened afterwards; the panels follow at once. Not done:
+the Profiler tab of React DevTools; profiling Node (CPU and heap) — the Node
+panel debugs; Clockwork's own XHR history beyond what the page loaded.
 
 ### AI agents (MCP)
 

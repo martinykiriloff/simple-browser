@@ -890,6 +890,8 @@
 
     // ⌘F in the detail pane: the pane's own find, if it has one.
     findInDetail() {
+      const json = this.activeView && this.activeView.jsonView;
+      if (json && json.searchInput) { json.searchInput.focus(); json.searchInput.select(); return true; }
       const view = this.activeView && (this.activeView.view || this.activeView);
       if (!view || typeof view.openFind !== "function") return false;
       view.openFind();

@@ -87,7 +87,8 @@ const ColorPicker = window.ColorPicker = {
     const swatch = h("div", { class: "cp-swatch" }, h("div", { class: "cp-swatch-color" }));
     const value = h("input", { type: "text", class: "cp-value", spellcheck: "false", "aria-label": "Colour value" });
     const kind = h("button", { class: "text-button cp-kind", title: "Switch between hex, rgb and hsl" });
-    const dropper = window.EyeDropper ? h("button", { class: "icon-button cp-dropper", title: "Pick a colour from the screen" }, "⌖") : null;
+    // WebKit has no EyeDropper; the app's screen sampler (Color Picker extension) stands in.
+    const dropper = window.EyeDropper || (window.SBExt && SBExt.enabled("colorPicker")) ? h("button", { class: "icon-button cp-dropper", title: "Pick a colour from the screen" }, "⌖") : null;
     this.el = h("div", { class: "color-picker popup-panel", role: "dialog", "aria-label": "Colour picker" },
       area, h("div", { class: "cp-row" }, dropper, swatch, h("div", { class: "cp-sliders" }, hue, alpha)),
       h("div", { class: "cp-row" }, value, kind));
@@ -128,7 +129,11 @@ const ColorPicker = window.ColorPicker = {
     });
     value.addEventListener("change", () => this.setText(value.value));
     if (dropper) dropper.addEventListener("click", async () => {
-      try { const result = await new window.EyeDropper().open(); this.setText(result.sRGBHex); } catch (_) {}
+      try {
+        if (window.EyeDropper) { const result = await new window.EyeDropper().open(); this.setText(result.sRGBHex); return; }
+        const picked = await DevTools.rpc("ColorPicker.sample");
+        if (picked) this.setText(picked.hex);
+      } catch (_) {}
     });
     this.el.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); this.close(false); } });
     this.outside = (e) => { if (this.el && !this.el.contains(e.target) && e.target !== anchor) this.close(true); };

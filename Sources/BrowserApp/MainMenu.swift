@@ -282,6 +282,18 @@ enum MainMenu {
         userAgentItem.submenu = userAgents
 
         menu.addItem(.separator())
+        let pick = menu.addItem(withTitle: "Pick Color…", action: #selector(AppDelegate.pickColor(_:)), keyEquivalent: "c")
+        pick.keyEquivalentModifierMask = [.command, .control, .option]
+        let extensions = NSMenu(title: "Developer Extensions")
+        for ext in DevExtension.allCases {
+            let item = extensions.addItem(withTitle: ext.title, action: #selector(AppDelegate.toggleDevExtension(_:)), keyEquivalent: "")
+            item.representedObject = ext.rawValue
+        }
+        extensions.addItem(.separator())
+        let note = extensions.addItem(withTitle: "React, dataLayer and JSON Viewer apply to new tabs", action: nil, keyEquivalent: "")
+        note.isEnabled = false
+        let extensionsItem = menu.addItem(withTitle: "Developer Extensions", action: nil, keyEquivalent: "")
+        extensionsItem.submenu = extensions
         menu.addItem(withTitle: "AI Agent Server…", action: #selector(AppDelegate.showDeveloperSettings(_:)), keyEquivalent: "")
 
         menu.addItem(.separator())
