@@ -522,6 +522,65 @@ try {
     Drawer.hide();
   }
 
+  // ---- Memory: heap snapshots, comparison, heap size over time -------------------------
+  if (SBDebugger.available) {
+    const mem = DevTools.panels.memory;
+    DevTools.showPanel("memory"); await wait(300);
+    await DevTools.rpc("Console.evaluate", { expression: "class CartItem { constructor(i) { this.i = i; this.label = 'item ' + i; } }; window.CartItem = CartItem; window.__cart = Array.from({ length: 50 }, (_, i) => new CartItem(i)); 1" });
+    const first = await mem.takeSnapshot();
+    const cart = first.summary.get("CartItem");
+    out.heap = { objects: first.nodeCount, total: first.total, parseMs: Math.round(first.parseMs), cart };
+    check("heap snapshot summarises objects by constructor", cart && cart.count >= 50 && cart.shallow > 0, out.heap);
+    check("retained sizes come from the dominator tree", cart && cart.retained >= cart.shallow && Array.from(first.summary.values()).some((r) => r.retained > r.shallow * 2), cart);
+    check("the summary table lists the class", !!document.querySelector('#memory-body tr[data-class="CartItem"]'));
+    await DevTools.rpc("Console.evaluate", { expression: "window.__cart2 = Array.from({ length: 30 }, (_, i) => new CartItem(100 + i)); 1" });
+    const second = await mem.takeSnapshot();
+    const diff = SBHeapSnapshot.compare(first, second).find((r) => r.name === "CartItem");
+    check("comparison finds the new objects", diff && diff.added >= 30 && diff.delta >= 30, diff);
+    const view = document.querySelector("#memory-view");
+    view.value = "comparison"; view.dispatchEvent(new Event("change")); await wait(200);
+    check("comparison view", !!document.querySelector('#memory-body tr[data-class="CartItem"]') && document.querySelector("#memory-body thead").textContent.includes("# New"));
+    view.value = "summary"; view.dispatchEvent(new Event("change"));
+    for (let i = 0; i < 40 && !mem.samples.length; i++) await wait(100);
+    check("JS heap size over time", mem.samples.length > 0 && mem.samples[mem.samples.length - 1].js > 0, { samples: mem.samples.length, error: mem.trackingError });
+    check("readout", /JS heap \d/.test(document.querySelector("#memory-readout").textContent), document.querySelector("#memory-readout").textContent);
+    await DevTools.rpc("Console.evaluate", { expression: "delete window.__cart; delete window.__cart2; 1" });
+  }
+
+  // ---- Audits ------------------------------------------------------------------------------
+  {
+    const audits = DevTools.panels.audits;
+    DevTools.showPanel("audits"); await wait(200);
+    const report = await audits.run();
+    out.auditScores = report.categories.map((c) => c.id + ":" + c.score);
+    check("four categories, scored 0–100", report.categories.length === 4 && report.categories.every((c) => c.score >= 0 && c.score <= 100), out.auditScores);
+    const label = audits.audit("label");
+    check("an unlabelled input is reported, with its node", label && !label.passed && label.items.some((i) => i.selector === "#q" && i.nodeId != null), label);
+    check("missing lang", !audits.audit("html-has-lang").passed);
+    check("missing main landmark", !audits.audit("landmark-one-main").passed);
+    const contrast = audits.audit("color-contrast");
+    check("low-contrast text", !contrast.passed && contrast.items.some((i) => i.selector === "#faint"), contrast.items.map((i) => i.selector + " " + i.detail));
+    check("the button has a name", audits.audit("button-name").passed);
+    check("SEO: no meta description", !audits.audit("meta-description").passed);
+    const linkText = audits.audit("link-text");
+    check("SEO: generic link text", !linkText.passed && linkText.items.some((i) => /click here/.test(i.detail)), linkText.items);
+    check("SEO: no viewport meta", !audits.audit("viewport", "seo").passed);
+    check("SEO: successful status", audits.audit("http-status-code").passed);
+    check("best practices: doctype and charset", audits.audit("doctype").passed && audits.audit("charset").passed);
+    const errorsAudit = audits.audit("errors-in-console");
+    check("best practices: console errors", !errorsAudit.passed && errorsAudit.total >= 2, errorsAudit.total);
+    check("performance: metrics measured", audits.audit("first-contentful-paint").numericValue > 0 && audits.audit("server-response-time").numericValue > 0, [audits.audit("first-contentful-paint").displayValue, audits.audit("server-response-time").displayValue]);
+    check("performance: payload is small", audits.audit("total-byte-weight").passed);
+    check("score gauges", document.querySelectorAll("#audits-body .audit-gauges .audit-gauge").length === 4);
+    document.querySelector('#audits-body .audit[data-audit="label"] .audit-node').click(); await wait(900);
+    const selected = DevTools.panels.elements.nodes.get(DevTools.panels.elements.selectedId);
+    check("a finding reveals its node in Elements", DevTools.activePanel === "elements" && (selected?.attributes || []).includes("q"), selected && selected.attributes);
+    const md = audits.markdown();
+    check("Markdown export", md.startsWith("# Audit report") && md.includes("## Accessibility:") && md.includes("`#q`"), md.slice(0, 300));
+    const json = JSON.parse(audits.json());
+    check("JSON export", json.categories.length === 4 && json.url.startsWith("http://127.0.0.1:8765/"));
+  }
+
   // ---- Performance -------------------------------------------------------------------
   DevTools.showPanel("performance"); await wait(400);
   out.perf = document.querySelector("#vitals").textContent;

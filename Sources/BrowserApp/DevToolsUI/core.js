@@ -125,7 +125,7 @@ const DevTools = window.DevTools = {
     document.addEventListener("keydown", (e) => {
       const meta = e.metaKey || e.ctrlKey;
       if (meta && (e.key === "[" || e.key === "]")) {
-        const order = ["elements", "console", "sources", "network", "performance", "application"];
+        const order = Array.from(document.querySelectorAll("#tabs .tab")).map((t) => t.dataset.panel);
         const i = order.indexOf(this.activePanel);
         this.showPanel(order[(i + (e.key === "]" ? 1 : order.length - 1)) % order.length]);
         e.preventDefault();

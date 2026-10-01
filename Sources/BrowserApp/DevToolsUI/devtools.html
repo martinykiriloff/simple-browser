@@ -23,7 +23,9 @@
     <button class="tab" data-panel="sources">Sources</button>
     <button class="tab" data-panel="network">Network</button>
     <button class="tab" data-panel="performance">Performance</button>
+    <button class="tab" data-panel="memory">Memory</button>
     <button class="tab" data-panel="application">Application</button>
+    <button class="tab" data-panel="audits">Audits</button>
   </div>
   <div class="tabbar-right">
     <span class="badges" id="badges"></span>
@@ -276,6 +278,47 @@
     </div>
   </section>
 
+  <!-- Memory -->
+  <section class="panel" id="panel-memory">
+    <div class="toolbar">
+      <button class="icon-button record" id="memory-snapshot" title="Take heap snapshot">&#9679;</button>
+      <button class="icon-button" id="memory-gc" title="Collect garbage"><svg viewBox="0 0 20 20" width="16" height="16"><path fill="currentColor" d="M7 3h6l1 2h3v1.5H3V5h3l1-2zm-2 4.5h10l-.8 9.5H5.8L5 7.5zm3 1.5v6.5h1.4V9H8zm2.6 0v6.5H12V9h-1.4z"/></svg></button>
+      <button class="icon-button" id="memory-clear" title="Clear all snapshots">&#128683;</button>
+      <div class="tabbar-divider"></div>
+      <select id="memory-view"><option value="summary">Summary</option><option value="comparison">Comparison</option></select>
+      <select id="memory-base" hidden></select>
+      <input type="search" id="memory-filter" placeholder="Class filter">
+      <span class="toolbar-spacer"></span>
+      <span class="muted" id="memory-status"></span>
+      <button class="text-button" id="memory-copy" title="Copy the top classes as Markdown">Copy summary</button>
+    </div>
+    <div class="split horizontal" id="memory-split">
+      <div class="split-side" id="memory-nav">
+        <div class="app-section">JS heap over time</div>
+        <div class="memory-chart-wrap"><canvas id="memory-chart"></canvas><div class="muted" id="memory-readout"></div></div>
+        <div class="app-section">Heap snapshots</div>
+        <div class="scroll" id="memory-snapshots"></div>
+      </div>
+      <div class="split-divider" data-split="memory-split"></div>
+      <div class="split-main"><div class="scroll" id="memory-body"></div></div>
+    </div>
+  </section>
+
+  <!-- Audits -->
+  <section class="panel" id="panel-audits">
+    <div class="toolbar">
+      <button class="text-button primary" id="audits-run">Analyze page</button>
+      <label class="check" title="Reload first, so load metrics are fresh"><input type="checkbox" id="audits-reload"> Reload first</label>
+      <span class="muted" id="audits-status"></span>
+      <span class="toolbar-spacer"></span>
+      <button class="text-button" id="audits-copy-md" title="Copy the report as Markdown">Copy Markdown</button>
+      <button class="text-button" id="audits-copy-json" title="Copy the report as JSON">Copy JSON</button>
+      <button class="text-button" id="audits-save" title="Export the report as JSON">Export JSON…</button>
+      <button class="text-button" id="audits-save-md" title="Export the report as Markdown">Export Markdown…</button>
+    </div>
+    <div class="scroll" id="audits-body"></div>
+  </section>
+
   <!-- Application -->
   <section class="panel" id="panel-application">
     <div class="split horizontal" id="application-split">
@@ -383,6 +426,8 @@
 <script src="performance.js"></script>
 <script src="profiler.js"></script>
 <script src="application.js"></script>
+<script src="memory.js"></script>
+<script src="audits.js"></script>
 <script src="drawer.js"></script>
 <script src="markdown.js"></script>
 <script src="network-tools.js"></script>

@@ -34,7 +34,7 @@ extension DevToolsController {
     /// Requests answered in this file rather than by the agents.
     static let toolMethods: Set<String> = [
         "Network.setBlockedPatterns", "Network.setOverrides", "Network.getHAR",
-        "Emulation.setRendering", "Page.captureScreenshot", "Storage.clearSiteData",
+        "Emulation.setRendering", "Page.captureScreenshot", "Storage.clearSiteData", "DevTools.saveFile",
     ]
 
     /// Isolated-world commands that live in the on-demand tools agent.
@@ -61,6 +61,14 @@ extension DevToolsController {
             return try await captureScreenshot(params)
         case "Storage.clearSiteData":
             return try await clearSiteData()
+        case "DevTools.saveFile":
+            // Reports and exports: the UI has the text, the app asks where to put it.
+            guard let window = view.window else { return false }
+            let panel = NSSavePanel()
+            panel.nameFieldStringValue = params["name"] as? String ?? "devtools.txt"
+            guard await panel.beginSheetModal(for: window) == .OK, let url = panel.url else { return false }
+            try Data((params["text"] as? String ?? "").utf8).write(to: url, options: .atomic)
+            return url.path
         default:
             throw DevToolsError.unknownRequest
         }
