@@ -212,6 +212,70 @@ err, text, _ = call("devtools", selector="#cta")
 check("devtools opens on the element", not err and "selected" in text, text)
 err, text, _ = call("devtools", action="close")
 
+# --- targeting by text, and snapshot diffs
+err, text, _ = call("click", text="Call to action")
+check("click by visible text", not err and "Call to action" in text, text)
+err, text, _ = call("click", text="Sign up", role="button")
+check("click by text and role", not err and 'button "Sign up"' in text, text)
+err, text, _ = call("click", text="No such words anywhere")
+check("missing text is explained", err and "snapshot" in text.lower(), text)
+err, base, _ = call("snapshot", diff=True)
+call("evaluate", expression="document.querySelector('#result').textContent = 'Changed by the test'")
+err, text, _ = call("snapshot", diff=True)
+check("snapshot diff shows only what changed", not err and "+ " in text and "Changed by the test" in text and "Agent fixture" not in text.split("```diff")[-1], text)
+err, text, _ = call("snapshot", diff=True)
+check("snapshot diff with no change says so", "No changes" in text, text)
+
+# --- DevTools-backed tools
+err, text, _ = call("diagnose")
+check("diagnose summarises errors, failures and audits", not err and "**Summary:**" in text and "console error" in text and "missing.json" in text and "audit scores" in text, text)
+err, text, _ = call("run_audit", categories=["accessibility"])
+check("run_audit lists failures with selectors", not err and "Accessibility —" in text and "#noalt" in text, text)
+err, text, _ = call("run_audit", categories=["seo", "performance"])
+check("run_audit seo and performance", not err and "SEO" in text and "## Performance" in text, text)
+
+err, text, _ = call("application_data", kind="manifest")
+check("application_data manifest", not err and "Agent Fixture" in text, text)
+err, text, _ = call("application_data", kind="indexeddb")
+check("application_data indexeddb databases", not err and "fixture-db" in text, text)
+err, text, _ = call("application_data", kind="indexeddb", database="fixture-db", store="todos")
+check("application_data indexeddb records", not err and "Write tests" in text, text)
+
+err, text, _ = call("heap_snapshot")
+check("heap_snapshot by class", not err and "objects" in text and "Class" in text, text)
+call("click", selector="#cta")
+err, text, _ = call("heap_snapshot", compare=True, filter="Leaky")
+check("heap_snapshot compare shows growth", not err and "LeakyThing" in text and "+5000" in text, text)
+
+err, text, _ = call("mock_network", action="block", pattern="*data.json", reload=True)
+err2, text2, _ = call("network_requests", filter="data.json")
+check("mock_network block", not err and "data.json" in text and ("failed" in text2 or "blocked" in text2.lower()), (text, text2))
+call("mock_network", action="clear")
+err, text, _ = call("mock_network", action="override", pattern=SITE + "/data.json", body='{"items":[1,2,3,4,5,6,7]}', reload=True)
+if "inspector protocol" in text:
+    print("– mock_network override: inspector protocol unavailable in this build, skipped")
+else:
+    time.sleep(0.5)
+    err2, text2, _ = call("console_messages", search="data")
+    check("mock_network override serves the mock", not err and "data 7" in text2, (text, text2))
+err, text, _ = call("mock_network", action="clear", reload=True)
+check("mock_network clear", not err and "Blocked: nothing" in text and "Overrides: none" in text, text)
+
+err, text, _ = call("emulate", colorScheme="dark")
+err2, text2, _ = call("evaluate", expression="[matchMedia('(prefers-color-scheme: dark)').matches, getComputedStyle(document.body).backgroundColor]")
+check("emulate dark mode", not err and "true" in text2 and "rgb(1, 2, 3)" in text2, (text, text2))
+err, text, _ = call("emulate", reset=True)
+err2, text2, _ = call("evaluate", expression="getComputedStyle(document.body).backgroundColor")
+check("emulate reset", not err and "rgb(1, 2, 3)" not in text2, (text, text2))
+
+err, text, _ = call("devtools", selector="#cta")
+time.sleep(0.5)
+err, text, _ = call("devtools_selection")
+check("devtools_selection returns the selected element", not err and "#cta" in text and "Computed styles" in text, text)
+call("devtools", action="close")
+err, text, _ = call("devtools_selection")
+check("devtools_selection when closed explains", "not open" in text, text)
+
 # --- navigation
 err, snap, _ = call("snapshot")
 link = ref_for(snap, r'link "Second page"')
@@ -228,6 +292,17 @@ check("bad enum is an error", err, text)
 
 err, text, _ = call("close_tab", tabId=tab)
 check("close_tab", not err, text)
+
+# --- the first tab, whose DevTools' Agent panel scripts/test-agent.sh watches
+err, text, _ = call("list_tabs")
+first = [l for l in text.splitlines() if "Second page" in l]
+if first:
+    first_id = first[0].split()[1] if first[0].startswith("*") else first[0].split()[0]
+    call("select_tab", tabId=first_id)
+    call("snapshot")
+    call("click", text="This text is not on the page")
+    err, text, _ = call("get_page_content")
+    check("acting in the first tab", not err and "You made it" in text, text)
 
 print(f"\n{len(failures)} failed" if failures else "\nall passed")
 sys.exit(1 if failures else 0)

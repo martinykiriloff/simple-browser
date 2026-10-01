@@ -735,7 +735,29 @@ take. Clients that only speak stdio can reach it through
 | `console_messages` `network_requests` `network_request` | Everything the recorder has kept since the tab opened: console with stacks, requests with headers, bodies, timing. `afterId` returns only what is new. |
 | `evaluate` `inspect_element` `performance_metrics` `storage` | JavaScript in the page or the isolated world (a function receives the element); the box model, computed styles and matched CSS rules in cascade order; Core Web Vitals rated, navigation timing, slowest resources; cookies including HttpOnly, local and session storage. |
 | `screenshot` `get_page_content` | Viewport, element or full page as PNG or JPEG, optionally saved; the page as Markdown, text or HTML. |
-| `emulate` `devtools` | Device mode presets or a size; open DevTools for the person, with the element the agent means selected in Elements. |
+| `emulate` | Device mode presets or a size, and the Rendering emulations: `prefers-color-scheme`, `prefers-reduced-motion`, `prefers-contrast`, print media, JavaScript or images off. |
+| `diagnose` | The call to start with: grouped console errors with their source, failed, slow and oversized requests, mixed content, Core Web Vitals rated, and the worst audit failures with selectors, in one Markdown report. |
+| `run_audit` | The Audits panel's checks (accessibility, SEO, best practices, performance), scored the way Lighthouse scores them, each failure with the elements involved and why it matters. |
+| `mock_network` | Block URLs, or answer them with a status, headers and body of the agent's choosing (DevTools' request blocking and local overrides), to test error states and fallbacks. |
+| `heap_snapshot` | JavaScript heap by class after garbage collection; `compare: true` shows what grew since the previous snapshot, for leaks. |
+| `application_data` | IndexedDB databases, stores and records; Cache Storage; the web app manifest; service workers; running animations. |
+| `devtools` `devtools_selection` | Open DevTools for the person on a panel or an element; and the other way round, read the element and the request the person has selected in DevTools ("why is *this* blue?"). |
+
+Targets are a `ref` from `snapshot`, a CSS `selector`, or the visible `text`
+(with an optional `role`), as a person would say "the Sign up button".
+`snapshot` with `diff: true` returns only the lines that changed since the
+agent's previous snapshot of that tab, which keeps long sessions cheap.
+
+**Prompts.** Clients that support MCP prompts offer these as commands (in
+Claude Code, `/mcp__simplebrowser__debug_page` and so on): `debug_page`,
+`audit_page`, `fix_layout`, `test_flow` and `performance_review`. Each one
+walks the agent through the tools in the order that works.
+
+**DevTools' Agent panel.** Once an agent acts in a tab, an **Agent** tab
+appears in that tab's DevTools: every tool call with its arguments, time
+taken, result and screenshots, failures marked, filterable, *Reveal element*
+for selector-based calls, and *Copy session* as Markdown for a bug report or
+to hand to another agent. Calls made before DevTools opened are there too.
 
 It listens on 127.0.0.1 only, and every request needs the bearer token
 unless the person turns that off; a request from a web page (an `Origin`

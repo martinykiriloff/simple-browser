@@ -25,6 +25,7 @@
     <button class="tab" data-panel="performance">Performance</button>
     <button class="tab" data-panel="memory">Memory</button>
     <button class="tab" data-panel="application">Application</button>
+    <button class="tab" data-panel="agent" hidden title="What an AI agent connected over MCP is doing in this tab">Agent</button>
     <button class="tab" data-panel="audits">Audits</button>
   </div>
   <div class="tabbar-right">
@@ -311,6 +312,20 @@
   </section>
 
   <!-- Audits -->
+  <!-- Agent: MCP tool calls in this tab -->
+  <section class="panel" id="panel-agent">
+    <div class="toolbar">
+      <button class="icon-button" id="agent-clear" title="Clear">&#128683;</button>
+      <input type="search" id="agent-filter" placeholder="Filter tool, arguments or result">
+      <label class="check"><input type="checkbox" id="agent-errors"> Errors only</label>
+      <span class="muted" id="agent-client"></span>
+      <span class="toolbar-spacer"></span>
+      <button class="text-button" id="agent-copy" title="Copy the whole session as Markdown">Copy session</button>
+      <button class="text-button" id="agent-save" title="Save the session as Markdown">Export…</button>
+    </div>
+    <div class="scroll" id="agent-list"></div>
+  </section>
+
   <section class="panel" id="panel-audits">
     <div class="toolbar">
       <button class="text-button primary" id="audits-run">Analyze page</button>
@@ -448,6 +463,7 @@
 <script src="application.js"></script>
 <script src="memory.js"></script>
 <script src="audits.js"></script>
+<script src="agent-panel.js"></script>
 <script src="drawer.js"></script>
 <script src="markdown.js"></script>
 <script src="network-tools.js"></script>

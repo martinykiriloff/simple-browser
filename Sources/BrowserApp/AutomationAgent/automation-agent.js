@@ -27,7 +27,7 @@
     return ref;
   }
 
-  function target({ ref, selector }) {
+  function target({ ref, selector, text, role }) {
     if (ref) {
       const el = elementsByRef.get(String(ref).replace(/^\[?ref=|\]$/g, ""))?.deref();
       if (!el) throw new Error(`No element with ref ${ref}. Refs come from the latest snapshot; take a new one.`);
@@ -39,7 +39,38 @@
       if (!el) throw new Error(`Nothing matches the selector ${selector}`);
       return el;
     }
-    throw new Error("Give a ref (from snapshot) or a selector.");
+    if (text) return findByText(String(text), role ? String(role) : null);
+    throw new Error("Give a ref (from snapshot), a selector, or text.");
+  }
+
+  // The element a person would mean by "the Sign in button": its accessible
+  // name or visible text equals the words (else contains them), visible,
+  // interactive before structural, innermost before its containers.
+  function findByText(text, role) {
+    const wanted = clean(text).toLowerCase();
+    if (!wanted) throw new Error("text is empty");
+    const candidates = [];
+    const visitAll = (root) => {
+      for (const el of root.querySelectorAll("*")) {
+        if (el.shadowRoot) visitAll(el.shadowRoot);
+        if (el.localName === "iframe") { const doc = frameDocument(el); if (doc) visitAll(doc); }
+        if (SKIP.has(el.localName) || isOurs(el)) continue;
+        const elRole = roleOf(el) || (isFocusable(el) ? "generic" : null);
+        if (role && elRole !== role) continue;
+        const name = clean(elRole ? nameOf(el, elRole) : "").toLowerCase();
+        const own = name || clean(el.innerText || "").toLowerCase();
+        if (!own || own.length > 400 || !own.includes(wanted)) continue;
+        if (isHidden(el) || !visibleRect(el)) continue;
+        candidates.push({ el, exact: own === wanted || name === wanted, interactive: !!elRole && (INTERACTIVE.has(elRole) || elRole === "generic"), length: own.length });
+      }
+    };
+    visitAll(document);
+    if (!candidates.length) throw new Error(`No visible element${role ? " with role " + role : ""} has the text ${quote(text)}. Take a snapshot to see what is there.`);
+    candidates.sort((a, b) => (b.exact - a.exact) || (b.interactive - a.interactive) || (a.length - b.length));
+    // A container holding only the best match says the same words; take the inner one.
+    let best = candidates[0].el;
+    for (const c of candidates) if (c.el !== best && best.contains(c.el) && c.exact === candidates[0].exact && c.interactive >= candidates[0].interactive) best = c.el;
+    return best;
   }
 
   // querySelector that also looks inside open shadow roots and same-origin iframes.

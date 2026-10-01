@@ -64,6 +64,45 @@ public struct MCPToolResult: Sendable, Equatable {
     }
 }
 
+/// A prompt template: clients such as Claude Code offer these as slash
+/// commands (`/mcp__simplebrowser__debug_page`).
+public struct MCPPrompt: Sendable {
+    public struct Argument: Sendable {
+        public var name: String
+        public var description: String
+        public var required: Bool
+        public init(_ name: String, _ description: String, required: Bool = false) {
+            self.name = name; self.description = description; self.required = required
+        }
+    }
+
+    public var name: String
+    public var title: String
+    public var description: String
+    public var arguments: [Argument]
+    /// The text sent as the user's message; `{name}` is replaced by the argument.
+    public var template: String
+
+    public init(name: String, title: String, description: String, arguments: [Argument] = [], template: String) {
+        self.name = name; self.title = title; self.description = description; self.arguments = arguments; self.template = template
+    }
+
+    var listing: JSONValue {
+        ["name": .string(name), "title": .string(title), "description": .string(description),
+         "arguments": .array(arguments.map { ["name": .string($0.name), "description": .string($0.description), "required": .bool($0.required)] })]
+    }
+
+    /// The template with arguments filled in; missing optional ones read as "the current page".
+    public func render(_ values: [String: String]) -> String {
+        var text = template
+        for argument in arguments {
+            let value = values[argument.name].flatMap { $0.isEmpty ? nil : $0 } ?? "(not given: use the current tab)"
+            text = text.replacingOccurrences(of: "{\(argument.name)}", with: value)
+        }
+        return text
+    }
+}
+
 /// The client that introduced itself in `initialize`.
 public struct MCPClientInfo: Sendable, Equatable {
     public var name: String
@@ -80,10 +119,11 @@ public struct MCPDispatcher: Sendable {
     public var serverVersion: String
     public var instructions: String
     public var tools: [MCPTool]
+    public var prompts: [MCPPrompt]
 
-    public init(serverName: String, serverVersion: String, instructions: String, tools: [MCPTool]) {
+    public init(serverName: String, serverVersion: String, instructions: String, tools: [MCPTool], prompts: [MCPPrompt] = []) {
         self.serverName = serverName; self.serverVersion = serverVersion
-        self.instructions = instructions; self.tools = tools
+        self.instructions = instructions; self.tools = tools; self.prompts = prompts
     }
 
     public enum Outcome: Sendable, Equatable {
@@ -132,7 +172,7 @@ public struct MCPDispatcher: Sendable {
             await onInitialize?(client)
             return .reply(Self.result(id: id, [
                 "protocolVersion": .string(version),
-                "capabilities": ["tools": ["listChanged": false], "logging": [:]],
+                "capabilities": ["tools": ["listChanged": false], "prompts": ["listChanged": false], "logging": [:]],
                 "serverInfo": ["name": .string(serverName), "title": "SimpleBrowser", "version": .string(serverVersion)],
                 "instructions": .string(instructions),
             ]))
@@ -158,7 +198,19 @@ public struct MCPDispatcher: Sendable {
         case "resources/templates/list":
             return .reply(Self.result(id: id, ["resourceTemplates": []]))
         case "prompts/list":
-            return .reply(Self.result(id: id, ["prompts": []]))
+            return .reply(Self.result(id: id, ["prompts": .array(prompts.map(\.listing))]))
+        case "prompts/get":
+            guard let name = params["name"]?.string, let prompt = prompts.first(where: { $0.name == name }) else {
+                return .reply(Self.error(id: id, code: -32602, message: "Unknown prompt: \(params["name"]?.string ?? "")"))
+            }
+            let values = (params["arguments"]?.object ?? [:]).compactMapValues(\.string)
+            if let missing = prompt.arguments.first(where: { $0.required && (values[$0.name] ?? "").isEmpty }) {
+                return .reply(Self.error(id: id, code: -32602, message: "Prompt \(name) needs \(missing.name)"))
+            }
+            return .reply(Self.result(id: id, [
+                "description": .string(prompt.description),
+                "messages": [["role": "user", "content": ["type": "text", "text": .string(prompt.render(values))]]],
+            ]))
         case "logging/setLevel":
             return .reply(Self.result(id: id, [:]))
         default:

@@ -74,7 +74,7 @@ check("access: tokens differ", token != AgentAccessPolicy.makeToken())
 
 // MARK: MCP
 
-let dispatcher = MCPDispatcher(serverName: "simplebrowser", serverVersion: "1.0", instructions: "Use snapshot.", tools: BrowserTools.all)
+let dispatcher = MCPDispatcher(serverName: "simplebrowser", serverVersion: "1.0", instructions: "Use snapshot.", tools: BrowserTools.all, prompts: BrowserTools.prompts)
 let echo: MCPDispatcher.ToolCall = { name, arguments in .text("\(name) \(arguments.jsonString)") }
 func send(_ message: JSONValue) async -> JSONValue? {
     if case .reply(let reply) = await dispatcher.handle(message.encoded(), call: echo) { return reply }
@@ -112,6 +112,25 @@ if case .reply(let reply) = await dispatcher.handle(Data("{nope".utf8), call: ec
 }
 if case .reply(let reply) = await dispatcher.handle(([["jsonrpc": "2.0", "id": 1, "method": "ping"], ["jsonrpc": "2.0", "method": "notifications/x"]] as JSONValue).encoded(), call: echo) {
     check("mcp: a batch answers the requests in it", reply.array?.count == 1)
+}
+
+// MARK: Prompts
+
+let prompts = await send(["jsonrpc": "2.0", "id": 20, "method": "prompts/list"])
+let promptNames = prompts?["result"]?["prompts"]?.array?.compactMap { $0["name"]?.string } ?? []
+check("prompts: listed", promptNames.contains("debug_page") && promptNames.contains("fix_layout"), promptNames)
+check("prompts: advertised in initialize", initialized?["result"]?["capabilities"]?["prompts"] != nil)
+let rendered = await send(["jsonrpc": "2.0", "id": 21, "method": "prompts/get", "params": ["name": "debug_page", "arguments": ["url": "http://localhost:3000"]]])
+let promptText = rendered?["result"]?["messages"]?.array?.first?["content"]?["text"]?.string ?? ""
+check("prompts: arguments are filled in", promptText.contains("http://localhost:3000") && !promptText.contains("{url}"), promptText)
+check("prompts: a missing optional argument reads as the current tab", promptText.contains("current tab"))
+let missingArgument = await send(["jsonrpc": "2.0", "id": 22, "method": "prompts/get", "params": ["name": "fix_layout"]])
+check("prompts: a missing required argument is an error", missingArgument?["error"] != nil)
+check("prompts: an unknown prompt is an error", await send(["jsonrpc": "2.0", "id": 23, "method": "prompts/get", "params": ["name": "nope"]])?["error"] != nil)
+for prompt in BrowserTools.prompts {
+    let mentioned = BrowserTools.all.map(\.name).filter { prompt.template.contains($0) }
+    check("prompts: \(prompt.name) names real tools", !mentioned.isEmpty)
+    check("prompts: \(prompt.name) has no stray placeholders", !prompt.render([:]).contains("{"))
 }
 
 // MARK: Catalog

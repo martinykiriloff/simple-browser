@@ -1,6 +1,8 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>Agent fixture</title>
+<link rel="manifest" href="/manifest.json">
 <style>
+  @media (prefers-color-scheme: dark) { body { background: rgb(1, 2, 3); } }
   .card { padding: 12px; border: 1px solid #ccc; margin: 8px 0; }
   #cta { color: white; background: rgb(10, 100, 200); font-size: 18px; }
   .hidden { display: none; }
@@ -33,6 +35,7 @@
   <ul><li>One</li><li>Two <ul><li>Two point one</li></ul></li></ul>
   <table><tr><th>Name</th><th>Qty</th></tr><tr><td>Apple</td><td>3</td></tr></table>
   <my-widget></my-widget>
+  <img src="/pixel.svg" width="10" height="10" id="noalt">
   <iframe src="/frame.html" title="Inner frame" width="300" height="80"></iframe>
   <div style="height:1500px"></div>
   <footer><button id="bottom">Bottom button</button></footer>
@@ -44,6 +47,13 @@
   document.getElementById('keys').addEventListener('keydown', e => { e.currentTarget.textContent += e.key + (e.isTrusted ? '' : '(untrusted)') + ' '; });
   document.addEventListener('click', e => { window.lastClickTrusted = e.isTrusted; }, true);
   localStorage.setItem('fixture', 'yes');
+  const open = indexedDB.open('fixture-db', 1);
+  open.onupgradeneeded = () => open.result.createObjectStore('todos', { keyPath: 'id' });
+  open.onsuccess = () => { const tx = open.result.transaction('todos', 'readwrite'); tx.objectStore('todos').put({ id: 1, title: 'Write tests' }); };
+  window.leak = [];
+  document.getElementById('cta').addEventListener('click', () => { for (let i = 0; i < 5000; i++) window.leak.push(new LeakyThing(i)); });
+  class LeakyThing { constructor(i) { this.i = i; this.payload = 'x'.repeat(50); } }
+  window.LeakyThing = LeakyThing;
   console.log('fixture loaded');
   fetch('/data.json').then(r => r.json()).then(d => console.info('data', d.items.length));
 </script>

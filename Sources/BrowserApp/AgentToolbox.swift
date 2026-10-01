@@ -9,6 +9,34 @@ import InspectKit
 final class AgentTabState {
     /// The person has been told an agent is driving this tab.
     var announced = false
+    /// The last snapshot per scope (selector or ref), for `diff`, and the URL it was of.
+    var snapshots: [String: (url: String, text: String)] = [:]
+    /// Class counts and sizes from the last heap snapshot, for `compare`.
+    var heap: [String: (count: Int, size: Int)]?
+    /// Responses `mock_network` serves instead of the network's.
+    var mocks: [Mock] = []
+    /// Every tool call in this tab, for DevTools' Agent panel.
+    var calls: [JSONValue] = []
+    /// The DevTools that has been sent calls, and how many of them.
+    weak var shownIn: DevToolsController?
+    var pushed = 0
+
+    /// Sends DevTools' Agent panel the calls it has not had yet.
+    func push(to tools: DevToolsController?) {
+        guard let tools else { return }
+        if shownIn !== tools { shownIn = tools; pushed = 0 }
+        pushed = min(pushed, calls.count)
+        guard pushed < calls.count else { return }
+        let payload = JSONValue.array(Array(calls[pushed...]))
+        pushed = calls.count
+        Task { [weak self, weak tools] in
+            guard let tools else { return }
+            for _ in 0..<100 where tools.view.isLoading { try? await Task.sleep(for: .milliseconds(100)) }
+            let answer = try? await tools.evaluateInUI("return window.AgentPanel ? AgentPanel.add(\(payload.jsonString)) : -1")
+            // Not taken (the UI was not ready): send everything next time.
+            if (answer as? NSNumber)?.intValue ?? -1 < 0 { self?.pushed = 0 }
+        }
+    }
 }
 
 /// The MCP tools, implemented against the browser's tabs. Everything here
@@ -48,10 +76,11 @@ final class AgentToolbox {
         }
         let milliseconds = Int(Date().timeIntervalSince(started) * 1000)
         onActivity?("\(name)\(result.isError ? " ✗" : "") · \(milliseconds) ms")
+        record(name, arguments, result, started: started, milliseconds: milliseconds)
         return result
     }
 
-    private func perform(_ name: String, _ a: JSONValue) async throws -> MCPToolResult {
+    func perform(_ name: String, _ a: JSONValue) async throws -> MCPToolResult {
         switch name {
         case "list_tabs": return listTabs()
         case "new_tab": return try await newTab(a)
@@ -82,8 +111,34 @@ final class AgentToolbox {
         case "storage": return try await storage(a)
         case "emulate": return try await emulate(a)
         case "devtools": return try await devtools(a)
+        case "diagnose": return try await diagnose(a)
+        case "run_audit": return try await runAudit(a)
+        case "mock_network": return try await mockNetwork(a)
+        case "heap_snapshot": return try await heapSnapshot(a)
+        case "application_data": return try await applicationData(a)
+        case "devtools_selection": return try await devtoolsSelection(a)
         default: throw ToolError("Unknown tool \(name)")
         }
+    }
+
+    /// Keeps the call for the tab it acted on and shows it in that tab's DevTools.
+    private func record(_ name: String, _ arguments: JSONValue, _ result: MCPToolResult, started: Date, milliseconds: Int) {
+        guard name != "list_tabs", let target = try? tab(arguments) else { return }
+        let state = target.agentState ?? AgentTabState()
+        target.agentState = state
+        var text = result.content.compactMap { if case .text(let t) = $0 { return t } else { return nil } }.joined(separator: "\n")
+        if text.count > 20_000 { text = String(text.prefix(20_000)) + "\n…" }
+        let images: [JSONValue] = result.content.compactMap {
+            if case .image(let data, let mime) = $0, data.count < 2_000_000 { return ["data": .string(data), "mimeType": .string(mime)] }
+            return nil
+        }
+        state.calls.append([
+            "id": .string(UUID().uuidString), "time": .number((started.timeIntervalSince1970 * 1000).rounded()), "tool": .string(name),
+            "arguments": arguments, "ms": .number(Double(milliseconds)), "isError": .bool(result.isError),
+            "result": .string(text), "images": .array(images), "client": .string(clientName),
+        ])
+        if state.calls.count > 500 { state.calls.removeFirst(state.calls.count - 500); state.pushed = max(0, state.pushed - 1) }
+        if target.isDevToolsVisible { state.push(to: target.devTools) }
     }
 
     // MARK: - Tabs
@@ -92,7 +147,7 @@ final class AgentToolbox {
         String(tab.tab.rawValue.uuidString.prefix(8)).lowercased()
     }
 
-    private func frontmost() -> BrowserWindowController? {
+    func frontmost() -> BrowserWindowController? {
         let all = tabs()
         for window in NSApp.orderedWindows {
             if let tab = all.first(where: { $0.window === window && $0.window?.tabGroup?.selectedWindow.map { $0 === window } ?? true }) { return tab }
@@ -100,7 +155,7 @@ final class AgentToolbox {
         return all.first
     }
 
-    private func tab(_ a: JSONValue) throws -> BrowserWindowController {
+    func tab(_ a: JSONValue) throws -> BrowserWindowController {
         let all = tabs()
         if let id = a["tabId"]?.string?.lowercased().trimmingCharacters(in: .whitespaces), !id.isEmpty {
             let matches = all.filter { Self.shortID($0).hasPrefix(id) || $0.tab.rawValue.uuidString.lowercased() == id }
@@ -114,7 +169,7 @@ final class AgentToolbox {
 
     /// A tab about to be acted on: awake, shown in its window, and the
     /// person told who is driving it.
-    private func ready(_ tab: BrowserWindowController, show: Bool = true) async throws {
+    func ready(_ tab: BrowserWindowController, show: Bool = true) async throws {
         if tab.isHibernated {
             tab.wake()
             try await waitForLoad(tab, timeout: 15)
@@ -130,12 +185,12 @@ final class AgentToolbox {
         }
     }
 
-    private func title(of tab: BrowserWindowController) -> String {
+    func title(of tab: BrowserWindowController) -> String {
         let title = tab.pageWebView.title ?? ""
         return title.isEmpty ? (tab.window?.title ?? "") : title
     }
 
-    private func listTabs() -> MCPToolResult {
+    func listTabs() -> MCPToolResult {
         let all = tabs()
         guard !all.isEmpty else { return .text("No tabs are open. Use new_tab.") }
         let target = (try? tab([:]))
@@ -157,7 +212,7 @@ final class AgentToolbox {
         return .text(lines.joined(separator: "\n"))
     }
 
-    private func newTab(_ a: JSONValue) async throws -> MCPToolResult {
+    func newTab(_ a: JSONValue) async throws -> MCPToolResult {
         var url: URL?
         if let text = a["url"]?.string, !text.isEmpty {
             guard let resolved = BrowserSettings.destination(for: text) else { throw ToolError("Cannot make a URL of \(text)") }
@@ -171,7 +226,7 @@ final class AgentToolbox {
         return .text("Opened tab \(Self.shortID(opened)). Later tools act on it.\n" + pageLine(opened))
     }
 
-    private func selectTab(_ a: JSONValue) throws -> MCPToolResult {
+    func selectTab(_ a: JSONValue) throws -> MCPToolResult {
         let target = try tab(a)
         currentTab = target
         if a["bringToFront"]?.bool ?? true, let window = target.window {
@@ -181,7 +236,7 @@ final class AgentToolbox {
         return .text("Selected tab \(Self.shortID(target)).\n" + pageLine(target))
     }
 
-    private func closeTab(_ a: JSONValue) throws -> MCPToolResult {
+    func closeTab(_ a: JSONValue) throws -> MCPToolResult {
         let target = try tab(a)
         let id = Self.shortID(target)
         target.window?.performClose(nil)
@@ -191,7 +246,7 @@ final class AgentToolbox {
 
     // MARK: - Navigation
 
-    private func navigate(_ a: JSONValue) async throws -> MCPToolResult {
+    func navigate(_ a: JSONValue) async throws -> MCPToolResult {
         let tab = try tab(a)
         try await ready(tab)
         let action = a["action"]?.string ?? "goto"
@@ -227,7 +282,7 @@ final class AgentToolbox {
     }
 
     /// Final URL, title, status, and what went wrong on the way.
-    private func navigationReport(_ tab: BrowserWindowController, since: Int) -> String {
+    func navigationReport(_ tab: BrowserWindowController, since: Int) -> String {
         var lines = [pageLine(tab)]
         let events = recorder.events.filter { $0.tab == tab.tab && $0.sequence > since }
         if let response = events.reversed().compactMap({ recorded -> NetworkEvent? in
@@ -246,17 +301,17 @@ final class AgentToolbox {
         return lines.joined(separator: "\n")
     }
 
-    private func pageLine(_ tab: BrowserWindowController) -> String {
+    func pageLine(_ tab: BrowserWindowController) -> String {
         "Page: \(title(of: tab).isEmpty ? "(untitled)" : title(of: tab)) — \(tab.currentURL?.absoluteString ?? "about:blank")"
     }
 
-    private func waitForLoad(_ tab: BrowserWindowController, timeout: Double) async throws {
+    func waitForLoad(_ tab: BrowserWindowController, timeout: Double) async throws {
         // Give a navigation just requested the moment it needs to start.
         try await Task.sleep(for: .milliseconds(60))
         try await waitUntil(timeout: timeout, orDialogIn: tab) { !tab.pageWebView.isLoading }
     }
 
-    private func waitUntil(timeout: Double, orDialogIn tab: BrowserWindowController? = nil, _ condition: () async throws -> Bool) async throws {
+    func waitUntil(timeout: Double, orDialogIn tab: BrowserWindowController? = nil, _ condition: () async throws -> Bool) async throws {
         let deadline = Date().addingTimeInterval(timeout)
         while true {
             if try await condition() { return }
@@ -266,7 +321,7 @@ final class AgentToolbox {
         }
     }
 
-    private func waitFor(_ a: JSONValue) async throws -> MCPToolResult {
+    func waitFor(_ a: JSONValue) async throws -> MCPToolResult {
         let tab = try tab(a)
         try await ready(tab, show: false)
         let timeout = Double(a["timeoutMs"]?.int ?? 10000) / 1000
@@ -299,7 +354,7 @@ final class AgentToolbox {
         return .text("Done: \(condition.first!.key) \(condition.first!.value.jsonString).\n" + pageLine(tab))
     }
 
-    private func networkEventCount(_ tab: BrowserWindowController) -> Int {
+    func networkEventCount(_ tab: BrowserWindowController) -> Int {
         recorder.count { recorded in
             if recorded.tab == tab.tab, case .network = recorded.event { return true }
             return false
@@ -308,17 +363,17 @@ final class AgentToolbox {
 
     // MARK: - The automation agent
 
-    private static let automationSource: String = {
+    static let automationSource: String = {
         guard let url = AppResources.bundle.url(forResource: "automation-agent", withExtension: "js", subdirectory: "AutomationAgent"),
               let source = try? String(contentsOf: url, encoding: .utf8) else { return "" }
         return source
     }()
 
-    private let world = WKContentWorld.world(name: InspectorAgent.isolatedWorldName)
+    let world = WKContentWorld.world(name: InspectorAgent.isolatedWorldName)
 
     /// Calls `__sbAutomation.handle(method, params)` in the isolated world,
     /// injecting the agent first if this document has not had it yet.
-    private func automation(_ tab: BrowserWindowController, _ method: String, _ params: JSONValue = [:]) async throws -> JSONValue {
+    func automation(_ tab: BrowserWindowController, _ method: String, _ params: JSONValue = [:]) async throws -> JSONValue {
         guard !Self.automationSource.isEmpty else { throw ToolError("The automation agent is missing from the app bundle") }
         let body = Self.automationSource + "\nreturn window.__sbAutomation.handle(method, params);"
         let result = JSONValue(any: try await script(tab, body, arguments: ["method": method, "params": params.anyValue], world: world))
@@ -329,7 +384,7 @@ final class AgentToolbox {
     /// Runs a script, unless a dialog is open or opens meanwhile: the page's
     /// thread is then blocked and the script would not return until the
     /// dialog is answered.
-    private func script(_ tab: BrowserWindowController, _ body: String, arguments: [String: Any], world: WKContentWorld) async throws -> Any? {
+    func script(_ tab: BrowserWindowController, _ body: String, arguments: [String: Any], world: WKContentWorld) async throws -> Any? {
         if let dialog = tab.pageDialog { throw ToolError(dialog.summary) }
         let webView = tab.pageWebView
         let gate = Gate()
@@ -367,18 +422,34 @@ final class AgentToolbox {
 
     // MARK: - Reading the page
 
-    private func snapshot(_ a: JSONValue) async throws -> MCPToolResult {
+    func snapshot(_ a: JSONValue) async throws -> MCPToolResult {
         let tab = try tab(a)
         try await ready(tab, show: false)
         var params: [String: JSONValue] = [:]
         for key in ["selector", "ref", "interactiveOnly", "maxLength"] { if let value = a[key] { params[key] = value } }
         let result = try await automation(tab, "snapshot", .object(params))
-        var lines = ["Page: \(result["title"]?.string ?? "") — \(result["url"]?.string ?? "")"]
+        let url = result["url"]?.string ?? ""
+        let text = result["text"]?.string ?? ""
+        var lines = ["Page: \(result["title"]?.string ?? "") — \(url)"]
         if let dialog = tab.pageDialog { lines.append(dialog.summary) }
         if let modal = result["modal"]?.string { lines.append("A modal <dialog> is open: [ref=\(modal)]") }
         if let focused = result["focused"]?.string { lines.append("Focused: [ref=\(focused)]") }
+        let scope = (a["selector"]?.string ?? "") + "|" + (a["ref"]?.string ?? "") + "|" + String(a["interactiveOnly"]?.bool ?? false)
+        let state = tab.agentState ?? AgentTabState()
+        tab.agentState = state
+        let previous = state.snapshots[scope]
+        state.snapshots[scope] = (url, text)
+        if a["diff"]?.bool == true {
+            if let previous, previous.url == url {
+                let changes = Self.lineDiff(old: previous.text, new: text)
+                if changes.isEmpty { lines.append("No changes since your previous snapshot.") }
+                else { lines.append("Changes since your previous snapshot (- removed, + added):"); lines.append("```diff"); lines.append(contentsOf: changes); lines.append("```") }
+                return .text(lines.joined(separator: "\n"))
+            }
+            lines.append(previous == nil ? "(No previous snapshot to compare with; here is the whole page.)" : "(The page navigated since your previous snapshot; here is the whole page.)")
+        }
         lines.append("```yaml")
-        lines.append(result["text"]?.string ?? "")
+        lines.append(text)
         lines.append("```")
         if result["truncated"]?.bool == true {
             lines.append("(Truncated. Pass selector or ref to snapshot part of the page, or interactiveOnly: true.)")
@@ -386,7 +457,7 @@ final class AgentToolbox {
         return .text(lines.joined(separator: "\n"))
     }
 
-    private func pageContent(_ a: JSONValue) async throws -> MCPToolResult {
+    func pageContent(_ a: JSONValue) async throws -> MCPToolResult {
         let tab = try tab(a)
         try await ready(tab, show: false)
         var params: [String: JSONValue] = ["format": a["format"] ?? "markdown"]
@@ -397,7 +468,7 @@ final class AgentToolbox {
 
     // MARK: - Screenshots
 
-    private func screenshot(_ a: JSONValue) async throws -> MCPToolResult {
+    func screenshot(_ a: JSONValue) async throws -> MCPToolResult {
         let tab = try tab(a)
         try await ready(tab)
         let webView = tab.pageWebView
@@ -406,7 +477,7 @@ final class AgentToolbox {
         var note = ""
         let image: CGImage
 
-        if a["fullPage"]?.bool == true, a["ref"] == nil, a["selector"] == nil {
+        if a["fullPage"]?.bool == true, !Self.hasTarget(a) {
             let size = try await automation(tab, "pageSize")
             let data = try await webView.pdf(configuration: WKPDFConfiguration())
             guard let rep = NSPDFImageRep(data: data) else { throw ToolError("Could not render the page") }
@@ -422,7 +493,7 @@ final class AgentToolbox {
         } else {
             let configuration = WKSnapshotConfiguration()
             var describe = "the viewport"
-            if a["ref"] != nil || a["selector"] != nil {
+            if Self.hasTarget(a) {
                 let rect = try await automation(tab, "rect", Self.targetParams(a))
                 let zoom = webView.pageZoom * webView.magnification
                 var frame = CGRect(x: (rect["x"]?.double ?? 0) * zoom, y: (rect["y"]?.double ?? 0) * zoom,
@@ -455,7 +526,7 @@ final class AgentToolbox {
         return MCPToolResult([.image(base64: data.base64EncodedString(), mimeType: jpeg ? "image/jpeg" : "image/png"), .text(text)])
     }
 
-    private static func render(_ rep: NSPDFImageRep, size: CGSize, scale: CGFloat) throws -> CGImage {
+    static func render(_ rep: NSPDFImageRep, size: CGSize, scale: CGFloat) throws -> CGImage {
         let width = Int(size.width.rounded()), height = Int(size.height.rounded())
         guard width > 0, height > 0, let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
                                                              space: CGColorSpace(name: CGColorSpace.sRGB)!,
@@ -476,7 +547,7 @@ final class AgentToolbox {
         return image
     }
 
-    private static func resize(_ image: CGImage, to size: CGSize) throws -> CGImage {
+    static func resize(_ image: CGImage, to size: CGSize) throws -> CGImage {
         let width = max(1, Int(size.width.rounded())), height = max(1, Int(size.height.rounded()))
         if width == image.width && height == image.height { return image }
         guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
@@ -486,7 +557,7 @@ final class AgentToolbox {
         return context.makeImage() ?? image
     }
 
-    private static func encode(_ image: CGImage, jpeg: Bool, quality: Double) -> Data? {
+    static func encode(_ image: CGImage, jpeg: Bool, quality: Double) -> Data? {
         let rep = NSBitmapImageRep(cgImage: image)
         return jpeg ? rep.representation(using: .jpeg, properties: [.compressionFactor: quality]) : rep.representation(using: .png, properties: [:])
     }
@@ -497,12 +568,18 @@ final class AgentToolbox {
         var params: [String: JSONValue] = [:]
         if let ref = a["ref"]?.string { params["ref"] = .string(ref) }
         if let selector = a["selector"]?.string { params["selector"] = .string(selector) }
+        if let text = a["text"]?.string { params["text"] = .string(text) }
+        if let role = a["role"]?.string { params["role"] = .string(role) }
         return .object(params)
+    }
+
+    static func hasTarget(_ a: JSONValue) -> Bool {
+        a["ref"]?.string != nil || a["selector"]?.string != nil || a["text"]?.string != nil
     }
 
     /// Scrolls the element into view and finds where to press, refusing
     /// what a person could not click.
-    private func aim(_ tab: BrowserWindowController, _ a: JSONValue, allowCovered: Bool = false) async throws -> (CGPoint, JSONValue) {
+    func aim(_ tab: BrowserWindowController, _ a: JSONValue, allowCovered: Bool = false) async throws -> (CGPoint, JSONValue) {
         let target = try await automation(tab, "prepare", Self.targetParams(a))
         let describe = target["describe"]?.string ?? "the element"
         if let problem = target["problem"]?.string { throw ToolError("\(describe) \(problem)") }
@@ -515,7 +592,7 @@ final class AgentToolbox {
         return (CGPoint(x: target["x"]?.double ?? 0, y: target["y"]?.double ?? 0), target)
     }
 
-    private func click(_ a: JSONValue) async throws -> MCPToolResult {
+    func click(_ a: JSONValue) async throws -> MCPToolResult {
         let tab = try tab(a)
         try await ready(tab)
         let since = recorder.events.last?.sequence ?? -1
@@ -542,7 +619,7 @@ final class AgentToolbox {
         return .text("\(verb) \(target["describe"]?.string ?? "the element").\n" + (await afterAction(tab, since: since, urlBefore: urlBefore)))
     }
 
-    private func hover(_ a: JSONValue) async throws -> MCPToolResult {
+    func hover(_ a: JSONValue) async throws -> MCPToolResult {
         let tab = try tab(a)
         try await ready(tab)
         let (point, target) = try await aim(tab, a, allowCovered: true)
@@ -553,7 +630,7 @@ final class AgentToolbox {
         return .text(text)
     }
 
-    private func fill(_ a: JSONValue) async throws -> MCPToolResult {
+    func fill(_ a: JSONValue) async throws -> MCPToolResult {
         let tab = try tab(a)
         try await ready(tab)
         let since = recorder.events.last?.sequence ?? -1
@@ -570,7 +647,7 @@ final class AgentToolbox {
         return .text(text + problemsSuffix(tab, since: since))
     }
 
-    private func fillForm(_ a: JSONValue) async throws -> MCPToolResult {
+    func fillForm(_ a: JSONValue) async throws -> MCPToolResult {
         let tab = try tab(a)
         try await ready(tab)
         let since = recorder.events.last?.sequence ?? -1
@@ -595,13 +672,13 @@ final class AgentToolbox {
         return MCPToolResult([.text(lines.joined(separator: "\n"))], isError: lines.contains { $0.hasPrefix("✗") })
     }
 
-    private func typeText(_ a: JSONValue) async throws -> MCPToolResult {
+    func typeText(_ a: JSONValue) async throws -> MCPToolResult {
         let tab = try tab(a)
         try await ready(tab)
         let since = recorder.events.last?.sequence ?? -1
         let urlBefore = tab.pageWebView.url
         var into = "the focused element"
-        if a["ref"] != nil || a["selector"] != nil {
+        if Self.hasTarget(a) {
             let (point, target) = try await aim(tab, a)
             try AgentInput.click(at: point, in: tab.pageWebView)
             into = target["describe"]?.string ?? into
@@ -620,7 +697,7 @@ final class AgentToolbox {
         return .text(summary + "\n" + (await afterAction(tab, since: since, urlBefore: urlBefore)))
     }
 
-    private func pressKey(_ a: JSONValue) async throws -> MCPToolResult {
+    func pressKey(_ a: JSONValue) async throws -> MCPToolResult {
         let tab = try tab(a)
         try await ready(tab)
         let since = recorder.events.last?.sequence ?? -1
@@ -631,7 +708,7 @@ final class AgentToolbox {
         return .text("Pressed \(key)\(repeatCount > 1 ? " ×\(repeatCount)" : "").\n" + (await afterAction(tab, since: since, urlBefore: urlBefore)))
     }
 
-    private func selectOption(_ a: JSONValue) async throws -> MCPToolResult {
+    func selectOption(_ a: JSONValue) async throws -> MCPToolResult {
         let tab = try tab(a)
         try await ready(tab)
         let since = recorder.events.last?.sequence ?? -1
@@ -641,7 +718,7 @@ final class AgentToolbox {
         return .text("Selected \(result["value"]?.jsonString ?? "") in \(result["describe"]?.string ?? "the list")." + problemsSuffix(tab, since: since))
     }
 
-    private func scroll(_ a: JSONValue) async throws -> MCPToolResult {
+    func scroll(_ a: JSONValue) async throws -> MCPToolResult {
         let tab = try tab(a)
         try await ready(tab)
         var params = Self.targetParams(a).object!
@@ -656,7 +733,7 @@ final class AgentToolbox {
         return .text(text)
     }
 
-    private func drag(_ a: JSONValue) async throws -> MCPToolResult {
+    func drag(_ a: JSONValue) async throws -> MCPToolResult {
         let tab = try tab(a)
         try await ready(tab)
         let since = recorder.events.last?.sequence ?? -1
@@ -670,7 +747,7 @@ final class AgentToolbox {
                      + (await afterAction(tab, since: since, urlBefore: urlBefore)))
     }
 
-    private func uploadFiles(_ a: JSONValue) async throws -> MCPToolResult {
+    func uploadFiles(_ a: JSONValue) async throws -> MCPToolResult {
         let tab = try tab(a)
         try await ready(tab)
         var files: [JSONValue] = []
@@ -689,7 +766,7 @@ final class AgentToolbox {
         return .text("Set \(result["describe"]?.string ?? "the input") to \(result["files"]?.array?.compactMap(\.string).joined(separator: ", ") ?? "").")
     }
 
-    private func handleDialog(_ a: JSONValue) throws -> MCPToolResult {
+    func handleDialog(_ a: JSONValue) throws -> MCPToolResult {
         let tab = try tab(a)
         guard let dialog = tab.pageDialog else { throw ToolError("No dialog is open in tab \(Self.shortID(tab)).") }
         let accept = a["accept"]?.bool ?? true
@@ -700,7 +777,7 @@ final class AgentToolbox {
 
     /// What happened because of an action: a navigation it started, new
     /// errors in the console, a dialog it opened.
-    private func afterAction(_ tab: BrowserWindowController, since: Int, urlBefore: URL?) async -> String {
+    func afterAction(_ tab: BrowserWindowController, since: Int, urlBefore: URL?) async -> String {
         try? await Task.sleep(for: .milliseconds(150))
         if tab.pageWebView.isLoading { try? await waitForLoad(tab, timeout: 10) }
         var lines: [String] = []
@@ -714,18 +791,18 @@ final class AgentToolbox {
         return lines.joined(separator: "\n")
     }
 
-    private func problemsSuffix(_ tab: BrowserWindowController, since: Int) -> String {
+    func problemsSuffix(_ tab: BrowserWindowController, since: Int) -> String {
         let found = problems(tab, since: since)
         return found.isEmpty ? "" : "\n" + found.joined(separator: "\n")
     }
 
     /// Errors and failed requests recorded after `since`, briefly.
-    private func problems(_ tab: BrowserWindowController, since: Int) -> [String] {
+    func problems(_ tab: BrowserWindowController, since: Int) -> [String] {
         var errors: [String] = [], failures: [String] = []
         for recorded in recorder.events where recorded.tab == tab.tab && recorded.sequence > since {
             switch recorded.event {
             case .console(let entry) where entry.level == .error:
-                errors.append("  #\(recorded.sequence) \(entry.isUncaught ? "Uncaught " : "")\(String(entry.message.prefix(300)))")
+                errors.append("  #\(recorded.sequence) \(entry.isUncaught && !entry.message.hasPrefix("Uncaught") ? "Uncaught " : "")\(String(entry.message.prefix(300)))")
             case .network(let event) where event.isFailure && event.source != .navigationDelegate:
                 failures.append("  \(event.method ?? "GET") \(event.statusCode.map(String.init) ?? event.failure ?? "failed") \(String(event.url.absoluteString.prefix(200)))")
             default: break
@@ -739,12 +816,12 @@ final class AgentToolbox {
 
     // MARK: - Debugging
 
-    private func evaluate(_ a: JSONValue) async throws -> MCPToolResult {
+    func evaluate(_ a: JSONValue) async throws -> MCPToolResult {
         let tab = try tab(a)
         try await ready(tab, show: false)
         let expression = a["expression"]?.string ?? ""
         let isolated = a["world"]?.string == "isolated"
-        let hasTarget = a["ref"] != nil || a["selector"] != nil
+        let hasTarget = Self.hasTarget(a)
 
         let token = UUID().uuidString
         var prelude = "let __sbTarget = null;\n"
@@ -823,7 +900,7 @@ final class AgentToolbox {
 
     private static let consoleRank: [ConsoleEntry.Level: Int] = [.debug: 0, .trace: 1, .info: 1, .warn: 2, .error: 3]
 
-    private func consoleMessages(_ a: JSONValue) throws -> MCPToolResult {
+    func consoleMessages(_ a: JSONValue) throws -> MCPToolResult {
         let tab = try tab(a)
         let minimum = ["all": 0, "debug": 0, "info": 1, "warn": 2, "error": 3][a["level"]?.string ?? "all"] ?? 0
         let search = a["search"]?.string?.lowercased()
@@ -841,7 +918,7 @@ final class AgentToolbox {
                 if let search, !entry.message.lowercased().contains(search) { continue }
                 count += 1
                 var line = "#\(recorded.sequence) [\(entry.level.rawValue)] \(InspectorEventFormatter.timestamp(entry.timestamp)) "
-                line += (entry.isUncaught ? "Uncaught " : "") + String(entry.message.prefix(4000))
+                line += (entry.isUncaught && !entry.message.hasPrefix("Uncaught") ? "Uncaught " : "") + String(entry.message.prefix(4000))
                 if let table = entry.table {
                     line += "\n  " + table.columns.joined(separator: " | ")
                     for row in table.rows.prefix(20) { line += "\n  " + row.joined(separator: " | ") }
@@ -864,7 +941,7 @@ final class AgentToolbox {
     }
 
     /// The tab's requests, merged across sources as the Network panel does.
-    private func requestLog(_ tab: BrowserWindowController, sinceNavigation: Bool) -> [NetworkRequest] {
+    func requestLog(_ tab: BrowserWindowController, sinceNavigation: Bool) -> [NetworkRequest] {
         let log = NetworkRequestLog()
         var navigationStart = Date.distantPast
         for recorded in recorder.events where recorded.tab == tab.tab {
@@ -879,7 +956,7 @@ final class AgentToolbox {
 
     static func requestID(_ request: NetworkRequest) -> String { String(request.id.uuidString.prefix(8)).lowercased() }
 
-    private func networkRequests(_ a: JSONValue) throws -> MCPToolResult {
+    func networkRequests(_ a: JSONValue) throws -> MCPToolResult {
         let tab = try tab(a)
         var requests = requestLog(tab, sinceNavigation: a["sinceNavigation"]?.bool ?? true)
         if let filter = a["filter"]?.string?.lowercased(), !filter.isEmpty {
@@ -909,7 +986,7 @@ final class AgentToolbox {
         return .text(lines.joined(separator: "\n"))
     }
 
-    private func networkRequest(_ a: JSONValue) async throws -> MCPToolResult {
+    func networkRequest(_ a: JSONValue) async throws -> MCPToolResult {
         let tab = try tab(a)
         let id = (a["id"]?.string ?? "").lowercased()
         guard let request = requestLog(tab, sinceNavigation: false).last(where: { Self.requestID($0).hasPrefix(id) }) else {
@@ -953,7 +1030,7 @@ final class AgentToolbox {
         return .text(lines.joined(separator: "\n"))
     }
 
-    private func inspectElement(_ a: JSONValue) async throws -> MCPToolResult {
+    func inspectElement(_ a: JSONValue) async throws -> MCPToolResult {
         let tab = try tab(a)
         try await ready(tab, show: false)
         var params = Self.targetParams(a).object!
@@ -995,7 +1072,7 @@ final class AgentToolbox {
         return .text(lines.joined(separator: "\n"))
     }
 
-    private func performanceMetrics(_ a: JSONValue) async throws -> MCPToolResult {
+    func performanceMetrics(_ a: JSONValue) async throws -> MCPToolResult {
         let tab = try tab(a)
         try await ready(tab, show: false)
         let metrics = try await automation(tab, "metrics")
@@ -1011,13 +1088,16 @@ final class AgentToolbox {
         }
         let longTasks = entries.filter { $0.entryType == "longtask" }
         let shifts = entries.filter { $0.entryType == "layout-shift" && !($0.detail ?? "").contains("had recent input") }
-        let interactions = entries.filter { $0.entryType == "first-input" || $0.entryType == "event" }
+        // The agent reports only interactions of 100 ms or more; the first input always.
+        let interactions = entries.filter { $0.entryType == "event" }
+        let firstInput = entries.first { $0.entryType == "first-input" }
         let fcp = entries.first { $0.entryType == "paint" && $0.name == "first-contentful-paint" }?.startTime
         let lcpEntry = entries.last { $0.entryType == "largest-contentful-paint" }
         let vitals: [(String, Double?, Double, Double, String?)] = [
             ("LCP", lcpEntry?.startTime, 2500, 4000, lcpEntry?.detail ?? (lcpEntry == nil ? "WebKit may not report it for this page" : nil)),
             ("CLS", shifts.isEmpty ? (fcp == nil ? nil : 0) : shifts.reduce(0) { $0 + ($1.value ?? 0) }, 0.1, 0.25, shifts.isEmpty ? nil : "\(shifts.count) shift\(shifts.count == 1 ? "" : "s")"),
-            ("INP", interactions.map(\.duration).max(), 200, 500, interactions.isEmpty ? "no slow interaction yet" : "\(interactions.count) slow interaction\(interactions.count == 1 ? "" : "s")"),
+            ("INP", interactions.map(\.duration).max() ?? (firstInput == nil ? nil : 0), 200, 500,
+             interactions.isEmpty ? (firstInput == nil ? "no interaction yet" : "no interaction took 100 ms or more") : "\(interactions.count) interaction\(interactions.count == 1 ? "" : "s") of 100 ms or more"),
             ("FCP", fcp, 1800, 3000, nil),
             ("TTFB", metrics["navigation"]?["ttfb"]?.double, 800, 1800, nil),
         ]
@@ -1055,7 +1135,7 @@ final class AgentToolbox {
         return .text(lines.joined(separator: "\n"))
     }
 
-    private func storage(_ a: JSONValue) async throws -> MCPToolResult {
+    func storage(_ a: JSONValue) async throws -> MCPToolResult {
         let tab = try tab(a)
         try await ready(tab, show: false)
         let area = a["area"]?.string ?? "local"
@@ -1135,41 +1215,73 @@ final class AgentToolbox {
                 "Galaxy S23": (360, 780, android), "iPad Air": (820, 1180, iPad), "iPad Pro 12.9": (1024, 1366, iPad)]
     }()
 
-    private func emulate(_ a: JSONValue) async throws -> MCPToolResult {
+    func emulate(_ a: JSONValue) async throws -> MCPToolResult {
         let tab = try tab(a)
         try await ready(tab)
+        var lines: [String] = []
+        // Rendering-drawer emulations: feature, value, and how to say it.
+        let renderingKeys = ["colorScheme", "reducedMotion", "contrast", "media", "javascriptDisabled", "imagesDisabled"]
         if a["reset"]?.bool == true {
             tab.setDeviceEmulation(nil)
-            return .text("Device emulation off.")
+            if let tools = tab.devTools {
+                for feature in ["colorScheme", "reducedMotion", "contrast", "media", "disableJavaScript", "disableImages"] {
+                    _ = try? await tools.handleTool("Emulation.setRendering", ["feature": feature, "value": NSNull()])
+                }
+            }
+            return .text("Device mode and every rendering emulation are off.\n" + pageLine(tab))
         }
-        var device: [String: Any]
+        var device: [String: Any]?
         if let name = a["device"]?.string {
             guard let preset = Self.devices[name] else { throw ToolError("Unknown device \(name)") }
             device = ["name": name, "width": preset.0, "height": preset.1, "userAgent": preset.2]
         } else if let width = a["width"]?.int, let height = a["height"]?.int {
             device = ["name": "Custom", "width": width, "height": height, "userAgent": a["userAgent"]?.string ?? ""]
-        } else {
-            throw ToolError("Give a device, or width and height, or reset")
         }
-        if let agent = a["userAgent"]?.string { device["userAgent"] = agent }
-        tab.setDeviceEmulation(device)
-        try await waitForLoad(tab, timeout: 15)
-        let bounds = tab.pageWebView.bounds.size
-        var text = "Emulating \(device["name"] as? String ?? "a device"): \(device["width"]!)×\(device["height"]!)."
-        if Int(bounds.width) < (device["width"] as? Int ?? 0) || Int(bounds.height) < (device["height"] as? Int ?? 0) {
-            text += " The window is smaller, so the viewport is \(Int(bounds.width))×\(Int(bounds.height))."
+        let wantsRendering = renderingKeys.contains { a[$0] != nil && a[$0] != .null }
+        guard device != nil || wantsRendering else {
+            throw ToolError("Give a device, width and height, a preference (colorScheme, reducedMotion, contrast, media, javascriptDisabled, imagesDisabled), or reset")
         }
-        return .text(text + "\n" + pageLine(tab))
+        if var device {
+            if let agent = a["userAgent"]?.string { device["userAgent"] = agent }
+            tab.setDeviceEmulation(device)
+            try await waitForLoad(tab, timeout: 15)
+            let bounds = tab.pageWebView.bounds.size
+            var text = "Emulating \(device["name"] as? String ?? "a device"): \(device["width"]!)×\(device["height"]!)."
+            if Int(bounds.width) < (device["width"] as? Int ?? 0) || Int(bounds.height) < (device["height"] as? Int ?? 0) {
+                text += " The window is smaller, so the viewport is \(Int(bounds.width))×\(Int(bounds.height))."
+            }
+            lines.append(text + " The page reloaded if the user agent changed; refs from earlier snapshots may be gone.")
+        }
+        if wantsRendering {
+            let tools = try await openTools(tab, panel: nil)
+            func apply(_ feature: String, _ value: Any, _ said: String) async throws {
+                do {
+                    _ = try await tools.handleTool("Emulation.setRendering", ["feature": feature, "value": value])
+                    lines.append(said)
+                } catch {
+                    lines.append("Could not set \(feature): \(Self.message(for: error))")
+                }
+            }
+            func text(_ key: String) -> Any { a[key]?.string.map { $0 == "none" ? NSNull() as Any : $0 as Any } ?? NSNull() }
+            if let value = a["colorScheme"]?.string { try await apply("colorScheme", text("colorScheme"), value == "none" ? "prefers-color-scheme: not emulated." : "prefers-color-scheme: \(value).") }
+            if let value = a["reducedMotion"]?.string { try await apply("reducedMotion", text("reducedMotion"), value == "none" ? "prefers-reduced-motion: not emulated." : "prefers-reduced-motion: \(value).") }
+            if let value = a["contrast"]?.string { try await apply("contrast", text("contrast"), value == "none" ? "prefers-contrast: not emulated." : "prefers-contrast: \(value).") }
+            if let value = a["media"]?.string { try await apply("media", value == "none" ? "" : value, value == "none" ? "CSS media: not emulated." : "CSS media: \(value).") }
+            if let value = a["javascriptDisabled"]?.bool { try await apply("disableJavaScript", value, value ? "JavaScript disabled (reload to see the page without it)." : "JavaScript enabled.") }
+            if let value = a["imagesDisabled"]?.bool { try await apply("disableImages", value, value ? "Images disabled." : "Images enabled.") }
+            lines.append("These apply while DevTools is open; closing it (devtools action close) restores the page.")
+        }
+        return .text(lines.joined(separator: "\n") + "\n" + pageLine(tab))
     }
 
-    private func devtools(_ a: JSONValue) async throws -> MCPToolResult {
+    func devtools(_ a: JSONValue) async throws -> MCPToolResult {
         let tab = try tab(a)
         try await ready(tab)
         if a["action"]?.string == "close" {
             if tab.isDevToolsVisible { tab.toggleDevTools(nil) }
             return .text("DevTools closed.")
         }
-        let hasTarget = a["ref"] != nil || a["selector"] != nil
+        let hasTarget = Self.hasTarget(a)
         let panel = a["panel"]?.string ?? (hasTarget ? "elements" : nil)
         let fresh = tab.devTools == nil
         tab.showDevTools(panel: panel)

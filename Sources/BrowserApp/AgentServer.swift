@@ -73,7 +73,8 @@ final class AgentServer {
         serverName: "simplebrowser",
         serverVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev",
         instructions: BrowserTools.instructions,
-        tools: BrowserTools.all
+        tools: BrowserTools.all,
+        prompts: BrowserTools.prompts
     )
 
     init(toolbox: AgentToolbox) {

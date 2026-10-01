@@ -10,15 +10,22 @@ public enum BrowserTools {
     Workflow:
     1. `snapshot` the page: an accessibility tree where every element you can act on has a ref like [ref=e12].
     2. Act by ref: `click`, `fill`, `type_text`, `press_key`, `select_option`, `hover`, `upload_files`.
-       Refs stay valid for the same element across snapshots until the page navigates.
+       Refs stay valid for the same element across snapshots until the page navigates. When you know the
+       visible text but have no ref, pass `text` (and optionally `role`) instead.
     3. Check the outcome: action results report navigation, new console errors and open dialogs.
-       Take another `snapshot` (or `wait_for`) after anything that changes the page.
+       `snapshot` with `diff: true` returns only what changed since your last snapshot of that tab.
 
-    Debugging: `console_messages`, `network_requests` / `network_request` (full headers and bodies),
-    `evaluate` (JavaScript in the page), `inspect_element` (box model, computed styles, matched CSS rules),
-    `performance_metrics` (Core Web Vitals), `screenshot`, `get_page_content` (Markdown of the page).
+    Start debugging with `diagnose`: errors, failed and slow requests, vitals and the worst audit findings
+    in one call. Then drill in: `console_messages`, `network_requests` / `network_request` (headers and bodies),
+    `evaluate`, `inspect_element` (box model, computed styles, matched CSS rules), `performance_metrics`,
+    `run_audit` (accessibility, SEO, best practices, performance), `heap_snapshot` (objects by class, and growth
+    between two snapshots, for leaks), `application_data` (IndexedDB, Cache Storage, manifest, service workers),
+    `screenshot`, `get_page_content` (Markdown).
+    Test edge cases with `mock_network` (block URLs, or answer them with your own status, headers and body) and
+    `emulate` (devices, dark mode, reduced motion, print, JavaScript off).
     Console and network are recorded from the moment a tab opens, so nothing is missed before you ask.
-    `devtools` opens the browser's DevTools for the person, e.g. on the element you are talking about.
+    The person may point at something in DevTools: `devtools_selection` returns the element they have selected in
+    Elements and the request selected in Network. `devtools` opens DevTools for them on what you mean.
 
     Every tool takes an optional `tabId`; without it, tools act on the tab you last opened or selected,
     else on the tab in front. Clicks and key presses are real input events (isTrusted), not synthetic DOM events.
@@ -30,6 +37,8 @@ public enum BrowserTools {
     static let ref: JSONValue = ["type": "string", "description": "Element ref from the latest snapshot, e.g. \"e12\"."]
     static let selector: JSONValue = ["type": "string", "description": "CSS selector, when you have no ref. The first match is used."]
     static let element: JSONValue = ["type": "string", "description": "Optional human-readable description of the element, echoed back in the result for the record."]
+    static let text: JSONValue = ["type": "string", "description": "Visible text or accessible name of the element, when you have no ref: an exact match wins, then the shortest element containing it; interactive elements first."]
+    static let role: JSONValue = ["type": "string", "description": "With text: only elements of this ARIA role (button, link, textbox, checkbox, heading…)."]
 
     static func schema(_ properties: [String: JSONValue], required: [String] = []) -> JSONValue {
         var all = properties
@@ -38,7 +47,7 @@ public enum BrowserTools {
     }
 
     static func targeting(_ extra: [String: JSONValue] = [:]) -> [String: JSONValue] {
-        extra.merging(["ref": ref, "selector": selector, "element": element]) { mine, _ in mine }
+        extra.merging(["ref": ref, "selector": selector, "text": text, "role": role, "element": element]) { mine, _ in mine }
     }
 
     // MARK: - The catalog
@@ -88,6 +97,7 @@ public enum BrowserTools {
                     "selector": ["type": "string", "description": "Only the subtree under the first element matching this CSS selector."],
                     "ref": ["type": "string", "description": "Only the subtree under this ref."],
                     "interactiveOnly": ["type": "boolean", "description": "Only elements you can act on, plus headings for orientation. Default false."],
+                    "diff": ["type": "boolean", "description": "Only the lines added and removed since your previous snapshot of this tab (same selector). Cheap way to see what an action changed."],
                     "maxLength": ["type": "integer", "description": "Truncate the snapshot past this many characters. Default 60000."],
                 ]), readOnly: true),
         MCPTool(name: "get_page_content", title: "Page content",
@@ -219,21 +229,116 @@ public enum BrowserTools {
                     "key": ["type": "string", "description": "Cookie name or storage key."],
                     "value": ["type": "string", "description": "For set."],
                 ], required: ["area"])),
-        MCPTool(name: "emulate", title: "Emulate a device",
-                description: "Gives the page a device's viewport and user agent (DevTools device mode), or a custom size; reset restores the window. Media queries respond.",
+        MCPTool(name: "emulate", title: "Emulate a device or preference",
+                description: "Device mode (viewport and user agent) and the Rendering emulations: prefers-color-scheme, prefers-reduced-motion, prefers-contrast, print media, JavaScript or images off. Give any combination; reset turns everything off. Preferences other than the device need DevTools open, which this does.",
                 inputSchema: schema([
                     "device": ["type": "string", "enum": ["iPhone 15 Pro", "iPhone SE", "Pixel 8", "Galaxy S23", "iPad Air", "iPad Pro 12.9"], "description": "A preset."],
                     "width": ["type": "integer"], "height": ["type": "integer"],
                     "userAgent": ["type": "string"],
-                    "reset": ["type": "boolean", "description": "Turn emulation off."],
+                    "colorScheme": ["type": "string", "enum": ["light", "dark", "none"], "description": "prefers-color-scheme; \"none\" stops emulating."],
+                    "reducedMotion": ["type": "string", "enum": ["reduce", "no-preference", "none"]],
+                    "contrast": ["type": "string", "enum": ["more", "no-preference", "none"]],
+                    "media": ["type": "string", "enum": ["print", "screen", "none"], "description": "CSS media type."],
+                    "javascriptDisabled": ["type": "boolean", "description": "Reload to see the page without script."],
+                    "imagesDisabled": ["type": "boolean"],
+                    "reset": ["type": "boolean", "description": "Turn device mode and every preference off."],
                 ])),
+        MCPTool(name: "diagnose", title: "Diagnose the page",
+                description: "One-call health check of the current page: uncaught errors and console errors (grouped, with sources), failed and slow requests, Core Web Vitals, mixed content, and the most important accessibility / SEO / best-practice failures with selectors. Start here when something is wrong.",
+                inputSchema: schema([
+                    "includeAudits": ["type": "boolean", "description": "Run the audits too. Default true."],
+                ]), readOnly: true),
+        MCPTool(name: "run_audit", title: "Run audits",
+                description: "Lighthouse-style audits run in the page: scores per category and every failing check with the elements involved (selector and HTML snippet) and how to fix it.",
+                inputSchema: schema([
+                    "categories": ["type": "array", "items": ["type": "string", "enum": ["accessibility", "seo", "bestPractices", "performance"]], "description": "Default: all."],
+                    "includePassed": ["type": "boolean", "description": "List passing checks too. Default false."],
+                ]), readOnly: true),
+        MCPTool(name: "mock_network", title: "Block or mock requests",
+                description: "Blocks requests whose URL matches a pattern (* wildcard, otherwise substring), or answers them with your own status, headers and body (local override) to test failures, empty states and slow APIs' fallbacks. Applies while DevTools is open, which this does. action list shows what is active; clear removes everything.",
+                inputSchema: schema([
+                    "action": ["type": "string", "enum": ["block", "override", "clear", "list"]],
+                    "pattern": ["type": "string", "description": "Block: substring or * pattern. Override: the whole URL, * as wildcard, e.g. https://api.example.com/v1/users*"],
+                    "status": ["type": "integer", "description": "Override status. Default 200."],
+                    "body": ["type": "string", "description": "Override body. Omit to keep the real body and change only status/headers."],
+                    "contentType": ["type": "string", "description": "Override Content-Type. Default application/json when the body parses as JSON, else text/plain."],
+                    "headers": ["type": "object", "description": "Extra response headers for the override."],
+                    "reload": ["type": "boolean", "description": "Reload the page afterwards. Default false."],
+                ], required: ["action"])),
+        MCPTool(name: "heap_snapshot", title: "Heap snapshot",
+                description: "Takes a JavaScript heap snapshot (after garbage collection) and lists object counts and sizes by class. The next call with compare: true lists what grew since the previous one — do the suspect action between the two to find a leak.",
+                inputSchema: schema([
+                    "compare": ["type": "boolean", "description": "Show growth since this tab's previous snapshot. Default false."],
+                    "limit": ["type": "integer", "description": "Classes to list. Default 30."],
+                    "filter": ["type": "string", "description": "Only class names containing this."],
+                ]), readOnly: true),
+        MCPTool(name: "application_data", title: "Application data",
+                description: "What DevTools' Application panel shows: IndexedDB databases, stores and records; Cache Storage caches and entries; the web app manifest; service workers; running CSS/Web animations.",
+                inputSchema: schema([
+                    "kind": ["type": "string", "enum": ["indexeddb", "cache", "manifest", "service_workers", "animations"]],
+                    "database": ["type": "string", "description": "IndexedDB: a database name to list its stores; with store, its records."],
+                    "store": ["type": "string", "description": "IndexedDB object store."],
+                    "cache": ["type": "string", "description": "Cache Storage: a cache name to list its entries."],
+                    "limit": ["type": "integer", "description": "Records or entries. Default 50."],
+                ], required: ["kind"]), readOnly: true),
+        MCPTool(name: "devtools_selection", title: "What the person selected in DevTools",
+                description: "The element the person has selected in DevTools' Elements panel (with its selector, attributes, box and matched styles) and the request selected in the Network panel. Use it when they say \"this element\" or \"this request\".",
+                inputSchema: schema([:]), readOnly: true),
         MCPTool(name: "devtools", title: "Show DevTools",
                 description: "Opens or closes the browser's DevTools for the person watching, on a panel, or on the Elements panel with an element selected (by ref or selector).",
                 inputSchema: schema(targeting([
                     "action": ["type": "string", "enum": ["open", "close"], "description": "Default \"open\"."],
-                    "panel": ["type": "string", "enum": ["elements", "console", "sources", "network", "performance", "application"]],
+                    "panel": ["type": "string", "enum": ["elements", "console", "sources", "network", "performance", "memory", "application", "audits", "agent"], "description": "agent shows every tool call you made in this tab, for the person to review."],
                 ]))),
     ]
 
     public static func tool(named name: String) -> MCPTool? { all.first { $0.name == name } }
+
+    // MARK: - Prompts
+
+    public static let prompts: [MCPPrompt] = [
+        MCPPrompt(name: "debug_page", title: "Debug this page",
+                  description: "Find out what is broken on a page and why, then propose (or make) the fix.",
+                  arguments: [.init("url", "Page to open; omit for the current tab"), .init("symptom", "What looks wrong, if known")],
+                  template: """
+                  Debug the page {url} in SimpleBrowser. Reported symptom: {symptom}.
+                  1. If a URL is given, open it with new_tab; otherwise use the current tab.
+                  2. Call diagnose. For every error, read the stack (console_messages with includeStacks) and the failing requests (network_request with the body).
+                  3. Reproduce the symptom by acting on the page (snapshot, then click/fill), checking the action results for new errors.
+                  4. Explain the root cause with evidence (file and line, request and response), then propose the smallest fix. If the code is in this workspace, make the fix and verify it by reloading and re-running diagnose.
+                  """),
+        MCPPrompt(name: "audit_page", title: "Audit accessibility, SEO and performance",
+                  description: "Run every audit, rank the problems, and fix what can be fixed in the code.",
+                  arguments: [.init("url", "Page to audit; omit for the current tab")],
+                  template: """
+                  Audit {url} in SimpleBrowser. Open it if a URL is given. Run run_audit and performance_metrics, and check the page in dark mode and on a phone with emulate (take a screenshot of each).
+                  Report the problems ranked by user impact, each with the elements involved (selectors) and the concrete fix. If the source is in this workspace, fix the top issues and re-run the audit to confirm the scores went up.
+                  """),
+        MCPPrompt(name: "fix_layout", title: "Fix a layout or styling bug",
+                  description: "Inspect an element's box model and cascade to explain and fix how it looks.",
+                  arguments: [.init("element", "The element (its text, a selector, or \"the one I selected in DevTools\")", required: true),
+                              .init("problem", "What is wrong with it")],
+                  template: """
+                  In SimpleBrowser, look at {element}. Problem: {problem}.
+                  If the person refers to their DevTools selection, call devtools_selection. Otherwise find it with snapshot.
+                  Use inspect_element for the box model, computed styles and matched rules (in cascade order), screenshot it, and check its parent's layout the same way. Explain which rule causes the problem, then change the CSS (in the workspace if the source is here; otherwise give the exact rule), reload and confirm with another screenshot and inspect_element. Finally open devtools on the element so the person can see it.
+                  """),
+        MCPPrompt(name: "test_flow", title: "Test a user flow",
+                  description: "Walk through a flow like a user would and report every problem met on the way.",
+                  arguments: [.init("flow", "The flow, e.g. \"sign up with a new email and reach the dashboard\"", required: true),
+                              .init("url", "Where it starts")],
+                  template: """
+                  Test this flow in SimpleBrowser, starting at {url}: {flow}.
+                  Act as a user with snapshot, click, fill and press_key; after each step read the action result for navigation, console errors, failed requests and dialogs. Also try one failure path (invalid input, or mock_network to make the key API return 500) and check the page handles it.
+                  Report each step (pass/fail), every problem with evidence, and screenshots of anything that looks broken.
+                  """),
+        MCPPrompt(name: "performance_review", title: "Review page performance",
+                  description: "Measure load and runtime performance and say what to change first.",
+                  arguments: [.init("url", "Page to measure; omit for the current tab")],
+                  template: """
+                  Review the performance of {url} in SimpleBrowser. Load it (navigate with reload_bypassing_cache), then call performance_metrics, network_requests (largest and slowest), and run_audit with categories [performance].
+                  Interact with the main controls and call performance_metrics again for INP and long tasks. For a page that stays open, take heap_snapshot, repeat the main interaction a few times, and heap_snapshot with compare: true to look for leaks.
+                  Give the top changes ranked by expected gain, each tied to a measured number.
+                  """),
+    ]
 }

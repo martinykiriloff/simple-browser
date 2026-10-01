@@ -1168,6 +1168,15 @@ final class BrowserWindowController: NSWindowController,
         }
         if let panel { tools.showPanel(panel) }
         if devToolsWindow == nil { shownWindow?.makeFirstResponder(tools.view) }
+        // What an agent did here before DevTools opened, for the Agent panel.
+        if let agentState, agentState.shownIn !== tools || agentState.pushed < agentState.calls.count {
+            Task { @MainActor [weak tools] in
+                guard let tools else { return }
+                while tools.view.isLoading { try? await Task.sleep(for: .milliseconds(100)) }
+                try? await Task.sleep(for: .milliseconds(400))
+                agentState.push(to: tools)
+            }
+        }
     }
 
     private func hideDevTools() {
