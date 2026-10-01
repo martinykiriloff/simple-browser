@@ -76,6 +76,7 @@
         d.attributes = attributes;
         if (node.shadowRoot) d.shadowRoot = describe(node.shadowRoot, 0);
         if (node instanceof HTMLTemplateElement) d.templateContent = true;
+        badgesFor(node, d);
         break;
       }
       case 3: case 4: case 8:
@@ -103,6 +104,36 @@
       d.children = children.map((c) => describe(c, depth - 1));
     }
     return d;
+  }
+
+  // Chrome's badges in the tree: grid / flex containers (they toggle an
+  // overlay), scroll containers, nodes with event listeners (counted by the
+  // page world, see page-hooks.js) and slotted nodes (they reveal the slot).
+  // Nodes the page world says have listeners (page-hooks.js).
+  const listenerNodes = new WeakSet();
+  window.addEventListener("__sbListenerAdded", (e) => { if (e.target) listenerNodes.add(e.target); }, true);
+  window.addEventListener("__sbListenersRemoved", (e) => { if (e.target) listenerNodes.delete(e.target); }, true);
+  const NO_BADGES = new Set(["head", "script", "style", "meta", "link", "title", "template", "br", "noscript"]);
+  function badgesFor(el, d) {
+    if (NO_BADGES.has(el.localName) || isOurs(el)) return;
+    const badges = [];
+    try {
+      const cs = getComputedStyle(el);
+      const display = cs.display;
+      if (display === "grid" || display === "inline-grid") badges.push("grid");
+      else if (display === "flex" || display === "inline-flex") badges.push("flex");
+      if (display !== "none" && el !== document.documentElement && el !== document.body) {
+        const scrollY = /(auto|scroll)/.test(cs.overflowY) && el.scrollHeight > el.clientHeight + 1;
+        const scrollX = /(auto|scroll)/.test(cs.overflowX) && el.scrollWidth > el.clientWidth + 1;
+        if (scrollX || scrollY) badges.push("scroll");
+      }
+    } catch (_) {}
+    let hasListeners = listenerNodes.has(el);
+    if (!hasListeners) for (const a of el.attributes) if (a.name.startsWith("on")) { hasListeners = true; break; }
+    if (hasListeners) badges.push("event");
+    if (el.assignedSlot) { badges.push("slot"); d.assignedSlotId = nodeId(el.assignedSlot); }
+    if (persistentOverlays.has(el)) d.overlay = persistentOverlays.get(el);
+    if (badges.length) d.badges = badges;
   }
 
   function shortName(el) {
@@ -203,6 +234,125 @@
 
   function hideHighlight() {
     if (overlay) overlay.style.display = "none";
+  }
+
+  // ---- grid & flex overlays ------------------------------------------------------------------
+  // Toggled from the badges in the Elements tree; they stay until switched
+  // off, follow scrolling and resizing, and are redrawn a few times a second
+  // so layout changes show.
+  const persistentOverlays = new Map();      // element → "grid" | "flex"
+  let layoutLayer = null, layoutTimer = null;
+
+  function ensureLayoutLayer() {
+    if (layoutLayer && layoutLayer.isConnected) { layoutLayer.style.display = "block"; return layoutLayer; }
+    layoutLayer = document.createElement("div");
+    layoutLayer.id = "__sb-devtools-layout-overlay";
+    layoutLayer.setAttribute("aria-hidden", "true");
+    layoutLayer.style.cssText = "position:fixed;inset:0;pointer-events:none;z-index:2147483646;font:10px/1.2 -apple-system,system-ui,sans-serif;";
+    owned.add(layoutLayer);
+    (document.documentElement || document.body).appendChild(layoutLayer);
+    return layoutLayer;
+  }
+
+  function box(parent, css) {
+    const el = document.createElement("div");
+    el.style.cssText = "position:fixed;box-sizing:border-box;pointer-events:none;" + css;
+    parent.appendChild(el);
+    return el;
+  }
+
+  // "[a] 100px [b] 50.5px" → [100, 50.5]
+  function trackSizes(text) {
+    return String(text || "").replace(/\[[^\]]*\]/g, " ").split(/\s+/).map((t) => parseFloat(t)).filter((n) => !isNaN(n));
+  }
+
+  function drawGrid(layer, el) {
+    const r = el.getBoundingClientRect();
+    const cs = getComputedStyle(el);
+    const px = (v) => parseFloat(v) || 0;
+    const left = r.left + px(cs.borderLeftWidth) + px(cs.paddingLeft);
+    const top = r.top + px(cs.borderTopWidth) + px(cs.paddingTop);
+    const width = r.width - px(cs.borderLeftWidth) - px(cs.borderRightWidth) - px(cs.paddingLeft) - px(cs.paddingRight);
+    const height = r.height - px(cs.borderTopWidth) - px(cs.borderBottomWidth) - px(cs.paddingTop) - px(cs.paddingBottom);
+    const color = "rgba(197, 34, 31, 0.9)";
+    box(layer, `left:${left}px;top:${top}px;width:${width}px;height:${height}px;border:1px solid ${color};`);
+    const cols = trackSizes(cs.gridTemplateColumns), rows = trackSizes(cs.gridTemplateRows);
+    const colGap = px(cs.columnGap), rowGap = px(cs.rowGap);
+    const label = (x, y, text) => {
+      const l = box(layer, `left:${x}px;top:${y}px;background:${color};color:#fff;padding:0 3px;border-radius:2px;white-space:nowrap;`);
+      l.textContent = text;
+    };
+    let x = left;
+    cols.forEach((size, i) => {
+      if (i > 0) {
+        if (colGap) box(layer, `left:${x}px;top:${top}px;width:${colGap}px;height:${height}px;background:rgba(197,34,31,0.12);`);
+        x += colGap;
+      }
+      box(layer, `left:${x}px;top:${top}px;width:0;height:${height}px;border-left:1px dashed ${color};`);
+      label(x + 2, Math.max(0, top - 13), Math.round(size * 100) / 100 + "px");
+      x += size;
+      box(layer, `left:${x}px;top:${top}px;width:0;height:${height}px;border-left:1px dashed ${color};`);
+    });
+    let y = top;
+    rows.forEach((size, i) => {
+      if (i > 0) {
+        if (rowGap) box(layer, `left:${left}px;top:${y}px;width:${width}px;height:${rowGap}px;background:rgba(197,34,31,0.12);`);
+        y += rowGap;
+      }
+      box(layer, `left:${left}px;top:${y}px;width:${width}px;height:0;border-top:1px dashed ${color};`);
+      label(Math.max(0, left - 44), y + 1, Math.round(size * 100) / 100 + "px");
+      y += size;
+      box(layer, `left:${left}px;top:${y}px;width:${width}px;height:0;border-top:1px dashed ${color};`);
+    });
+  }
+
+  function drawFlex(layer, el) {
+    const r = el.getBoundingClientRect();
+    const color = "rgba(147, 52, 230, 0.9)";
+    box(layer, `left:${r.left}px;top:${r.top}px;width:${r.width}px;height:${r.height}px;border:2px dashed ${color};background:rgba(147,52,230,0.06);`);
+    for (const child of el.children) {
+      if (isOurs(child)) continue;
+      const c = child.getBoundingClientRect();
+      if (!c.width && !c.height) continue;
+      box(layer, `left:${c.left}px;top:${c.top}px;width:${c.width}px;height:${c.height}px;border:1px dotted ${color};`);
+    }
+    const cs = getComputedStyle(el);
+    const tag = box(layer, `left:${r.left}px;top:${Math.max(0, r.top - 14)}px;background:${color};color:#fff;padding:0 3px;border-radius:2px;white-space:nowrap;`);
+    tag.textContent = "flex " + cs.flexDirection + (cs.flexWrap !== "nowrap" ? " " + cs.flexWrap : "");
+  }
+
+  function drawLayoutOverlays() {
+    for (const el of Array.from(persistentOverlays.keys())) if (!el.isConnected) persistentOverlays.delete(el);
+    if (!persistentOverlays.size) {
+      if (layoutLayer) { layoutLayer.textContent = ""; layoutLayer.style.display = "none"; }
+      clearInterval(layoutTimer); layoutTimer = null;
+      window.removeEventListener("scroll", scheduleLayoutOverlays, true);
+      window.removeEventListener("resize", scheduleLayoutOverlays);
+      return;
+    }
+    const layer = ensureLayoutLayer();
+    layer.textContent = "";
+    for (const [el, kind] of persistentOverlays) {
+      try { if (kind === "grid") drawGrid(layer, el); else drawFlex(layer, el); } catch (_) {}
+    }
+  }
+  let layoutFrame = 0;
+  function scheduleLayoutOverlays() {
+    if (layoutFrame) return;
+    layoutFrame = requestAnimationFrame(() => { layoutFrame = 0; drawLayoutOverlays(); });
+  }
+
+  function setLayoutOverlay({ nodeId: id, kind, enabled }) {
+    const el = elementFor(id);
+    if (enabled) persistentOverlays.set(el, kind === "flex" ? "flex" : "grid");
+    else persistentOverlays.delete(el);
+    if (persistentOverlays.size && !layoutTimer) {
+      layoutTimer = setInterval(drawLayoutOverlays, 500);
+      window.addEventListener("scroll", scheduleLayoutOverlays, { capture: true, passive: true });
+      window.addEventListener("resize", scheduleLayoutOverlays, { passive: true });
+    }
+    drawLayoutOverlays();
+    return { enabled: persistentOverlays.has(el), active: Array.from(persistentOverlays.keys()).map(nodeId) };
   }
 
   // ---- element picker ---------------------------------------------------------------------
@@ -511,6 +661,57 @@
     return (node === document.documentElement ? "html > " : "") + parts.join(" > ");
   }
 
+  // The next sibling the tree shows (whitespace text is not in the tree).
+  function nextKept(n) {
+    let s = n.nextSibling;
+    while (s && isIgnorable(s)) s = s.nextSibling;
+    return s ? nodeId(s) : null;
+  }
+
+  // document.querySelector("…"), stepping into shadow roots as Chrome's
+  // "Copy JS path" does.
+  function jsPath(el) {
+    const chain = [];
+    let node = el;
+    while (node) {
+      const root = node.getRootNode();
+      const inShadow = typeof ShadowRoot !== "undefined" && root instanceof ShadowRoot;
+      chain.unshift(inShadow ? shadowSelector(node, root) : uniqueSelector(node));
+      if (!inShadow) break;
+      node = root.host;
+    }
+    return "document" + chain.map((sel, i) => (i ? ".shadowRoot" : "") + ".querySelector(" + JSON.stringify(sel) + ")").join("");
+  }
+  function shadowSelector(el, root) {
+    if (el.id && root.querySelectorAll("#" + CSS.escape(el.id)).length === 1) return "#" + CSS.escape(el.id);
+    const parts = [];
+    let node = el;
+    while (node && node.nodeType === 1) {
+      let part = node.localName;
+      const siblings = Array.from(node.parentElement ? node.parentElement.children : root.children);
+      if (siblings.filter((c) => c.localName === node.localName).length > 1) part += ":nth-child(" + (siblings.indexOf(node) + 1) + ")";
+      parts.unshift(part);
+      node = node.parentElement;
+    }
+    return parts.join(" > ");
+  }
+
+  // Chrome's "Copy XPath" (stops at a unique id) and "Copy full XPath".
+  function xPath(el, useIds) {
+    const steps = [];
+    let node = el;
+    while (node && node.nodeType === 1) {
+      if (useIds && node.id && document.querySelectorAll("#" + CSS.escape(node.id)).length === 1) {
+        steps.unshift(`//*[@id="${node.id}"]`);
+        return steps.join("/");
+      }
+      const same = node.parentNode ? Array.from(node.parentNode.children).filter((c) => c.localName === node.localName) : [node];
+      steps.unshift(node.localName + (same.length > 1 ? "[" + (same.indexOf(node) + 1) + "]" : ""));
+      node = node.parentElement;
+    }
+    return "/" + steps.join("/");
+  }
+
   function setAttributesAsText({ nodeId: id, text }) {
     const el = elementFor(id);
     const doc = new DOMParser().parseFromString("<div " + text + "></div>", "text/html");
@@ -593,6 +794,58 @@
     },
     "DOM.elementFromPoint": ({ x, y }) => { const el = elementAt(x, y); return el ? nodeId(el) : null; },
     "DOM.focus": ({ nodeId: id }) => { elementFor(id).focus(); return true; },
+    // Drag and drop in the tree, and undoing a delete: moves (or re-inserts)
+    // the node itself, so its listeners and state come along. Answers where
+    // it was, so the move can be undone.
+    "DOM.moveTo": ({ nodeId: id, parentId, beforeId }) => {
+      const n = nodeFor(id);
+      const parent = nodeFor(parentId);
+      const before = beforeId != null ? nodeFor(beforeId) : null;
+      if (n === parent || (n.contains && n.contains(parent))) throw new Error("Cannot move a node into itself");
+      const from = { parentId: n.parentNode ? nodeId(n.parentNode) : null, beforeId: nextKept(n) };
+      parent.insertBefore(n, before && before.parentNode === parent ? before : null);
+      return from;
+    },
+    // Where a node sits, for undoing its removal.
+    "DOM.position": ({ nodeId: id }) => {
+      const n = nodeFor(id);
+      return { parentId: n.parentNode ? nodeId(n.parentNode) : null, beforeId: nextKept(n) };
+    },
+    "DOM.setAttributes": ({ nodeId: id, attributes }) => {
+      const el = elementFor(id);
+      const wanted = new Map();
+      for (let i = 0; i < (attributes || []).length; i += 2) wanted.set(attributes[i], attributes[i + 1]);
+      for (const a of Array.from(el.attributes)) if (!wanted.has(a.name)) el.removeAttribute(a.name);
+      for (const [name, value] of wanted) if (el.getAttribute(name) !== value) el.setAttribute(name, value);
+      return describe(el, 0);
+    },
+    // Edit as HTML, undoably: the old node is kept (it is still in the
+    // registry) and the new ones are named, so undo swaps them back.
+    "DOM.replaceWithHTML": ({ nodeId: id, outerHTML }) => {
+      const n = nodeFor(id);
+      const parent = n.parentNode;
+      if (!parent) throw new Error("The node has no parent");
+      const tpl = document.createElement("template");
+      tpl.innerHTML = outerHTML;
+      const fresh = Array.from(tpl.content.childNodes);
+      parent.replaceChild(tpl.content, n);
+      return { parentId: nodeId(parent), newIds: fresh.map(nodeId) };
+    },
+    "DOM.restoreReplaced": ({ nodeId: id, newIds }) => {
+      const old = nodeFor(id);
+      const fresh = (newIds || []).map((x) => nodesById.get(Number(x))).filter((x) => x && x.parentNode);
+      if (!fresh.length) throw new Error("The edited nodes are gone");
+      fresh[0].parentNode.insertBefore(old, fresh[0]);
+      for (const f of fresh) f.remove();
+      return { parentId: nodeId(old.parentNode) };
+    },
+    "DOM.copyPath": ({ nodeId: id, kind }) => {
+      const el = elementFor(id);
+      if (kind === "jsPath") return jsPath(el);
+      if (kind === "xpath") return xPath(el, true);
+      if (kind === "fullXPath") return xPath(el, false);
+      return uniqueSelector(el);
+    },
     "DOM.toggleHidden": ({ nodeId: id }) => {
       const el = elementFor(id);
       el.style.visibility = el.style.visibility === "hidden" ? "" : "hidden";
@@ -612,6 +865,8 @@
     "Overlay.highlightNode": ({ nodeId: id }) => { highlight(nodeFor(id)); return true; },
     "Overlay.hideHighlight": () => { hideHighlight(); return true; },
     "Overlay.setInspectMode": ({ enabled }) => { setInspectMode(!!enabled); return true; },
+    "Overlay.setLayoutOverlay": setLayoutOverlay,
+    "Overlay.getLayoutOverlays": () => Array.from(persistentOverlays).filter(([el]) => el.isConnected).map(([el, kind]) => ({ nodeId: nodeId(el), kind })),
   };
 
   // ---- storage ----------------------------------------------------------------------------------------
@@ -679,6 +934,10 @@
 
   window.addEventListener("__sbReveal", (e) => {
     if (e.target && e.target.nodeType) post("inspect", { nodeId: nodeId(e.target) });
+  }, true);
+  // A node hovered in the console (page-hooks.js names it by dispatching this).
+  window.addEventListener("__sbHighlight", (e) => {
+    if (e.target && e.target.nodeType) highlight(e.target);
   }, true);
 
   // The tools agent (tools-agent.js, injected on demand) adds its commands

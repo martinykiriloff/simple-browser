@@ -126,14 +126,47 @@
   // Short form used inside previews: nested objects collapse to their name.
   function describeShort(v) {
     const t = typeof v;
-    if (t === "string") return JSON.stringify(v.length > 100 ? v.slice(0, 100) + "…" : v);
+    if (t === "string") return quoteShort(v.length > 100 ? v.slice(0, 100) + "…" : v);
+    if (t === "function") return "ƒ";
     if (t !== "object" || v === null) return describe(v);
     const sub = subtypeOf(v);
     if (sub === "array") return "Array(" + v.length + ")";
-    if (sub === "node") return describeNode(v);
+    if (sub === "node") return nodeLabel(v);
     if (sub === "error") return (v.name || "Error") + ": " + v.message;
     if (sub === "date" || sub === "regexp") return describe(v);
-    return "{…}";
+    if (sub === "map" || sub === "set" || sub === "typedarray" || sub === "arraybuffer") return describe(v);
+    if (sub === "promise") return "Promise";
+    const name = className(v);
+    return name === "Object" ? "{…}" : name;
+  }
+
+  // 'text' as Chrome writes a string inside a preview.
+  function quoteShort(s) {
+    return "'" + String(s).replace(/\\/g, "\\\\").replace(/'/g, "\\'").replace(/\n/g, "\\n") + "'";
+  }
+
+  // div#id.class, the way Chrome names a node inside a preview.
+  function nodeLabel(node) {
+    if (node.nodeType !== 1) return describeNode(node);
+    let s = node.localName;
+    if (node.id) s += "#" + node.id;
+    const cls = typeof node.className === "string" ? node.className.trim() : "";
+    if (cls) s += "." + cls.split(/\s+/).join(".");
+    return s;
+  }
+
+  // Promise states, learned by attaching handlers. Only promises the console
+  // itself produced are tracked: a handler marks a rejection as handled,
+  // which would hide the page's own "Uncaught (in promise)".
+  const promiseStates = new WeakMap();
+  function trackPromise(p) {
+    if (promiseStates.has(p)) return;
+    const record = { state: "pending" };
+    promiseStates.set(p, record);
+    try {
+      Promise.prototype.then.call(p, (value) => { record.state = "fulfilled"; record.value = value; },
+                                     (reason) => { record.state = "rejected"; record.value = reason; });
+    } catch (_) {}
   }
 
   function preview(v) {
@@ -141,6 +174,14 @@
     let overflow = false;
     try {
       const sub = subtypeOf(v);
+      if (sub === "promise") {
+        const record = promiseStates.get(v) || { state: "pending" };
+        const p = { name: "<" + record.state + ">", type: record.state === "pending" ? "undefined" : typeof record.value, value: "" };
+        if (record.state !== "pending") { p.value = describeShort(record.value); if (record.value !== null && typeof record.value === "object") p.subtype = subtypeOf(record.value); }
+        if (record.value === null) p.subtype = "null";
+        return { properties: [p], overflow: false };
+      }
+      if (sub === "node" || sub === "error" || sub === "regexp" || sub === "date") return { properties: [], overflow: false };
       if (sub === "map") {
         let i = 0;
         for (const [k, val] of v) { if (i++ >= 6) { overflow = true; break; } props.push({ name: describeShort(k), type: typeof val, subtype: subtypeOf(val), value: describeShort(val) }); }
@@ -161,21 +202,21 @@
           if (d && !("value" in d)) { props.push({ name: key, type: "accessor", value: "(...)" }); continue; }
           val = v[key];
         } catch (_) { val = undefined; }
-        props.push({ name: key, type: typeof val, subtype: typeof val === "object" ? subtypeOf(val) : undefined, value: describeShort(val) });
+        props.push({ name: key, type: typeof val, subtype: val === null ? "null" : typeof val === "object" ? subtypeOf(val) : undefined, value: describeShort(val) });
       }
       if (keys.length > props.length) overflow = true;
     } catch (_) {}
     return { properties: props, overflow };
   }
 
-  function remote(v, withPreview) {
+  function remote(v, withPreview, keep = true) {
     const t = typeof v;
     const out = { type: t, description: describe(v) };
     if (t === "object" || t === "function") {
       if (v === null) { out.subtype = "null"; return out; }
       out.subtype = t === "object" ? subtypeOf(v) : undefined;
       out.className = className(v);
-      out.objectId = retain(v);
+      if (keep) out.objectId = retain(v);
       if (withPreview && t === "object" && !(typeof Window !== "undefined" && v instanceof Window)) out.preview = preview(v);
     }
     if (out.subtype === undefined) delete out.subtype;
@@ -220,6 +261,11 @@
       if (proto !== null && proto !== undefined) {
         out.push({ name: "[[Prototype]]", isOwn: false, enumerable: false, isInternal: true, value: remote(proto, false) });
       }
+    }
+    if (sub === "promise") {
+      const record = promiseStates.get(obj) || { state: "pending" };
+      out.push({ name: "[[PromiseState]]", isOwn: false, enumerable: false, isInternal: true, value: { type: "string", description: record.state } });
+      out.push({ name: "[[PromiseResult]]", isOwn: false, enumerable: false, isInternal: true, value: remote(record.value, true) });
     }
     if (sub === "node" && obj.nodeType === 1) {
       out.push({ name: "[[Reveal in Elements]]", isOwn: false, enumerable: false, isInternal: true, isReveal: true, value: { type: "string", description: "" } });
@@ -268,7 +314,7 @@
 
   async function evaluate({ expression, awaitPromise }) {
     let expr = String(expression);
-    let value;
+    let value, wrapped = false;
     try {
       if (/^\s*(let|const)\s/.test(expr)) {
         // Chrome persists top-level let/const across console entries; a
@@ -283,10 +329,14 @@
           if (e instanceof SyntaxError && /\bawait\b/.test(expr)) {
             try { value = asyncEvaluator(api, expr); }
             catch (_) { value = asyncBlockEvaluator(api, expr); }
+            wrapped = true;
           } else throw e;
         }
       }
-      if (awaitPromise !== false && value instanceof Promise) value = await value;
+      // Like Chrome: a promise is awaited only when the input used `await`;
+      // otherwise it is shown as a promise, with its state.
+      if ((wrapped || awaitPromise === true) && value instanceof Promise) value = await value;
+      else if (value instanceof Promise) { trackPromise(value); await null; await null; }
     } catch (error) {
       return { exceptionDetails: { text: describe(error), exception: remote(error, false) } };
     }
@@ -294,24 +344,81 @@
     return { result: remote(value, true) };
   }
 
-  function completions({ expression }) {
-    const m = String(expression).match(/^\s*([\w$.\[\]'"]*?)\.?([\w$]*)$/);
-    if (!m) return { names: [], prefix: "" };
-    const [, objectPath, prefix] = m;
+  // Names for the console's autocomplete. `object` (when given) is the
+  // expression before the dot, already vetted by the UI as free of side
+  // effects; otherwise the old single-string form is split here. Each name
+  // comes with what it is, so the list can say "method" or "property".
+  function completions({ expression, object, prefix: givenPrefix }) {
+    let objectPath, prefix;
+    if (object !== undefined) { objectPath = String(object); prefix = String(givenPrefix || ""); }
+    else {
+      const m = String(expression).match(/^\s*([\w$.\[\]'"]*?)\.?([\w$]*)$/);
+      if (!m) return { names: [], prefix: "", types: {} };
+      [, objectPath, prefix] = m;
+      objectPath = objectPath.replace(/\.$/, "");
+    }
     let target;
-    try { target = objectPath ? evaluator(api, objectPath.replace(/\.$/, "")) : window; }
-    catch (_) { return { names: [], prefix }; }
-    if (target === null || target === undefined) return { names: [], prefix };
+    try { target = objectPath ? evaluator(api, objectPath) : window; }
+    catch (_) { return { names: [], prefix, types: {} }; }
+    if (target === null || target === undefined) return { names: [], prefix, types: {} };
+    if (typeof target !== "object" && typeof target !== "function") target = Object(target);
     const names = new Set();
-    if (!objectPath) for (const k of ["$0", "$_", "$", "$$", "$x", "copy", "keys", "values", "dir", "inspect", "clear"]) names.add(k);
+    const types = {};
+    if (!objectPath) {
+      for (const k of ["$0", "$_", "$", "$$", "$x", "copy", "keys", "values", "dir", "inspect", "clear"]) if (k.startsWith(prefix)) { names.add(k); types[k] = "api"; }
+      for (const k of ["const", "let", "var", "function", "class", "async", "await", "return", "typeof", "instanceof", "new", "this", "true", "false", "null", "undefined"]) if (k.startsWith(prefix)) { names.add(k); types[k] = "keyword"; }
+    }
     let obj = target, depth = 0;
     try {
-      while (obj && depth++ < 20 && names.size < 500) {
-        for (const k of Object.getOwnPropertyNames(obj)) if (typeof k === "string" && k.startsWith(prefix)) names.add(k);
+      while (obj && depth++ < 20 && names.size < 800) {
+        for (const k of Object.getOwnPropertyNames(obj)) {
+          if (typeof k !== "string" || !k.startsWith(prefix) || names.has(k)) continue;
+          names.add(k);
+          let kind = "property";
+          try {
+            const d = Object.getOwnPropertyDescriptor(obj, k);
+            if (d && "value" in d) kind = typeof d.value === "function" ? (/^[A-Z]/.test(k) ? "class" : "method") : typeof d.value;
+            else if (d) kind = "accessor";
+          } catch (_) {}
+          types[k] = kind;
+        }
         obj = Object.getPrototypeOf(obj);
       }
     } catch (_) {}
-    return { names: Array.from(names).sort(), prefix };
+    return { names: Array.from(names).sort(), prefix, types };
+  }
+
+  // The prompt's preview line: evaluated as the developer types, so it must
+  // not change anything. The UI only sends expressions it has vetted (reads,
+  // and calls to an allow-list of pure functions); nothing is retained and
+  // `$_` is left alone.
+  function evaluateEager({ expression }) {
+    try {
+      const v = evaluator(api, String(expression));
+      if (v instanceof Promise) return { result: { type: "object", subtype: "promise", description: "Promise" } };
+      return { result: remote(v, true, false) };
+    } catch (error) {
+      return { exceptionDetails: { text: describe(error).split("\n")[0] } };
+    }
+  }
+
+  // "Store as global variable": temp1, temp2… as in Chrome.
+  function storeAsGlobal(value) {
+    let i = 1;
+    while (("temp" + i) in window) i++;
+    const name = "temp" + i;
+    try { Object.defineProperty(window, name, { value, writable: true, configurable: true, enumerable: false }); }
+    catch (_) { window[name] = value; }
+    return name;
+  }
+
+  // A function's source, for a function expanded in the console.
+  function functionSource({ objectId }) {
+    const fn = resolve(objectId);
+    if (typeof fn !== "function") throw new Error("Not a function");
+    let text = "";
+    try { text = Function.prototype.toString.call(fn); } catch (e) { text = String(e); }
+    return { source: text.length > 20000 ? text.slice(0, 20000) + "\n…" : text, name: fn.name || "" };
   }
 
   // Live expressions: re-evaluated four times a second, so nothing is
@@ -340,6 +447,19 @@
       if (isNode(v)) { try { v.dispatchEvent(new CustomEvent("__sbReveal", { bubbles: false })); } catch (_) {} }
       return true;
     },
+    "Runtime.evaluateEager": evaluateEager,
+    "Runtime.getFunctionSource": functionSource,
+    "Runtime.storeAsGlobal": ({ objectId, value }) => ({ name: storeAsGlobal(objectId ? resolve(objectId) : value) }),
+    // The node the isolated world last marked (see `__sbMark` below).
+    "Runtime.storeMarkedAsGlobal": () => {
+      if (!marked || !marked.isConnected) throw new Error("The node is no longer in the document");
+      return { name: storeAsGlobal(marked) };
+    },
+    "Runtime.highlightNode": ({ objectId }) => {
+      const v = resolve(objectId);
+      if (isNode(v)) { try { v.dispatchEvent(new CustomEvent("__sbHighlight", { bubbles: false })); } catch (_) {} }
+      return true;
+    },
     "Runtime.copy": ({ objectId }) => {
       const v = resolve(objectId);
       return typeof v === "string" ? v : (isNode(v) ? v.outerHTML : safeJSON(v));
@@ -360,6 +480,39 @@
   // could already reach.
   let marked = null;
   window.addEventListener("__sbMark", (e) => { marked = e.target && e.target.nodeType ? e.target : null; }, true);
+
+  // The Elements tree's `event` badge: which nodes have listeners. Only the
+  // page world sees addEventListener calls, so it counts them here and tells
+  // the isolated world when a node gets its first listener or loses its last
+  // (an event's target is the same node in every world). Nothing of ours
+  // runs in the page when the tree is drawn.
+  const listenerCounts = new WeakMap();
+  try {
+    const target = EventTarget.prototype;
+    const addOriginal = target.addEventListener, removeOriginal = target.removeEventListener;
+    const dispatch = EventTarget.prototype.dispatchEvent;
+    const counted = (node) => node !== null && typeof node === "object" && typeof node.nodeType === "number";
+    const tell = (node, type) => { try { dispatch.call(node, new CustomEvent(type, { bubbles: false })); } catch (_) {} };
+    const hookedAdd = function addEventListener(type, listener) {
+      try {
+        if (listener && counted(this) && String(type).slice(0, 4) !== "__sb") {
+          const n = (listenerCounts.get(this) || 0) + 1;
+          listenerCounts.set(this, n);
+          if (n === 1) tell(this, "__sbListenerAdded");
+        }
+      } catch (_) {}
+      return addOriginal.apply(this, arguments);
+    };
+    const hookedRemove = function removeEventListener(type, listener) {
+      try {
+        const n = counted(this) ? listenerCounts.get(this) || 0 : 0;
+        if (listener && n && String(type).slice(0, 4) !== "__sb") { listenerCounts.set(this, n - 1); if (n === 1) tell(this, "__sbListenersRemoved"); }
+      } catch (_) {}
+      return removeOriginal.apply(this, arguments);
+    };
+    Object.defineProperty(target, "addEventListener", { value: hookedAdd, writable: true, configurable: true, enumerable: true });
+    Object.defineProperty(target, "removeEventListener", { value: hookedRemove, writable: true, configurable: true, enumerable: true });
+  } catch (_) {}
 
   Object.defineProperty(window, "__sbInspector", {
     value: Object.freeze({ handle, get marked() { return marked; } }),

@@ -651,6 +651,24 @@ final class DevToolsController: NSObject, WKScriptMessageHandler, WKNavigationDe
                 "arguments": [["value": params["name"] as? String ?? ""]], "generatePreview": true,
             ])
             return Self.normalize(protocolObject: result["result"] as? [String: Any] ?? [:])
+        case "Runtime.revealNode", "Runtime.highlightNode":
+            // The isolated world listens for these on the node itself (dom-agent.js).
+            let event = method == "Runtime.revealNode" ? "__sbReveal" : "__sbHighlight"
+            _ = try await protocolBridge.send("Runtime.callFunctionOn", [
+                "objectId": objectId, "returnByValue": true, "arguments": [["value": event]],
+                "functionDeclaration": "function(type) { if (this && this.nodeType) this.dispatchEvent(new CustomEvent(type)); return true; }",
+            ])
+            return true
+        case "Runtime.storeAsGlobal", "Runtime.getFunctionSource", "Runtime.copy":
+            let declarations = [
+                "Runtime.storeAsGlobal": "function() { var i = 1; while (('temp' + i) in window) i++; window['temp' + i] = this; return { name: 'temp' + i }; }",
+                "Runtime.getFunctionSource": "function() { return { source: Function.prototype.toString.call(this), name: this.name || '' }; }",
+                "Runtime.copy": "function() { try { return this && this.nodeType ? this.outerHTML : JSON.stringify(this, null, 2); } catch (e) { return String(this); } }",
+            ]
+            let result = try await protocolBridge.send("Runtime.callFunctionOn", [
+                "objectId": objectId, "returnByValue": true, "functionDeclaration": declarations[method] ?? "",
+            ])
+            return (result["result"] as? [String: Any])?["value"] ?? NSNull()
         default:
             throw DevToolsError.protocolUnavailable("\(method) is not supported for debugger objects")
         }
@@ -671,6 +689,13 @@ final class DevToolsController: NSObject, WKScriptMessageHandler, WKNavigationDe
                 var p: [String: Any] = ["name": property["name"] as? String ?? "", "type": property["type"] as? String ?? "",
                                         "value": property["value"] as? String ?? ""]
                 if let subtype = property["subtype"] as? String { p["subtype"] = subtype }
+                // A nested object comes as its own preview, without a value: name it as Chrome does.
+                if property["value"] == nil, let nested = property["valuePreview"] as? [String: Any] {
+                    let description = nested["description"] as? String ?? ""
+                    if property["subtype"] as? String == "array", let size = nested["size"] as? Int { p["value"] = "Array(\(size))" }
+                    else { p["value"] = description.isEmpty || description == "Object" ? "{…}" : description }
+                }
+                if property["type"] as? String == "function", property["value"] == nil { p["value"] = "ƒ" }
                 if p["type"] as? String == "string" { p["value"] = "\"\(p["value"] as? String ?? "")\"" }
                 return p
             }
