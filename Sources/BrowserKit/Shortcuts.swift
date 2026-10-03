@@ -159,6 +159,10 @@ public enum Shortcuts {
         ShortcutCommand("inspectElementMode:", "Inspect Elements", menu: "Develop", KeyShortcut("c", [.command, .option]), safari: "—", chrome: "⌥⌘C"),
         ShortcutCommand("showRecorder:", "Show Recording Log", menu: "Develop", KeyShortcut("l", [.command, .option, .control]), safari: "—", chrome: "—"),
         ShortcutCommand("pickColor:", "Pick Color…", menu: "Develop", KeyShortcut("c", [.command, .option, .control]), safari: "—", chrome: "— (Color Picker extension)"),
+        ShortcutCommand("pairNewAgent:", "Pair a New Agent…", menu: "Agent", KeyShortcut("p", [.command, .option]), safari: "—", chrome: "—"),
+        ShortcutCommand("showAgentActivityLog:", "Agent Activity Log", menu: "Agent", KeyShortcut("a", [.command, .option]), safari: "—", chrome: "—"),
+        ShortcutCommand("pauseAllAgents:", "Pause All Agents", menu: "Agent", KeyShortcut(".", [.command, .shift]), safari: "—", chrome: "—"),
+        ShortcutCommand("copySnapshotForAI:", "Copy Snapshot for AI", menu: "Agent", KeyShortcut("c", [.command, .option, .shift]), safari: "—", chrome: "—"),
         ShortcutCommand("performMiniaturize:", "Minimize", menu: "Window", KeyShortcut("m"), safari: "⌘M", chrome: "⌘M"),
         ShortcutCommand("showDownloadsWindow:", "Downloads", menu: "Window", KeyShortcut("l", [.command, .option]), safari: "⌥⌘L", chrome: "⇧⌘J"),
         // Handled by the window: not in the menu, and not changeable.

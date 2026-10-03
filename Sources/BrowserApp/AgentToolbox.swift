@@ -17,6 +17,10 @@ final class AgentTabState {
     var mocks: [Mock] = []
     /// Every tool call in this tab, for DevTools' Agent panel.
     var calls: [JSONValue] = []
+    /// Text on the current page that tries to instruct agents, if any.
+    var injection: String?
+    /// The finding the person was last shown, so it is shown once.
+    var injectionShown: String?
     /// The DevTools that has been sent calls, and how many of them.
     weak var shownIn: DevToolsController?
     var pushed = 0
@@ -52,21 +56,39 @@ final class AgentToolbox {
     }
 
     /// The browser's tabs, front window first.
-    var tabs: () -> [BrowserWindowController] = { [] }
+    var allTabs: () -> [BrowserWindowController] = { [] }
+    /// The trust layer: sessions, approvals, the log.
+    weak var trust: AgentTrust?
+
+    /// The tabs tools may act on: the calling session's own, or every tab
+    /// when no session is in play (the app's own self-tests).
+    func tabs() -> [BrowserWindowController] {
+        if let live = currentLive { return live.openTabs }
+        return allTabs()
+    }
+
+    /// The session of the call being handled.
+    var currentLive: AgentTrust.Live? { trust?.live(AgentContext.sessionID) }
     var openTab: (_ beside: BrowserWindowController?, _ url: URL?, _ inFront: Bool) -> BrowserWindowController? = { _, _, _ in nil }
     let recorder: InspectorRecorder
     /// The client named in `initialize`, for what the person is told.
     var clientName = "An AI agent"
     /// One line per tool call, for Settings → Developer.
     var onActivity: ((String) -> Void)?
+    /// Runs a WebMCP tool in a page; set by the WebMCP bridge.
+    var webMCPCall: ((BrowserWindowController, PageTool, JSONValue) async throws -> String)?
 
-    private weak var currentTab: BrowserWindowController?
+    private weak var fallbackCurrentTab: BrowserWindowController?
+    private var currentTab: BrowserWindowController? {
+        get { currentLive.map { $0.currentTab } ?? fallbackCurrentTab }
+        set { if let live = currentLive { live.currentTab = newValue } else { fallbackCurrentTab = newValue } }
+    }
 
     init(recorder: InspectorRecorder) {
         self.recorder = recorder
     }
 
-    func call(_ name: String, _ arguments: JSONValue) async -> MCPToolResult {
+    func callUntrusted(_ name: String, _ arguments: JSONValue) async -> MCPToolResult {
         let started = Date()
         let result: MCPToolResult
         do {
@@ -122,7 +144,7 @@ final class AgentToolbox {
     }
 
     /// Keeps the call for the tab it acted on and shows it in that tab's DevTools.
-    private func record(_ name: String, _ arguments: JSONValue, _ result: MCPToolResult, started: Date, milliseconds: Int) {
+    func record(_ name: String, _ arguments: JSONValue, _ result: MCPToolResult, started: Date, milliseconds: Int) {
         guard name != "list_tabs", let target = try? tab(arguments) else { return }
         let state = target.agentState ?? AgentTabState()
         target.agentState = state
@@ -159,11 +181,18 @@ final class AgentToolbox {
         let all = tabs()
         if let id = a["tabId"]?.string?.lowercased().trimmingCharacters(in: .whitespaces), !id.isEmpty {
             let matches = all.filter { Self.shortID($0).hasPrefix(id) || $0.tab.rawValue.uuidString.lowercased() == id }
-            guard let match = matches.first else { throw ToolError("No tab with id \(id). Call list_tabs for the open tabs.") }
+            guard let match = matches.first else {
+                throw ToolError(currentLive != nil && allTabs().contains { Self.shortID($0).hasPrefix(id) }
+                    ? "Tab \(id) is not in your session: agents act only on tabs they opened, or that the person handed them. Use new_tab."
+                    : "No tab with id \(id). Call list_tabs for the open tabs.")
+            }
             return match
         }
         if let currentTab, all.contains(where: { $0 === currentTab }) { return currentTab }
-        guard let front = frontmost() else { throw ToolError("No browser window is open. Use new_tab.") }
+        guard let front = frontmost() else {
+            throw ToolError(currentLive != nil ? "Your session has no tabs yet. Use new_tab: it opens in your own sandbox, with none of the person's data."
+                                               : "No browser window is open. Use new_tab.")
+        }
         return front
     }
 
@@ -179,7 +208,7 @@ final class AgentToolbox {
         }
         let state = tab.agentState ?? AgentTabState()
         tab.agentState = state
-        if !state.announced {
+        if !state.announced, tab.agentSessionID == nil {
             state.announced = true
             tab.showNotice("\(clientName) is controlling this tab through the agent server (Settings → Developer).", seconds: 6)
         }
@@ -219,7 +248,18 @@ final class AgentToolbox {
             url = resolved
         }
         let background = a["background"]?.bool ?? false
-        guard let opened = openTab((try? tab([:])), url, !background) else { throw ToolError("Could not open a tab") }
+        let opened: BrowserWindowController
+        if let live = currentLive, let trust {
+            guard live.openTabs.count < live.session.budgets.maxTabs else {
+                throw AgentError(.budgetExhausted, "Your session already has \(live.session.budgets.maxTabs) tabs open. Close one with close_tab first.")
+            }
+            guard let made = trust.openTab?(live, url, !background) else { throw ToolError("Could not open a tab") }
+            live.adopt(made)
+            opened = made
+        } else {
+            guard let made = openTab((try? tab([:])), url, !background) else { throw ToolError("Could not open a tab") }
+            opened = made
+        }
         currentTab = opened
         try await ready(opened, show: !background)
         if url != nil { try await waitForLoad(opened, timeout: 30) }
@@ -417,6 +457,7 @@ final class AgentToolbox {
             return message.replacingOccurrences(of: "^Error: ", with: "", options: .regularExpression) + line
         }
         if let toolError = error as? ToolError { return toolError.message }
+        if let agentError = error as? AgentError { return agentError.message }
         return error.localizedDescription
     }
 

@@ -27,7 +27,7 @@ python3 -m http.server "$SITE_PORT" --bind 127.0.0.1 --directory Tests/Fixtures/
 SERVER_PID=$!
 PANEL_REPORT="$(mktemp -t agent-panel).json"
 rm -f "$PANEL_REPORT"
-"$APP" --quiet --mcp-port "$PORT" --mcp-token "$TOKEN" --show-devtools \
+"$APP" --quiet --mcp-port "$PORT" --mcp-token "$TOKEN" --agent-approve all --agent-hand-tab --show-devtools \
        --devtools-script "$ROOT/Tests/Fixtures/agent/agent-panel-check.js" --devtools-out "$PANEL_REPORT" --devtools-delay 3 \
        "http://127.0.0.1:$SITE_PORT/page2.html" >/dev/null 2>&1 &
 APP_PID=$!

@@ -7,7 +7,9 @@ import InspectKit
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private var controllers: [BrowserWindowController] = []
+    private(set) var controllers: [BrowserWindowController] = []
+    /// Who may drive the browser, and what they are doing.
+    let agentTrust = AgentTrust()
     let profiles = ProfileStore()
     let updater = Updater()
     private(set) lazy var session = SessionController(directory: launch.sessionDirectory.map { URL(fileURLWithPath: $0) })
@@ -147,7 +149,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// MCP for AI agents. Made on first use; listens only once turned on.
     private(set) lazy var agentServer: AgentServer = {
         let toolbox = AgentToolbox(recorder: recorder)
-        toolbox.tabs = { [weak self] in self?.controllers ?? [] }
+        toolbox.allTabs = { [weak self] in self?.controllers ?? [] }
         toolbox.openTab = { [weak self] beside, url, inFront in
             guard let self else { return nil }
             guard let beside = beside ?? self.frontmostBrowser else {
@@ -158,7 +160,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             return self.newTab(beside: beside, url: url, inFront: inFront)
         }
-        return AgentServer(toolbox: toolbox)
+        configureAgentTrust()
+        return AgentServer(toolbox: toolbox, trust: agentTrust)
     }()
 
     /// Pinned tabs and tab groups, for every window.
@@ -203,7 +206,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var currentProfile: Profile { frontmostBrowser?.profile ?? profiles.lastUsed }
 
     /// The browser window the user was last in (Settings itself may be key).
-    private var frontmostBrowser: BrowserWindowController? {
+    var frontmostBrowser: BrowserWindowController? {
         let ordered = NSApp.orderedWindows.compactMap { window in controllers.first { $0.window === window } }
         return ordered.first ?? controllers.last
     }
@@ -315,6 +318,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let port = launch.mcpPort {
             agentServer.portOverride = port
             if let token = launch.mcpToken { agentServer.tokenOverride = .some(token) }
+            agentTrust.autoAnswer = launch.agentApprove
+            if launch.agentHandTab {
+                let first = controllers.first
+                agentTrust.handOnConnect = { [weak first] in first }
+            }
         }
         if AgentServer.isEnabled || launch.mcpPort != nil { agentServer.sync() }
         if let path = launch.dumpRecordingPath {
@@ -532,6 +540,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var browserControllers: [BrowserWindowController] { controllers }
 
     @objc func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if let agent = validateAgentMenuItem(menuItem) { return agent }
         switch menuItem.action {
         case #selector(reopenClosedTab(_:)): return canReopenClosedTab
         case #selector(reopenLastClosedWindow(_:)): return !closedWindows.isEmpty
@@ -1174,10 +1183,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @discardableResult
-    private func makeWindow(profile: Profile? = nil, configuration: WKWebViewConfiguration? = nil, isPrivate: Bool = false) -> BrowserWindowController {
+    func makeWindow(profile: Profile? = nil, configuration: WKWebViewConfiguration? = nil, isPrivate: Bool = false,
+                    sandbox: PrivateSession? = nil) -> BrowserWindowController {
         let profile = profile ?? currentProfile
         profiles.markUsed(profile.id)
-        let session = isPrivate ? privateSession(for: profile) : nil
+        let isPrivate = isPrivate || sandbox != nil
+        let session = sandbox ?? (isPrivate ? privateSession(for: profile) : nil)
         session?.tabs += 1
         let controller = BrowserWindowController(profile: profile, recorder: recorder, passwords: passwords(for: profile),
                                                  configuration: configuration, startPage: isPrivate ? privateStartPage : startPage(for: profile),
@@ -1280,6 +1291,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         controllers.append(controller)
         controller.extensions?.didOpen(controller)
+        controller.agentTrust = { [weak self] in self?.agentTrust }
         controller.onClose = { [weak self, weak controller] in
             self?.controllers.removeAll { $0 === controller }
             self?.mediaChanged()
@@ -1372,6 +1384,10 @@ struct LaunchOptions {
     var mcpPort: Int?
     /// `--mcp-token <t>` sets the token; `--mcp-no-auth` turns it off. Only with `--mcp-port`.
     var mcpToken: String??
+    /// `--agent-approve all|deny`: scripted runs answer approval cards themselves.
+    var agentApprove: String?
+    /// `--agent-hand-tab`: the first tab is handed to the command-line client, as Hand Tab to Agent… does.
+    var agentHandTab = false
 
     static func parse(_ arguments: [String]) -> LaunchOptions {
         var options = LaunchOptions()
@@ -1440,6 +1456,10 @@ struct LaunchOptions {
                 options.mcpToken = .some(iterator.next())
             case "--mcp-no-auth":
                 options.mcpToken = .some(nil)
+            case "--agent-approve":
+                options.agentApprove = iterator.next()
+            case "--agent-hand-tab":
+                options.agentHandTab = true
             case "--devtools-delay":
                 options.devToolsDelay = iterator.next().flatMap(Double.init) ?? 4
             case let value where value.hasPrefix("-"):

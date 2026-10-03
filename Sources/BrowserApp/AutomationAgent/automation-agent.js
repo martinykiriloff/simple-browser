@@ -123,6 +123,7 @@
   }
 
   function isOurs(node) {
+    if (node && node.nodeType === 1 && node.hasAttribute && node.hasAttribute("data-keel-spotlight")) return true;
     return !!(window.__sbAgent && window.__sbAgent.isOurs(node));
   }
 
@@ -888,7 +889,89 @@
     return max;
   }
 
-  const methods = { snapshot, prepare, fill, selectOption, focus, selectContents, scroll, setFiles, contextMenu, check, content, inspect, rect,
+
+  // ---- trust: what an action is about to touch -------------------------------------------------------
+  // The facts the browser's approval rules need: what the element is, and
+  // for a button, the form it would submit. Without a target: the focused element.
+  function facts(params) {
+    let el = null;
+    if (params.ref || params.selector || params.text) el = target(params);
+    else el = deepActiveElement();
+    if (!el || el === document.body || el === document.documentElement) return { role: "document", name: "", formFields: [] };
+    const role = roleOf(el) || el.localName;
+    const form = el.form || el.closest?.("form") || null;
+    const fields = form ? [...form.querySelectorAll("input, select, textarea")].map((f) => {
+      const auto = (f.getAttribute("autocomplete") || "").toLowerCase().trim();
+      return auto || (f.type === "password" ? "password" : "");
+    }).filter(Boolean) : [];
+    return {
+      role, name: clip(nameOf(el, role) || clean(el.innerText || el.value || ""), 200),
+      type: (el.getAttribute("type") || (el.localName === "button" ? "submit" : "")).toLowerCase() || null,
+      autocomplete: (el.getAttribute("autocomplete") || "").toLowerCase() || null,
+      formMethod: form ? (form.getAttribute("method") || "get").toLowerCase() : null,
+      formAction: form ? (form.action || null) : null,
+      formFields: fields, ref: refFor(el),
+    };
+  }
+
+  // The amber ring and "e14 · Claude" tag on the element an agent is about
+  // to act on, so the person sees it before and while it happens.
+  let spot = null;
+  function spotlight({ ref, selector, text, role, label, waiting }) {
+    clearSpotlight();
+    const el = target({ ref, selector, text, role });
+    const host = document.createElement("div");
+    host.setAttribute("data-keel-spotlight", "");
+    host.style.cssText = "position:fixed;left:0;top:0;width:0;height:0;z-index:2147483647;pointer-events:none;";
+    const root = host.attachShadow({ mode: "closed" });
+    root.innerHTML = `<style>
+      .ring{position:fixed;border-radius:6px;box-shadow:0 0 0 2px #fff,0 0 0 4px #F2A93B;transition:none}
+      .tag{position:fixed;background:#F2A93B;color:#2A1B00;border-radius:6px;padding:2px 8px;font:700 11px -apple-system,BlinkMacSystemFont,sans-serif;white-space:nowrap}
+      .waiting .ring{box-shadow:0 0 0 2px #fff,0 0 0 4px #F2A93B,0 0 0 9px rgba(242,169,59,.28)}
+    </style><div class="${waiting ? "waiting" : ""}"><div class="ring"></div><div class="tag"></div></div>`;
+    root.querySelector(".tag").textContent = label || refFor(el);
+    (document.documentElement || document.body).appendChild(host);
+    const ring = root.querySelector(".ring"), tag = root.querySelector(".tag");
+    const place = () => {
+      if (!spot || !el.isConnected) return clearSpotlight();
+      const r = el.getBoundingClientRect();
+      ring.style.left = r.left + "px"; ring.style.top = r.top + "px"; ring.style.width = r.width + "px"; ring.style.height = r.height + "px";
+      const w = tag.offsetWidth || 80;
+      tag.style.left = Math.max(4, Math.min(innerWidth - w - 4, r.right - w + 6)) + "px";
+      tag.style.top = Math.max(4, r.top - 24) + "px";
+      spot.frame = requestAnimationFrame(place);
+    };
+    spot = { host, frame: 0 };
+    place();
+    return { describe: describeShort(el), ref: refFor(el) };
+  }
+
+  function clearSpotlight() {
+    if (spot) { cancelAnimationFrame(spot.frame); spot.host.remove(); spot = null; }
+    return { cleared: true };
+  }
+
+  // Page text for the injection scanner: what a person cannot see counts
+  // too, since an agent reading the DOM sees it.
+  function hiddenText() {
+    const out = [];
+    const walker = document.createTreeWalker(document.body || document.documentElement, NodeFilter.SHOW_TEXT);
+    let n, total = 0;
+    while ((n = walker.nextNode()) && total < 200000) {
+      const t = n.nodeValue.trim();
+      if (t.length < 12) continue;
+      const el = n.parentElement;
+      if (!el || isOurs(el)) continue;
+      const cs = getComputedStyle(el);
+      const tiny = parseFloat(cs.fontSize) < 2;
+      const invisible = cs.visibility === "hidden" || cs.display === "none" || parseFloat(cs.opacity) === 0 || tiny || cs.color === cs.backgroundColor;
+      out.push({ text: clip(t, 600), hidden: invisible, where: el.localName + (el.className && typeof el.className === "string" ? "." + el.className.trim().split(/\s+/).slice(0, 2).join(".") : ""), ref: refFor(el) });
+      total += t.length;
+    }
+    return { nodes: out };
+  }
+
+  const methods = { facts, spotlight, clearSpotlight, hiddenText, snapshot, prepare, fill, selectOption, focus, selectContents, scroll, setFiles, contextMenu, check, content, inspect, rect,
                     pageSize, mark, nodeId, metrics, describe: (p) => ({ describe: describeShort(target(p)) }) };
 
   async function handle(method, params) {

@@ -7,8 +7,9 @@ import AgentKit
 /// and read what its DevTools see.
 ///
 /// Off until the person turns it on (Settings → Developer, or `--mcp-port`).
-/// Bound to 127.0.0.1 only, and every request needs the bearer token unless
-/// the person chose otherwise; see `AgentAccessPolicy`.
+/// Bound to 127.0.0.1 only. Every client pairs and gets a token of its own
+/// (`POST /pair`, approved by the person), and every call is checked by the
+/// trust layer before it reaches a page; see `AgentTrust`.
 @MainActor
 final class AgentServer {
 
@@ -54,6 +55,7 @@ final class AgentServer {
     // MARK: State
 
     let toolbox: AgentToolbox
+    let trust: AgentTrust
     private(set) var state: State = .off { didSet { onChange?() } }
     /// Clients that introduced themselves, newest last.
     private(set) var clients: [String] = []
@@ -63,22 +65,34 @@ final class AgentServer {
 
     private var listener: NWListener?
     private var connections: [ObjectIdentifier: NWConnection] = [:]
-    private var sessions: [String: MCPClientInfo] = [:]
+    private var sessions: [String: (info: MCPClientInfo, client: String)] = [:]
     private var policy = AgentAccessPolicy(token: nil, port: AgentServer.defaultPort)
+    /// A client the command line set up (`--mcp-token`), kept in memory only.
+    private var commandLineClient: PairedClient?
     /// Overrides from the command line, for scripted runs.
     var portOverride: Int?
     var tokenOverride: String??
 
-    private lazy var dispatcher = MCPDispatcher(
-        serverName: "keel",
-        serverVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev",
-        instructions: BrowserTools.instructions,
-        tools: BrowserTools.all,
-        prompts: BrowserTools.prompts
-    )
+    static let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
 
-    init(toolbox: AgentToolbox) {
+    /// The tools this client may see: its scope, plus the WebMCP tools of
+    /// its session's pages when the person has WebMCP on.
+    func dispatcher(for client: PairedClient, live: AgentTrust.Live?) -> MCPDispatcher {
+        var tools = BrowserTools.tools(for: client.scope)
+        if trust.settings.webMCP, let live {
+            let pageTools = trust.webMCP.all(in: live.openTabs.map { $0.tab.rawValue.uuidString })
+            tools += pageTools.filter { client.scope == .all || $0.readOnly }.map(\.mcpTool)
+        } else {
+            tools.removeAll { $0.name == "page_tools" || $0.name == "call_page_tool" }
+        }
+        return MCPDispatcher(serverName: "keel", serverVersion: Self.version, instructions: BrowserTools.instructions,
+                             tools: tools, prompts: BrowserTools.prompts)
+    }
+
+    init(toolbox: AgentToolbox, trust: AgentTrust) {
         self.toolbox = toolbox
+        self.trust = trust
+        toolbox.trust = trust
         toolbox.onActivity = { [weak self] line in self?.log(line) }
     }
 
@@ -97,6 +111,11 @@ final class AgentServer {
 
     func start() {
         stop()
+        if let tokenOverride {
+            commandLineClient = PairedClient(id: "cli0", name: "Command line", tokenHash: tokenOverride.map(ClientRegistry.hash) ?? "",
+                                             tokenHint: String((tokenOverride ?? "none").suffix(4)), pairedAt: Date(),
+                                             defaultMode: trust.settings.defaultMode, approvalPolicy: trust.settings.policy, budgets: trust.settings.budgets)
+        }
         let port = activePort
         policy = AgentAccessPolicy(token: activeToken, port: port)
         guard let nwPort = NWEndpoint.Port(rawValue: UInt16(port)) else { state = .failed("Invalid port \(port)"); return }
@@ -206,17 +225,31 @@ final class AgentServer {
         if request.method == "OPTIONS" { return HTTPResponse(status: 204) }
         if request.method == "GET", request.path == "/" || request.path == "/health" {
             // Enough for a client to find the endpoint; nothing about the browser.
-            return .json(["name": "Keel agent server", "mcp": .string(Self.endpointPath), "transport": "streamable-http"])
+            return .json(["name": "Keel agent server", "mcp": .string(Self.endpointPath), "pair": "/pair", "transport": "streamable-http",
+                          "toolSchemaVersion": .string(MCPDispatcher.toolSchemaVersion)])
+        }
+        if request.path == "/schema", request.method == "GET" {
+            return .json(BrowserTools.schemaDocument)
+        }
+        if request.path == "/pair" {
+            return await handlePairing(request)
         }
         guard request.path == Self.endpointPath else { return .text("Not found. The MCP endpoint is \(Self.endpointPath).", status: 404) }
-        if let denial = policy.check(request) {
+        // Host and Origin first: no web page, no DNS rebinding.
+        if let denial = AgentAccessPolicy(token: nil, port: activePort).checkTransport(request) {
             log("refused: \(denial.message)")
-            return .json(["error": .string(denial.message)], status: denial.status,
-                         headers: denial.status == 401 ? [("WWW-Authenticate", "Bearer")] : [])
+            return .json(["error": .string(denial.message)], status: denial.status)
+        }
+        guard let client = authenticate(request) else {
+            let message = request.header("authorization") == nil
+                ? "Missing Authorization: Bearer <token>. Pair this client: run `keel pair`, or Keel → Agent → Pair a New Agent…"
+                : "This token is not paired with Keel, or was revoked. Pair again: `keel pair`, or Keel → Agent → Pair a New Agent…"
+            log("refused: \(message)")
+            return .json(["error": .string(message)], status: 401, headers: [("WWW-Authenticate", "Bearer")])
         }
         switch request.method {
         case "POST":
-            return await handleMessage(request)
+            return await handleMessage(request, client: client)
         case "DELETE":
             if let id = request.header("mcp-session-id") { sessions[id] = nil }
             return HTTPResponse(status: 200)
@@ -228,7 +261,51 @@ final class AgentServer {
         }
     }
 
-    private func handleMessage(_ request: HTTPRequest) async -> HTTPResponse {
+    /// The paired client behind a request's bearer token.
+    private func authenticate(_ request: HTTPRequest) -> PairedClient? {
+        let header = request.header("authorization") ?? ""
+        let presented = header.lowercased().hasPrefix("bearer ") ? String(header.dropFirst(7)).trimmingCharacters(in: .whitespaces) : ""
+        if let commandLineClient, case .some(.some(let token)) = tokenOverride, AgentAccessPolicy.constantTimeEquals(presented, token) {
+            return commandLineClient
+        }
+        if case .some(.none) = tokenOverride {
+            // `--mcp-no-auth`, for scripted runs only.
+            return commandLineClient
+        }
+        guard !presented.isEmpty, let client = trust.authenticate(presented) else { return nil }
+        trust.touch(client.id)
+        return client
+    }
+
+    /// `POST /pair {"name", "version", "pid"}`: a client asks to pair. The
+    /// person sees the request with a code the client shows too, and the
+    /// reply carries the new token once they approve. No web page may ask.
+    private func handlePairing(_ request: HTTPRequest) async -> HTTPResponse {
+        guard request.method == "POST" else { return HTTPResponse(status: 405, headers: [("Allow", "POST")]) }
+        let host = (request.header("host") ?? "").lowercased()
+        let hosts = ["127.0.0.1", "localhost", "[::1]"].flatMap { [$0, "\($0):\(activePort)"] }
+        guard hosts.contains(host) else { return .json(["error": "Host is not this machine's loopback address"], status: 403) }
+        guard (request.header("origin") ?? "").isEmpty else { return .json(["error": "Web pages cannot pair with Keel"], status: 403) }
+        guard trust.pairings.count < 3 else { return .json(["error": "Too many pairing requests are waiting"], status: 429) }
+        let body = (try? JSONValue.decode(request.body)) ?? [:]
+        let name = String((body["name"]?.string ?? "MCP client").prefix(60))
+        log("\(Self.friendlyName(name)) asked to pair")
+        guard let paired = await trust.requestPairing(clientName: name, version: body["version"]?.string,
+                                                      processID: body["pid"]?.int, remote: "127.0.0.1") else {
+            log("pairing refused")
+            return .json(["error": "The person did not approve the pairing, or it expired."], status: 403)
+        }
+        log("\(paired.client.name) paired (\(paired.client.id))")
+        return .json(["token": .string(paired.token), "clientId": .string(paired.client.id), "endpoint": .string(endpointURL),
+                      "toolSchemaVersion": .string(MCPDispatcher.toolSchemaVersion)])
+    }
+
+    /// The code a pairing request shows, for `keel pair` to print while it waits.
+    func pendingCode(for name: String) -> String? {
+        trust.pairings.last { $0.request.clientName == name }?.request.displayCode
+    }
+
+    private func handleMessage(_ request: HTTPRequest, client: PairedClient) async -> HTTPResponse {
         let session = request.header("mcp-session-id")
         // A session from before a restart: the client starts over.
         if let session, sessions[session] == nil, !Self.isInitialize(request.body) {
@@ -236,19 +313,23 @@ final class AgentServer {
         }
         let toolbox = self.toolbox
         let newSession = SessionBox()
-        let outcome = await dispatcher.handle(request.body, onInitialize: { [weak self] client in
+        let live = trust.session(for: client, transport: session)
+        let outcome = await dispatcher(for: client, live: live).handle(request.body, onInitialize: { [weak self] info in
             await MainActor.run {
                 guard let self else { return }
                 let id = UUID().uuidString
-                self.sessions[id] = client
+                self.sessions[id] = (info, client.id)
                 newSession.id = id
-                toolbox.clientName = Self.friendlyName(client.name)
-                self.clients.append("\(Self.friendlyName(client.name))\(client.version.map { " \($0)" } ?? "")")
+                live.transportIDs.insert(id)
+                if live.session.clientName != Self.friendlyName(info.name), client.name.hasPrefix("Shared token") || client.name == "Command line" {
+                    live.session.clientName = Self.friendlyName(info.name)
+                }
+                self.clients.append("\(Self.friendlyName(info.name))\(info.version.map { " \($0)" } ?? "")")
                 if self.clients.count > 20 { self.clients.removeFirst() }
-                self.log("\(Self.friendlyName(client.name)) connected (MCP \(client.protocolVersion))")
+                self.log("\(Self.friendlyName(info.name)) connected as \(client.name) (MCP \(info.protocolVersion)) · session \(live.session.id)")
             }
         }, call: { name, arguments in
-            await toolbox.call(name, arguments)
+            await toolbox.call(name, arguments, live: live, client: client)
         })
         var headers: [(String, String)] = []
         if let id = newSession.id ?? session { headers.append(("Mcp-Session-Id", id)) }
@@ -272,17 +353,24 @@ final class AgentServer {
 
     // MARK: - Setting up clients
 
-    /// The command that adds this browser to Claude Code.
-    var claudeCodeCommand: String {
+    /// The command that adds this browser to Claude Code, with a paired client's token.
+    func claudeCodeCommand(token: String?) -> String {
         var command = "claude mcp add --transport http keel \(endpointURL)"
-        if let token = activeToken { command += " --header \"Authorization: Bearer \(token)\"" }
+        if let token { command += " --header \"Authorization: Bearer \(token)\"" }
         return command
     }
 
+    /// The same through the stdio launcher, which pairs by itself.
+    static let claudeCodeStdioCommand = "claude mcp add keel -- keel mcp"
+
+    var claudeCodeCommand: String { claudeCodeCommand(token: activeToken) }
+
     /// The `mcpServers` entry most other clients (Cursor, Windsurf, VS Code) take.
-    var clientConfigJSON: String {
+    var clientConfigJSON: String { clientConfigJSON(token: activeToken) }
+
+    func clientConfigJSON(token: String?) -> String {
         var server: [String: JSONValue] = ["type": "http", "url": .string(endpointURL)]
-        if let token = activeToken { server["headers"] = ["Authorization": .string("Bearer \(token)")] }
+        if let token { server["headers"] = ["Authorization": .string("Bearer \(token)")] }
         let config: JSONValue = ["mcpServers": ["keel": .object(server)]]
         return String(decoding: config.encoded(pretty: true), as: UTF8.self)
     }

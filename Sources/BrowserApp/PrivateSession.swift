@@ -21,6 +21,8 @@ final class PrivateSession {
     let downloads = DownloadManager(directory: nil)
     /// Open private tabs.
     var tabs = 0
+    /// Set when this is an agent's sandbox: a fresh profile of its own.
+    var agentSessionID: String?
 }
 
 /// "Private", in the toolbar of a private window, where a profile's colour

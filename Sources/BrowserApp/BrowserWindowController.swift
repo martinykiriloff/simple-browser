@@ -68,7 +68,7 @@ final class BrowserWindowController: NSWindowController,
     var switchToTab: ((String) -> Void)?
     var removeFromHistory: ((URL) -> Void)?
     private let splitView = NSSplitView()
-    private let pageContainer = NSView()
+    let pageContainer = NSView()
     private var fillConstraints: [NSLayoutConstraint] = []
     private var deviceConstraints: [NSLayoutConstraint] = []
     /// Device-mode state as the DevTools UI sent it; nil when off.
@@ -80,6 +80,12 @@ final class BrowserWindowController: NSWindowController,
     var pageDialog: PageDialog?
     /// What the agent endpoint knows about this tab while an agent drives it.
     var agentState: AgentTabState?
+    /// The agent session that owns this tab, if any: it shows amber.
+    var agentSessionID: String? { didSet { if agentSessionID != oldValue { syncAgentChrome() } } }
+    /// The trust layer, for the chips and cards. Set by the app delegate.
+    var agentTrust: (() -> AgentTrust?)?
+    /// The views agent activity puts over the page.
+    let agentChrome = AgentChromeViews()
     private let recorder: InspectorRecorder
     private let bridge: InspectorBridge
     private(set) var devTools: DevToolsController?
@@ -195,7 +201,7 @@ final class BrowserWindowController: NSWindowController,
     private(set) var sidebar: TabSidebarController?
     /// Holds the sidebar beside the page and its DevTools.
     private let sidebarSplit = NSSplitView()
-    private var tabAccessoryKey = ""
+    var tabAccessoryKey = ""
     private var sidebarObserver: NSObjectProtocol?
     /// What the sidebar last showed for this tab, so it reloads only on a change.
     private var listedAs = ""
@@ -726,6 +732,8 @@ final class BrowserWindowController: NSWindowController,
     /// while it plays sound, which mutes it when clicked.
     func syncTabAccessory() {
         guard let window else { return }
+        // An agent's tab carries its amber marker instead.
+        if agentChrome.edge != nil { return }
         let group = organizer?.group(groupID)
         let sound = media.isMuted ? "muted" : media.isAudible ? "sound" : ""
         let key = (isPinned ? "pin" : group.map { "group.\($0.color.rawValue)" } ?? "") + (sound.isEmpty ? "" : "+" + sound)
@@ -2315,7 +2323,7 @@ final class BrowserWindowController: NSWindowController,
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         [.sidebar, .back, .forward, .reload, .home, .address, .capture, .reader, .readerAppearance, .zoom, .shield, .star, .translate, .pictureInPicture, .extensions, .passwords, .downloads, .nowPlaying, .flexibleSpace, .devTools]
-            + (isPrivate ? [.privateBadge] : []) + [.profile]
+            + (isPrivate && privateSession?.agentSessionID == nil ? [.privateBadge] : []) + [.agentStatus, .profile]
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
@@ -2378,6 +2386,8 @@ final class BrowserWindowController: NSWindowController,
                               action: #selector(toggleDevTools(_:)))
             item.toolTip = "Toggle Developer Tools (⌥⌘I)"
             return item
+        case .agentStatus:
+            return makeAgentStatusItem()
         case .privateBadge:
             let item = NSToolbarItem(itemIdentifier: identifier)
             item.view = PrivateBadge.view()

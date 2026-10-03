@@ -33,6 +33,8 @@ def call(name, **args):
     assert status == 200, (status, reply)
     result = reply["result"]
     text = "\n".join(c.get("text", "") for c in result["content"] if c["type"] == "text")
+    # Page content arrives marked untrusted; the checks read what is inside.
+    text = re.sub(r'<untrusted-page-content[^>]*>\n', '', text).replace('\n</untrusted-page-content>', '')
     images = [c for c in result["content"] if c["type"] == "image"]
     return result.get("isError", False), text, images
 

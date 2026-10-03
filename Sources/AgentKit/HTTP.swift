@@ -157,7 +157,7 @@ public struct AgentAccessPolicy: Sendable {
             switch self {
             case .badHost(let host): return "Host \(host) is not this machine's loopback address"
             case .foreignOrigin(let origin): return "Requests from web pages are refused (Origin: \(origin))"
-            case .missingToken: return "Missing Authorization: Bearer <token>. Copy it from Keel → Settings → Developer."
+            case .missingToken: return "Missing Authorization: Bearer <token>. Pair this client with `keel pair`, or Keel → Agent → Pair a New Agent…."
             case .wrongToken: return "Wrong token. Copy the current one from Keel → Settings → Developer."
             }
         }
@@ -183,13 +183,23 @@ public struct AgentAccessPolicy: Sendable {
         return Self.constantTimeEquals(presented, token) ? nil : .wrongToken
     }
 
+    /// Host and Origin only: the request comes from this machine and not from
+    /// a web page on another origin. Who is calling is the token's business.
+    public func checkTransport(_ request: HTTPRequest) -> Denial? {
+        let host = request.header("host") ?? ""
+        let allowedHosts = ["127.0.0.1", "localhost", "[::1]"].flatMap { [$0, "\($0):\(port)"] }
+        guard allowedHosts.contains(host.lowercased()) else { return .badHost(host) }
+        if let origin = request.header("origin"), !origin.isEmpty, !Self.isLoopback(origin: origin) { return .foreignOrigin(origin) }
+        return nil
+    }
+
     static func isLoopback(origin: String) -> Bool {
         guard let url = URL(string: origin), let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https",
               let host = url.host?.lowercased() else { return false }
         return host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "[::1]"
     }
 
-    static func constantTimeEquals(_ a: String, _ b: String) -> Bool {
+    public static func constantTimeEquals(_ a: String, _ b: String) -> Bool {
         let x = Array(a.utf8), y = Array(b.utf8)
         var difference = UInt8(x.count == y.count ? 0 : 1)
         for index in 0..<max(x.count, y.count) {

@@ -17,6 +17,7 @@ enum MainMenu {
         mainMenu.addItem(bookmarksMenuItem(delegate: bookmarksMenuDelegate))
         mainMenu.addItem(profilesMenuItem(delegate: profilesMenuDelegate))
         mainMenu.addItem(developMenuItem())
+        mainMenu.addItem(agentMenuItem())
         mainMenu.addItem(windowMenuItem(tabGroupsDelegate: tabGroupsMenuDelegate))
         NSApp.mainMenu = mainMenu
         applyShortcuts()
@@ -228,6 +229,34 @@ enum MainMenu {
 
     /// Shortcuts match Chrome: ⌥⌘I toggles, ⌥⌘J opens the console, ⌥⌘C
     /// starts picking an element. F12 is handled by the window controller.
+    /// Agent: pairing, the activity log, the session's identity and the kill switch.
+    private static func agentMenuItem() -> NSMenuItem {
+        let menu = NSMenu(title: "Agent")
+        menu.addItem(withTitle: "Pair a New Agent…", action: #selector(AppDelegate.pairNewAgent(_:)), keyEquivalent: "p")
+            .keyEquivalentModifierMask = [.command, .option]
+        menu.addItem(withTitle: "Agent Activity Log", action: #selector(AppDelegate.showAgentActivityLog(_:)), keyEquivalent: "a")
+            .keyEquivalentModifierMask = [.command, .option]
+        menu.addItem(.separator())
+        menu.addItem(withTitle: "Pause All Agents", action: #selector(AppDelegate.pauseAllAgents(_:)), keyEquivalent: ".")
+            .keyEquivalentModifierMask = [.command, .shift]
+        let stop = menu.addItem(withTitle: "Stop & Revoke All", action: #selector(AppDelegate.stopAndRevokeAllAgents(_:)), keyEquivalent: "")
+        stop.toolTip = "Deletes every agent's token, ends every session and wipes their sandboxes."
+        menu.addItem(.separator())
+        let session = NSMenu(title: "Session")
+        session.addItem(withTitle: "Sandbox · ephemeral", action: #selector(AppDelegate.useAgentSandbox(_:)), keyEquivalent: "")
+        session.addItem(withTitle: "Borrowed… (higher risk)", action: #selector(AppDelegate.lendOriginsToAgent(_:)), keyEquivalent: "")
+        let sessionItem = menu.addItem(withTitle: "Session", action: nil, keyEquivalent: "")
+        sessionItem.submenu = session
+        menu.addItem(withTitle: "Hand Tab to Agent…", action: #selector(AppDelegate.handTabToAgent(_:)), keyEquivalent: "")
+        menu.addItem(.separator())
+        menu.addItem(withTitle: "Copy Snapshot for AI", action: #selector(AppDelegate.copySnapshotForAI(_:)), keyEquivalent: "c")
+            .keyEquivalentModifierMask = [.command, .option, .shift]
+        menu.addItem(withTitle: "Agents & Permissions…", action: #selector(AppDelegate.showAgentSettings(_:)), keyEquivalent: "")
+        let item = NSMenuItem(title: "Agent", action: nil, keyEquivalent: "")
+        item.submenu = menu
+        return item
+    }
+
     private static func developMenuItem() -> NSMenuItem {
         let menu = NSMenu(title: "Develop")
 

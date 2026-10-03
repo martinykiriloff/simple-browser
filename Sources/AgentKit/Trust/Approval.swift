@@ -51,11 +51,13 @@ public struct ElementFacts: Sendable, Equatable, Codable {
     public var formMethod: String?
     public var formAction: String?
     public var formFields: [String]
+    /// The element's ref in the latest snapshot.
+    public var ref: String?
 
     public init(role: String, name: String, type: String? = nil, autocomplete: String? = nil,
-                formMethod: String? = nil, formAction: String? = nil, formFields: [String] = []) {
+                formMethod: String? = nil, formAction: String? = nil, formFields: [String] = [], ref: String? = nil) {
         self.role = role; self.name = name; self.type = type; self.autocomplete = autocomplete
-        self.formMethod = formMethod; self.formAction = formAction; self.formFields = formFields
+        self.formMethod = formMethod; self.formAction = formAction; self.formFields = formFields; self.ref = ref
     }
 }
 
@@ -151,8 +153,11 @@ public enum ActionClassifier {
         }
     }
 
+    /// What the log must not keep in plain text.
+    public static func looksLikeSecret(_ text: String) -> Bool { looksLikeCardNumber(text) }
+
     /// 13–19 digits passing Luhn: a card number typed into a plain field.
-    static func looksLikeCardNumber(_ text: String?) -> Bool {
+    public static func looksLikeCardNumber(_ text: String?) -> Bool {
         guard let text else { return false }
         let digits = text.filter(\.isNumber).compactMap(\.wholeNumberValue)
         guard (13...19).contains(digits.count), text.allSatisfy({ $0.isNumber || $0 == " " || $0 == "-" }) else { return false }
