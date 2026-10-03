@@ -66,8 +66,3 @@ final class AgentActivityLogController {
         NSWorkspace.shared.open(trust.logsDirectory)
     }
 }
-
-extension AppDelegate {
-    /// Agent → Agents & Permissions….
-    @objc func showAgentSettings(_ sender: Any?) { showDeveloperSettings(sender) }
-}
