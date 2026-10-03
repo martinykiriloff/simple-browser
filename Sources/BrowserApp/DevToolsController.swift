@@ -83,7 +83,10 @@ final class DevToolsController: NSObject, WKScriptMessageHandler, WKNavigationDe
         configuration.userContentController.add(self, name: Self.handlerName)
         view.navigationDelegate = self
         view.isInspectable = true
-        view.setValue(false, forKey: "drawsBackground")
+        // Private: probed, so a WebKit without it leaves the background drawn instead of crashing.
+        if view.responds(to: NSSelectorFromString("_setDrawsBackground:")) || view.responds(to: NSSelectorFromString("setDrawsBackground:")) {
+            view.setValue(false, forKey: "drawsBackground")
+        }
 
         for recorded in recorder.events where recorded.tab == tab {
             if case .network(let event) = recorded.event { networkLog.ingest(event) }
