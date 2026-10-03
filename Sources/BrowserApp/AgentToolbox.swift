@@ -149,6 +149,7 @@ final class AgentToolbox {
         let state = target.agentState ?? AgentTabState()
         target.agentState = state
         var text = result.content.compactMap { if case .text(let t) = $0 { return t } else { return nil } }.joined(separator: "\n")
+        let tokens = TokenEstimate.count(text)   // what the agent was told, before the panel's cut
         if text.count > 20_000 { text = String(text.prefix(20_000)) + "\n…" }
         let images: [JSONValue] = result.content.compactMap {
             if case .image(let data, let mime) = $0, data.count < 2_000_000 { return ["data": .string(data), "mimeType": .string(mime)] }
@@ -157,7 +158,8 @@ final class AgentToolbox {
         state.calls.append([
             "id": .string(UUID().uuidString), "time": .number((started.timeIntervalSince1970 * 1000).rounded()), "tool": .string(name),
             "arguments": arguments, "ms": .number(Double(milliseconds)), "isError": .bool(result.isError),
-            "result": .string(text), "images": .array(images), "client": .string(clientName),
+            "result": .string(text), "images": .array(images), "client": .string(clientName), "tokens": .number(Double(tokens)),
+            "session": target.agentSessionID.map(JSONValue.string) ?? .null,
         ])
         if state.calls.count > 500 { state.calls.removeFirst(state.calls.count - 500); state.pushed = max(0, state.pushed - 1) }
         if target.isDevToolsVisible { state.push(to: target.devTools) }

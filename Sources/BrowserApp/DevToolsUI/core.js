@@ -88,6 +88,7 @@ const DevTools = window.DevTools = {
     if (window.Drawer) Drawer.init();
     if (window.SBNetworkTools) SBNetworkTools.start();
     if (window.CommandMenu) CommandMenu.init();
+    if (window.Actors) Actors.start();
 
     let panel = "elements";
     try { panel = localStorage.getItem("devtools.panel") || panel; } catch (_) {}

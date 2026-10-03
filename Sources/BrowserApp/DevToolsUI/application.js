@@ -35,12 +35,18 @@
     expanded: new Set(["indexeddb", "caches"]),
     idbPage: 0,
     PAGE: 50,
+    compareTarget: "",    // "profile:<uuid>" or "session:<id>" (Compare with…)
+    compareData: null,
 
     init() {
       $("#application-filter").addEventListener("input", debounce(() => this.renderRows(), 100));
       $("#application-refresh").addEventListener("click", () => { this.loadTree(); this.load(); });
       $("#application-delete").addEventListener("click", () => this.deleteSelected());
       $("#application-clear").addEventListener("click", () => this.clearAll());
+      const compare = $("#application-compare");
+      compare.addEventListener("mousedown", () => this.loadCompareTargets());
+      compare.addEventListener("focus", () => this.loadCompareTargets());
+      compare.addEventListener("change", () => { this.compareTarget = compare.value; this.load(); });
       $("#application-body").addEventListener("click", (e) => {
         const tr = e.target.closest("tr[data-index]");
         if (!tr || +tr.dataset.index < 0) return;
@@ -138,6 +144,10 @@
     async load() {
       const body = $("#application-body");
       $("#application-title").textContent = this.title();
+      const comparable = this.section === "cookies" || this.section === "local";
+      $("#application-compare").hidden = !comparable;
+      if (comparable) this.loadCompareTargets();
+      this.compareData = null;
       this.rows = [];
       this.selectedIndex = -1;
       this.extra = null;
@@ -174,6 +184,9 @@
           const info = await DevTools.rpc("Page.getInfo");
           this.rows = Object.entries(info).map(([key, value]) => ({ key, value: String(value) }));
         }
+        if ((s === "cookies" || s === "local") && this.compareTarget) {
+          this.compareData = await DevTools.rpc("Storage.compare", { target: this.compareTarget });
+        }
       } catch (err) {
         body.textContent = "";
         body.appendChild(h("div", { class: "empty-state" }, err.message));
@@ -199,6 +212,7 @@
       if (s === "manifest") return this.renderManifest(body);
       if (s === "serviceworkers") return this.renderServiceWorkers(body);
       if (s === "storage") return this.renderStorage(body);
+      if (this.compareData && (s === "cookies" || s === "local")) return this.renderCompare(body);
       const filter = $("#application-filter").value.trim().toLowerCase();
       const table = h("table", { class: "data-table kv-table" });
       const editable = s === "local" || s === "session";
@@ -243,6 +257,87 @@
       }
       if (s.startsWith("cache:")) body.appendChild(h("div", { class: "app-detail", id: "app-detail" }, h("div", { class: "detail-note" }, "Select an entry to see the cached response.")));
       if (!this.rows.length && !editable) body.appendChild(h("div", { class: "empty-state" }, s === "indexeddb" ? "No IndexedDB databases for this origin." : s === "caches" ? "No caches for this origin." : "Nothing stored."));
+    },
+
+    // ---- compare with another profile or an agent's sandbox -------------------------------------------
+    async loadCompareTargets() {
+      let targets = [];
+      try { targets = await DevTools.rpc("Storage.compareTargets"); } catch (_) {}
+      const select = $("#application-compare");
+      const key = JSON.stringify(targets);
+      if (select.dataset.targets === key) return;
+      select.dataset.targets = key;
+      select.textContent = "";
+      select.appendChild(h("option", { value: "" }, targets.length ? "Compare with…" : "Compare with… (no other profile or agent sandbox)"));
+      for (const t of targets) select.appendChild(h("option", { value: t.id }, t.label));
+      if (this.compareTarget && !targets.some((t) => t.id === this.compareTarget)) { this.compareTarget = ""; if (this.compareData) this.load(); }
+      select.value = this.compareTarget;
+    },
+
+    /// [{ key, here, there, status }]: added (only here), removed (only there), changed, same.
+    compareRows() {
+      const cookies = this.section === "cookies";
+      const keyOf = (c) => `${c.name} · ${c.domain}${c.path && c.path !== "/" ? c.path : ""}`;
+      const here = new Map(cookies ? this.rows.map((c) => [keyOf(c), c.value]) : this.rows.map((r) => [r.key, r.value]));
+      const thereList = cookies ? this.compareData.cookies : this.compareData.local;
+      const there = new Map(cookies ? thereList.map((c) => [keyOf(c), c.value]) : (thereList || []).map(([k, v]) => [k, v]));
+      const keys = Array.from(new Set([...here.keys(), ...there.keys()])).sort();
+      const order = { changed: 0, added: 1, removed: 2, same: 3 };
+      return keys.map((key) => {
+        const a = here.get(key), b = there.get(key);
+        const status = a === undefined ? "removed" : b === undefined ? "added" : a === b ? "same" : "changed";
+        return { key, here: a, there: b, status };
+      }).sort((x, y) => order[x.status] - order[y.status] || (x.key < y.key ? -1 : 1));
+    },
+
+    renderCompare(body) {
+      const d = this.compareData;
+      const cookies = this.section === "cookies";
+      const what = cookies ? `Cookies for ${this.host}` : `localStorage for ${this.origin}`;
+      if (!cookies && d.local == null) {
+        const note = h("div", { class: "cmp-note" }, `${d.label}: localStorage can only be read from an open page. Open ${this.origin || "this origin"} in a tab of ${d.label.startsWith("Profile") ? "that profile" : "that session"} to compare it (cookies compare without one). Below: this tab's localStorage only.`);
+        this.compareData = null;
+        this.renderRows();
+        this.compareData = d;
+        body.insertBefore(note, body.firstChild);
+        return;
+      }
+      const rows = this.compareRows();
+      const counts = { added: 0, removed: 0, changed: 0, same: 0 };
+      for (const r of rows) counts[r.status]++;
+      const filter = $("#application-filter").value.trim().toLowerCase();
+      const head = h("div", { class: "cmp-head" },
+        h("span", {}, what, " · this tab vs ", h("b", {}, d.label)),
+        h("span", { class: "cmp-count added" }, "+" + counts.added), h("span", { class: "cmp-count removed" }, "−" + counts.removed),
+        h("span", { class: "cmp-count changed" }, "~" + counts.changed), h("span", { class: "muted" }, counts.same + " same"),
+        h("span", { class: "toolbar-spacer" }),
+        h("button", { class: "text-button", onclick: () => DevTools.rpc("Clipboard.write", { text: this.compareMarkdown(rows) }) }, "Copy diff for AI"));
+      body.appendChild(head);
+      if (!cookies && d.localSource) body.appendChild(h("div", { class: "cmp-note" }, `${d.label}'s localStorage read from its open tab ${d.localSource}.`));
+      const table = h("table", { class: "data-table kv-table cmp-table" });
+      table.appendChild(h("thead", {}, h("tr", {}, h("th", { class: "cmp-mark" }, ""), h("th", {}, cookies ? "Name · domain" : "Key"), h("th", {}, "This tab"), h("th", {}, d.label))));
+      const tbody = h("tbody");
+      const show = (v) => v === undefined ? "—" : String(v).slice(0, 300);
+      for (const r of rows) {
+        if (filter && !(r.key + " " + (r.here || "") + " " + (r.there || "")).toLowerCase().includes(filter)) continue;
+        tbody.appendChild(h("tr", { class: "cmp-" + r.status, title: { added: "Only in this tab", removed: "Only in " + d.label, changed: "Different values", same: "Same value" }[r.status] },
+          h("td", { class: "cmp-mark" }, { added: "+", removed: "−", changed: "~", same: "" }[r.status]),
+          h("td", { title: r.key }, r.key), h("td", { title: show(r.here) }, show(r.here)), h("td", { title: show(r.there) }, show(r.there))));
+      }
+      table.appendChild(tbody);
+      body.appendChild(table);
+      if (!rows.length) body.appendChild(h("div", { class: "empty-state" }, "Neither side has anything stored here."));
+    },
+
+    compareMarkdown(rows) {
+      const d = this.compareData;
+      const cookies = this.section === "cookies";
+      const out = [`# ${cookies ? "Cookies for " + this.host : "localStorage for " + this.origin}: this tab vs ${d.label}`, ""];
+      const cell = (v) => v === undefined ? "—" : "`" + String(v).slice(0, 200).replace(/`/g, "'").replace(/\|/g, "\\|") + "`";
+      out.push("| | Key | This tab | " + d.label + " |", "|---|---|---|---|");
+      for (const r of rows) if (r.status !== "same") out.push(`| ${{ added: "+", removed: "−", changed: "~" }[r.status]} | ${r.key} | ${cell(r.here)} | ${cell(r.there)} |`);
+      out.push("", `${rows.filter((r) => r.status === "same").length} more are the same on both sides.`);
+      return out.join("\n");
     },
 
     // ---- details -------------------------------------------------------------------------------------

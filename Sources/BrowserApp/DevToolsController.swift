@@ -89,6 +89,7 @@ final class DevToolsController: NSObject, WKScriptMessageHandler, WKNavigationDe
             if case .network(let event) = recorded.event { networkLog.ingest(event) }
         }
         observation = recorder.observe { [weak self] change in self?.handle(change) }
+        installActorHooks()
 
         if let url = Self.resourceBundle.url(forResource: "devtools", withExtension: "html", subdirectory: "DevToolsUI") {
             view.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
@@ -99,6 +100,7 @@ final class DevToolsController: NSObject, WKScriptMessageHandler, WKNavigationDe
 
     func tearDown() {
         if let token = observation { recorder.removeObserver(token); observation = nil }
+        removeActorHooks()
         view.configuration.userContentController.removeScriptMessageHandler(forName: Self.handlerName)
         view.navigationDelegate = nil
         didHide()
@@ -325,6 +327,8 @@ final class DevToolsController: NSObject, WKScriptMessageHandler, WKNavigationDe
             for cookie in try await cookies() { await store.deleteCookie(cookie) }
             return true
 
+        case _ where Self.agentViewMethods.contains(method):
+            return try await handleAgentView(method, params)
         case _ where Self.toolMethods.contains(method):
             return try await handleTool(method, params)
         case _ where Self.isExtensionMethod(method):
