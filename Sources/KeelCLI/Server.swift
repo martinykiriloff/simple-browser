@@ -115,9 +115,11 @@ struct KeelServer: Sendable {
     func pair(name: String) async throws -> String {
         try await ensureRunning()
         let pid = Int(ProcessInfo.processInfo.processIdentifier)
-        let body: JSONValue = ["name": .string(name), "version": .string(Config.version), "pid": .number(Double(pid))]
+        // The code is ours, so both sides can show it: the person checks they match.
+        let request = PairingRequest(clientName: name, processID: pid)
+        let body: JSONValue = ["name": .string(name), "version": .string(Config.version), "pid": .number(Double(pid)), "code": .string(request.code)]
         Console.say("Waiting for you to approve “\(name)” in Keel… (pid \(pid))")
-        Console.say("Keel shows a pairing request naming “\(name)” and process \(pid). Check both match, then click Approve. (Up to 5 minutes.)")
+        Console.say("Pairing code: \(request.displayCode). Check Keel shows the same code, then click Pair. (Up to 5 minutes.)")
         let response: HTTP.Response
         do {
             response = try await HTTP.send("POST", config.base.appendingPathComponent("pair"), body: body.encoded(),

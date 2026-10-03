@@ -293,8 +293,10 @@ final class AgentServer {
         let body = (try? JSONValue.decode(request.body)) ?? [:]
         let name = String((body["name"]?.string ?? "MCP client").prefix(60))
         log("\(Self.friendlyName(name)) asked to pair")
+        // A client may bring its own six-digit code, so it can show the code the person sees.
+        let code = body["code"]?.string.flatMap { $0.count == 6 && $0.allSatisfy(\.isNumber) ? $0 : nil }
         guard let paired = await trust.requestPairing(clientName: name, version: body["version"]?.string,
-                                                      processID: body["pid"]?.int, remote: "127.0.0.1") else {
+                                                      processID: body["pid"]?.int, code: code, remote: "127.0.0.1") else {
             log("pairing refused")
             return .json(["error": "The person did not approve the pairing, or it expired."], status: 403)
         }

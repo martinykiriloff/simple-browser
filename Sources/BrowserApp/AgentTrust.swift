@@ -280,8 +280,10 @@ final class AgentTrust {
     // MARK: - Pairing over HTTP
 
     /// A client asked to pair (`keel pair`, or `POST /pair`): wait for the person.
-    func requestPairing(clientName: String, version: String?, processID: Int?, remote: String) async -> (client: PairedClient, token: String)? {
-        let pending = PendingPairing(request: PairingRequest(clientName: clientName, clientVersion: version, processID: processID), remote: remote)
+    func requestPairing(clientName: String, version: String?, processID: Int?, code: String? = nil, remote: String) async -> (client: PairedClient, token: String)? {
+        let request = code.map { PairingRequest(clientName: clientName, clientVersion: version, processID: processID, code: $0) }
+            ?? PairingRequest(clientName: clientName, clientVersion: version, processID: processID)
+        let pending = PendingPairing(request: request, remote: remote)
         pairings.append(pending)
         changed()
         presentPairing?(pending)

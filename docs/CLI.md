@@ -40,12 +40,14 @@ Every client gets a token of its own, approved by you in Keel.
 keel pair [--name <name>] [--port <port>]
 ```
 
-1. `keel` sends `POST /pair` with its name, version and process id.
-2. Keel shows a pairing request naming the client and its process id, with a
-   six-digit code. `keel` prints the same name and pid:
+1. `keel` makes a six-digit code and sends `POST /pair` with its name,
+   version, process id and that code.
+2. Keel shows a pairing request naming the client and its process id, with
+   the same code. `keel` prints it too:
 
    ```
    Waiting for you to approve “keel” in Keel… (pid 41230)
+   Pairing code: 481 – 207. Check Keel shows the same code, then click Pair.
    ```
 
    Check they match, then approve. The request waits up to five minutes.
