@@ -16,6 +16,12 @@
 # The DMG's window has a background with an arrow to Applications, laid
 # out through the Finder; DMG_LAYOUT=0 makes a plain one.
 #
+# The `keel` command-line tool (pairing, the stdio MCP launcher, replay) is
+# built alongside and ships inside the app as Contents/Helpers/keel; install
+# it on the PATH with scripts/install-cli.sh. It cannot sit next to the app
+# binary as Contents/MacOS/keel: on a case-insensitive disk that is the same
+# file as Contents/MacOS/Keel.
+#
 # Output: dist/Keel-<version>.dmg
 set -euo pipefail
 
@@ -36,7 +42,9 @@ STAGE="$DIST/dmg-root"
 # ---------------------------------------------------------------- build ----
 # `swift build --arch a --arch b` needs Xcode's xcbuild. Building one slice per
 # `--triple` and merging with lipo needs only the Command Line Tools.
+CLI_PRODUCT="keel-cli"
 slices=()
+cli_slices=()
 BIN_DIR=""
 for arch in $ARCHS; do
   triple="$arch-apple-macosx"
@@ -45,6 +53,10 @@ for arch in $ARCHS; do
   dir="$(swift build -c release --product "$APP_NAME" --triple "$triple" --show-bin-path)"
   [ -x "$dir/$APP_NAME" ] || { echo "binary not found in $dir" >&2; exit 1; }
   slices+=("$dir/$APP_NAME")
+  echo "▸ Building keel ($arch, release)"
+  swift build -c release --product "$CLI_PRODUCT" --triple "$triple"
+  [ -x "$dir/$CLI_PRODUCT" ] || { echo "keel binary not found in $dir" >&2; exit 1; }
+  cli_slices+=("$dir/$CLI_PRODUCT")
   BIN_DIR="${BIN_DIR:-$dir}"   # resource bundles are identical across slices
 done
 
@@ -54,6 +66,12 @@ if [ "${#slices[@]}" -gt 1 ]; then
   lipo -create "${slices[@]}" -output "$MERGED"
 else
   cp "${slices[0]}" "$MERGED"
+fi
+CLI_MERGED="$DIST/keel.merged"
+if [ "${#cli_slices[@]}" -gt 1 ]; then
+  lipo -create "${cli_slices[@]}" -output "$CLI_MERGED"
+else
+  cp "${cli_slices[0]}" "$CLI_MERGED"
 fi
 
 # ---------------------------------------------------------------- icon -----
@@ -67,9 +85,11 @@ fi
 # ---------------------------------------------------------------- bundle ---
 echo "▸ Assembling $APP"
 rm -rf "$APP" "$DMG" "$STAGE"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Helpers"
 
 mv "$MERGED" "$APP/Contents/MacOS/$APP_NAME"
+mv "$CLI_MERGED" "$APP/Contents/Helpers/keel"
+chmod 755 "$APP/Contents/Helpers/keel"
 # SwiftPM resource bundles (e.g. InspectKit's agent.js) live next to the binary.
 for bundle in "$BIN_DIR"/*.bundle; do
   [ -d "$bundle" ] && cp -R "$bundle" "$APP/Contents/Resources/"
@@ -92,7 +112,9 @@ rm -rf "$ICONSET"
 
 # ---------------------------------------------------------------- sign -----
 echo "▸ Signing ($CODESIGN_IDENTITY)"
-sign_flags=(--force --deep --sign "$CODESIGN_IDENTITY")
+# No --deep: it would re-sign Contents/Helpers/keel with the app's
+# entitlements. The helper is signed on its own below, before the app.
+sign_flags=(--force --sign "$CODESIGN_IDENTITY")
 if [ "$CODESIGN_IDENTITY" != "-" ]; then
   sign_flags+=(--options runtime --timestamp)
 fi
@@ -104,8 +126,16 @@ if [ -n "${PASSKEYS_PROVISIONING_PROFILE:-}" ]; then
   cp "$PASSKEYS_PROVISIONING_PROFILE" "$APP/Contents/embedded.provisionprofile"
   sign_flags+=(--entitlements "$ROOT/packaging/Passkeys.entitlements")
 fi
+# The helper first, with the same identity and hardened runtime but none of
+# the app's entitlements; then the app, which seals it in.
+cli_sign_flags=(--force --sign "$CODESIGN_IDENTITY" --identifier dev.simplebrowser.keel-cli)
+if [ "$CODESIGN_IDENTITY" != "-" ]; then
+  cli_sign_flags+=(--options runtime --timestamp)
+fi
+codesign "${cli_sign_flags[@]}" "$APP/Contents/Helpers/keel"
 codesign "${sign_flags[@]}" "$APP"
 codesign --verify --deep --strict "$APP"
+codesign --verify --strict "$APP/Contents/Helpers/keel"
 
 # ---------------------------------------------------------------- notarize -
 notary_args=()
@@ -242,3 +272,8 @@ elif [ "$NOTARIZE" = 0 ]; then
 else
   echo "Notarized and stapled: it opens with no warning."
 fi
+echo
+echo "The keel command line ships inside the app. After installing Keel:"
+echo "  /Applications/$APP_NAME.app/Contents/Helpers/keel help"
+echo "  scripts/install-cli.sh      # puts \`keel\` on the PATH"
+echo "  claude mcp add keel -- keel mcp"

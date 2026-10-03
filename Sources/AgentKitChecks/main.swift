@@ -325,5 +325,94 @@ do {
 check("catalog: read-only clients see only reads", BrowserTools.tools(for: .readOnly).allSatisfy(\.readOnly) && BrowserTools.tools(for: .readOnly).contains { $0.name == "snapshot" })
 check("catalog: the schema document is versioned", BrowserTools.schemaDocument["toolSchemaVersion"]?.string == MCPDispatcher.toolSchemaVersion)
 
+// MARK: The keel CLI: line framing
+
+do {
+    var framer = LineFramer()
+    let first = framer.append(Data(#"{"a":1}"#.utf8) + Data("\n{\"b\"".utf8))
+    check("cli framing: a whole line comes out, half a line waits", first == [Data(#"{"a":1}"#.utf8)])
+    let second = framer.append(Data(":2}\r\n\n  \n{\"c\":3}".utf8))
+    check("cli framing: a line split across chunks joins; CRLF and blank lines are dropped", second == [Data(#"{"b":2}"#.utf8)])
+    check("cli framing: the last line without a newline comes out at the end", framer.finish() == Data(#"{"c":3}"#.utf8))
+    check("cli framing: nothing left after finish", framer.finish() == nil)
+    let framed = LineFramer.frame(["jsonrpc": "2.0", "id": 1, "result": ["text": "two\nlines"]])
+    check("cli framing: a message is exactly one line", framed.filter { $0 == 0x0A }.count == 1 && framed.last == 0x0A)
+}
+
+// MARK: The keel CLI: messages and sessions
+
+do {
+    let batch: JSONValue = [["jsonrpc": "2.0", "id": 1, "method": "tools/list"], ["jsonrpc": "2.0", "method": "notifications/initialized"], ["jsonrpc": "2.0", "id": "x", "method": "ping"]]
+    check("cli messages: request ids skip notifications", MCPMessage.requestIDs(batch) == [1, "x"])
+    check("cli messages: a batch gets a batch of errors", MCPMessage.errorReplies(for: batch, code: -32002, message: "off")?.array?.count == 2)
+    check("cli messages: one request gets one error", MCPMessage.errorReplies(for: ["jsonrpc": "2.0", "id": 7, "method": "ping"], code: -32002, message: "off")?["id"] == 7)
+    check("cli messages: notifications get no error", MCPMessage.errorReplies(for: ["jsonrpc": "2.0", "method": "notifications/initialized"], code: 1, message: "x") == nil)
+
+    var core = MCPHTTPClientCore(token: "t0k")
+    let initialize: JSONValue = ["jsonrpc": "2.0", "id": 0, "method": "initialize", "params": ["protocolVersion": "2025-06-18", "clientInfo": ["name": "claude-code"]]]
+    let list: JSONValue = ["jsonrpc": "2.0", "id": 1, "method": "tools/list"]
+    core.willSend(initialize)
+    func header(_ name: String, _ headers: [(String, String)]) -> String? { headers.first { $0.0 == name }?.1 }
+    check("cli session: bearer token sent", header("Authorization", core.headers(for: initialize)) == "Bearer t0k")
+    check("cli session: no session id before initialize", header("Mcp-Session-Id", core.headers(for: list)) == nil)
+    let reply = Data(#"{"jsonrpc":"2.0","id":0,"result":{}}"#.utf8)
+    check("cli session: a 200 is a reply", core.handle(status: 200, headers: ["mcp-session-id": "S1"], body: reply, for: initialize) == .reply(reply))
+    check("cli session: the session id is kept (any header case)", core.sessionID == "S1" && header("Mcp-Session-Id", core.headers(for: list)) == "S1")
+    check("cli session: an initialize never carries the old session", header("Mcp-Session-Id", core.headers(for: initialize)) == nil)
+    check("cli session: 202 means say nothing", core.handle(status: 202, headers: ["Mcp-Session-Id": "S1"], body: Data(), for: ["jsonrpc": "2.0", "method": "notifications/initialized"]) == .nothing)
+    let generation = core.generation
+    let lost = Data(#"{"jsonrpc":"2.0","id":null,"error":{"code":-32001,"message":"Session not found; initialize again"}}"#.utf8)
+    check("cli session: 404 with -32001 is a lost session", core.handle(status: 404, headers: [:], body: lost, for: list) == .sessionLost && core.sessionID == nil)
+    let again = core.reinitializeRequest()
+    check("cli session: starting over replays the client's own initialize params",
+          again?["method"] == "initialize" && again?["params"]?["clientInfo"]?["name"] == "claude-code" && again?["id"]?.string?.hasPrefix("keel-reinit") == true)
+    _ = core.handle(status: 200, headers: ["Mcp-Session-Id": "S2"], body: reply, for: again!)
+    check("cli session: a new session bumps the generation", core.sessionID == "S2" && core.generation == generation + 1)
+    check("cli session: other 404s are failures", core.handle(status: 404, headers: [:], body: Data("Not found".utf8), for: list) == .failed(status: 404, message: "Not found"))
+    check("cli session: 401 asks to pair, with the reason", core.handle(status: 401, headers: [:], body: Data(#"{"error":"revoked"}"#.utf8), for: list) == .unauthorized("revoked"))
+    core.endSession()
+    check("cli session: ending forgets the id", core.sessionID == nil)
+}
+
+// MARK: The keel CLI: replay plans
+
+do {
+    var recorded = AuditLog()
+    recorded.append(sessionID: "s", clientName: "Claude Code", tool: "navigate", arguments: ["url": "https://a.test", "tabId": "T1"], url: "https://a.test", outcome: .ok, summary: "Opened https://a.test")
+    recorded.append(sessionID: "s", clientName: "Claude Code", tool: "snapshot", arguments: [:], url: "https://a.test", outcome: .ok, summary: "Read page snapshot")
+    recorded.append(sessionID: "s", clientName: "Claude Code", tool: "click", arguments: ["ref": "e2"], url: "https://a.test", outcome: .denied, summary: "Clicked e2")
+    recorded.append(sessionID: "s", clientName: "Claude Code", tool: "click", arguments: ["ref": "e5"], url: "https://a.test", outcome: .ok, summary: "Clicked e5")
+    let fromLog = try ReplayPlan.parse(recorded.replay(readOnlyTools: BrowserTools.readOnlyNames).encoded())
+    check("cli replay: an AuditLog export parses, acting calls only", fromLog.steps.map(\.tool) == ["navigate", "click"] && fromLog.client == "Claude Code")
+    check("cli replay: the export's tab ids are gone", fromLog.steps[0].arguments == ["url": "https://a.test"])
+
+    let file = Data(#"{"keelReplay":1,"client":"Claude Code","steps":[{"tool":"click","arguments":{"ref":"e3","tabId":"T"},"summary":"Clicked e3","url":"https://example.com/a"},{"tool":"fill","arguments":{"ref":"e4","value":"x"},"summary":"Typed into e4","url":null}]}"#.utf8)
+    let plan = try ReplayPlan.parse(file)
+    check("cli replay: steps, arguments and urls", plan.steps.count == 2 && plan.steps[0].url == "https://example.com/a" && plan.steps[1].url == nil && plan.client == "Claude Code")
+    check("cli replay: tab ids are dropped", plan.steps[0].arguments["tabId"] == nil && plan.steps[0].arguments["ref"] == "e3")
+    check("cli replay: a tab is opened at the first page when the first step does not navigate",
+          plan.calls.count == 3 && plan.calls[0].tool == "new_tab" && plan.calls[0].arguments == ["url": "https://example.com/a"])
+    let navigating = ReplayPlan(steps: [ReplayStep(tool: "navigate", arguments: ["url": "https://a.test"]), ReplayStep(tool: "click")])
+    check("cli replay: no extra tab when the first step navigates", navigating.calls.map(\.tool) == ["navigate", "click"])
+    check("cli replay: an empty replay has no calls", ReplayPlan(steps: []).calls.isEmpty)
+    func parseError(_ text: String) -> ReplayPlan.ParseError? {
+        if case .failure(let error) = Result(catching: { () throws(ReplayPlan.ParseError) in try ReplayPlan.parse(Data(text.utf8)) }) { return error }
+        return nil
+    }
+    check("cli replay: not JSON", parseError("nope") == .notJSON)
+    check("cli replay: not a replay", parseError(#"{"steps":[]}"#) == .notAReplay)
+    check("cli replay: a newer version is refused", parseError(#"{"keelReplay":2,"steps":[]}"#) == .unsupportedVersion(2))
+    check("cli replay: a step needs a tool", parseError(#"{"keelReplay":1,"steps":[{"arguments":{}}]}"#) == .badStep(0))
+
+    let ok: JSONValue = ["jsonrpc": "2.0", "id": 3, "result": ["content": [["type": "text", "text": "Clicked Save\nPage: x"]], "isError": false, "structuredContent": ["lastEventId": 12]]]
+    check("cli replay: the first line of a result", MCPToolOutcome.summarize(ok) == (true, "Clicked Save"))
+    check("cli replay: errors read as failures", MCPToolOutcome.summarize(["jsonrpc": "2.0", "id": 3, "error": ["code": -32602, "message": "Unknown tool: x"]]) == (false, "Unknown tool: x"))
+    let wrapped: JSONValue = ["jsonrpc": "2.0", "id": 4, "result": ["content": [["type": "text", "text": "<untrusted-page-content>\n2\n</untrusted-page-content>"]], "isError": false]]
+    check("cli replay: the untrusted-content wrapper is not the first line", MCPToolOutcome.summarize(wrapped) == (true, "2"))
+    check("cli events: the cursor comes from structuredContent", MCPToolOutcome.lastEventID(ok) == 12)
+} catch {
+    check("cli replay parses", false, error)
+}
+
 print(failures == 0 ? "✔ all \(passed) AgentKit checks passed" : "✘ \(failures) of \(passed + failures) checks failed")
 exit(failures == 0 ? 0 : 1)
