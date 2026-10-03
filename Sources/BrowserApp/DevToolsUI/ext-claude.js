@@ -1,8 +1,9 @@
 // Keel DevTools — Claude: ask Claude about the page, with what
 // DevTools sees attached as context: the selected element, console errors,
 // failed requests, the selected request, the selected React component. The
-// app makes the API call (the key stays in the keychain, never in a page),
-// streaming the answer in. For Claude driving the browser itself, there is
+// app makes the call, streaming the answer in: through Claude Code on this
+// Mac (the person's own Claude login, tools off), or the Anthropic API with
+// a key kept in the keychain, never in a page. For Claude driving the browser itself, there is
 // the MCP server (Settings → Developer).
 "use strict";
 
@@ -24,6 +25,9 @@
     streaming: null,
     hasKey: false,
     model: "",
+    backend: "api",
+    cliPath: null,
+    cliVersion: "",
     contexts: new Set(["page", "element", "errors"]),
 
     init() {
@@ -33,6 +37,8 @@
       $("#claude-copy").addEventListener("click", () => SBExt.copy(this.messages.map((m) => `**${m.role === "user" ? "You" : "Claude"}:**\n\n${m.display || m.content}`).join("\n\n---\n\n"), "Conversation copied"));
       $("#claude-save-key").addEventListener("click", () => this.saveKey());
       $("#claude-forget-key").addEventListener("click", async () => { await DevTools.rpc("Claude.setKey", { key: "" }); this.loadState(); });
+      $("#claude-backend").addEventListener("change", async (e) => { await DevTools.rpc("Claude.setBackend", { backend: e.target.value }); this.loadState(); });
+      $("#claude-cli-rescan").addEventListener("click", async () => { await DevTools.rpc("Claude.setBackend", { backend: "cli" }); this.loadState(); });
       const input = $("#claude-input");
       input.addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); this.send(); } });
       const chips = $("#claude-contexts");
@@ -48,11 +54,20 @@
     show() { this.loadState(); setTimeout(() => $("#claude-input").focus(), 0); },
 
     async loadState() {
-      try { const state = await DevTools.rpc("Claude.state"); this.hasKey = state.hasKey; this.model = state.model; } catch (_) {}
-      $("#claude-key-form").hidden = this.hasKey;
-      $("#claude-chat").hidden = !this.hasKey;
-      $("#claude-model").textContent = this.hasKey ? this.model : "";
-      $("#claude-forget-key").hidden = !this.hasKey;
+      try {
+        const state = await DevTools.rpc("Claude.state");
+        this.hasKey = state.hasKey; this.model = state.model; this.backend = state.backend || "api";
+        this.cliPath = state.cliPath; this.cliVersion = state.cliVersion || "";
+      } catch (_) {}
+      const cli = this.backend === "cli";
+      const ready = cli ? !!this.cliPath : this.hasKey;
+      $("#claude-backend").value = this.backend;
+      $("#claude-key-form").hidden = cli || this.hasKey;
+      $("#claude-cli-missing").hidden = !cli || !!this.cliPath;
+      $("#claude-chat").hidden = !ready;
+      $("#claude-model").textContent = !ready ? "" : cli ? "Claude Code " + this.cliVersion : this.model;
+      $("#claude-model").title = cli && this.cliPath ? this.cliPath + " · your Claude account · tools off" : "";
+      $("#claude-forget-key").hidden = cli || !this.hasKey;
       this.render();
     },
 

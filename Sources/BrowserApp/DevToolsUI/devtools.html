@@ -516,12 +516,18 @@
       <button class="text-button" id="claude-copy" title="Copy the conversation as Markdown">Copy</button>
       <span class="toolbar-spacer"></span>
       <span class="muted" id="claude-model"></span>
+      <select id="claude-backend" title="How Keel reaches Claude"><option value="cli">Claude Code on this Mac</option><option value="api">Anthropic API key</option></select>
       <button class="text-button" id="claude-forget-key" hidden title="Remove the API key from the keychain">Remove key</button>
     </div>
     <div id="claude-key-form" class="claude-key-form" hidden>
       <div class="ext-empty-title">Connect Claude</div>
       <div class="muted">Paste an Anthropic API key (console.anthropic.com → API Keys). It is kept in your macOS keychain and only the app sends it, to api.anthropic.com. <code>ANTHROPIC_API_KEY</code> in the app's environment works too.</div>
       <div class="claude-key-row"><input type="password" id="claude-key" placeholder="sk-ant-…" autocomplete="off"><button class="text-button primary" id="claude-save-key">Save</button></div>
+    </div>
+    <div id="claude-cli-missing" class="claude-key-form" hidden>
+      <div class="ext-empty-title">Claude Code is not installed</div>
+      <div class="muted">Install Claude Code and sign in once with <code>claude</code> in Terminal; Keel then uses your own Claude account, no API key needed. Or choose “Anthropic API key” above.</div>
+      <div class="claude-key-row"><button class="text-button primary" id="claude-cli-rescan">Look again</button></div>
     </div>
     <div id="claude-chat" class="claude-chat" hidden>
       <div class="scroll" id="claude-messages"></div>

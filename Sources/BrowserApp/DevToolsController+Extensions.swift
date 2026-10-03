@@ -6,7 +6,27 @@ import WebKit
 /// profiler's data without CORS, call Claude with a key the page never sees)
 /// and calls into the page-world hooks for React and the dataLayer.
 @MainActor
-private var claudeStreams: [String: ClaudeStream] = [:]
+private var claudeStreams: [String: any ClaudeAnswer] = [:]
+
+/// An answer being streamed in, by either backend.
+protocol ClaudeAnswer: AnyObject { func cancel() }
+extension ClaudeStream: ClaudeAnswer {}
+extension ClaudeCodeStream: ClaudeAnswer {}
+
+/// Which way the Claude panel reaches Claude: Claude Code on this Mac (the
+/// person's own Claude login), or the Anthropic API with a key.
+enum ClaudeBackend: String {
+    case cli, api
+
+    /// The person's choice; else Claude Code when it is installed, as it needs no key.
+    static var current: ClaudeBackend {
+        get {
+            if let saved = UserDefaults.standard.string(forKey: "claude.backend").flatMap(ClaudeBackend.init) { return saved }
+            return ClaudeCode.path() != nil ? .cli : .api
+        }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: "claude.backend") }
+    }
+}
 
 extension DevToolsController {
 
@@ -41,10 +61,32 @@ extension DevToolsController {
                                        ideKey: params["ideKey"] as? String ?? "PHPSTORM")
 
         case "Claude.state":
-            return ["hasKey": ClaudeKeychain.key != nil, "model": ClaudeStream.model]
+            let cli = ClaudeCode.path()
+            return ["hasKey": ClaudeKeychain.key != nil, "model": ClaudeStream.model, "backend": ClaudeBackend.current.rawValue,
+                    "cliPath": cli ?? NSNull(), "cliVersion": cli == nil ? NSNull() : (ClaudeCode.version() ?? "") as Any]
+        case "Claude.setBackend":
+            if (params["backend"] as? String) == "cli" { ClaudeCode.rescan() }
+            ClaudeBackend.current = ClaudeBackend(rawValue: params["backend"] as? String ?? "") ?? .api
+            return ["backend": ClaudeBackend.current.rawValue]
         case "Claude.setKey":
             ClaudeKeychain.set((params["key"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines))
             return ["hasKey": ClaudeKeychain.key != nil]
+        case "Claude.send" where ClaudeBackend.current == .cli:
+            guard let path = ClaudeCode.path() else {
+                throw DevToolsError.protocolUnavailable("Claude Code is not installed on this Mac. Install it (claude.com/code), or switch to the API.")
+            }
+            let id = params["id"] as? String ?? UUID().uuidString
+            let stream = ClaudeCodeStream { [weak self] kind, payload in
+                let box = SendablePayload(payload)
+                Task { @MainActor in
+                    self?.emit("Claude.event", ["id": id, "kind": kind, "payload": box.value])
+                    if kind == "done" || kind == "error" { claudeStreams[id] = nil }
+                }
+            }
+            claudeStreams[id] = stream
+            try stream.start(path: path, system: params["system"] as? String ?? "", messages: params["messages"] as? [[String: Any]] ?? [],
+                             effort: params["effort"] as? String ?? "medium")
+            return ["id": id]
         case "Claude.send":
             guard let key = ClaudeKeychain.key else { throw DevToolsError.protocolUnavailable("Add your Anthropic API key first") }
             let id = params["id"] as? String ?? UUID().uuidString
