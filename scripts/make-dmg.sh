@@ -67,7 +67,8 @@ if [ "${#slices[@]}" -gt 1 ]; then
 else
   cp "${slices[0]}" "$MERGED"
 fi
-CLI_MERGED="$DIST/keel.merged"
+# Not "keel.merged": on a case-insensitive disk that is the app's own "Keel.merged".
+CLI_MERGED="$DIST/keel-cli.merged"
 if [ "${#cli_slices[@]}" -gt 1 ]; then
   lipo -create "${cli_slices[@]}" -output "$CLI_MERGED"
 else
