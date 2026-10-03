@@ -75,11 +75,18 @@ else
 fi
 
 # ---------------------------------------------------------------- icon -----
+# packaging/AppIcon.svg is the icon's source. Quick Look renders it with
+# WebKit; the committed AppIcon-1024.png is the fallback when it cannot.
+ICON_SVG="$ROOT/packaging/AppIcon.svg"
 ICON_PNG="$ROOT/packaging/AppIcon-1024.png"
 ICNS="$DIST/AppIcon.icns"
-if [ ! -f "$ICON_PNG" ]; then
-  echo "▸ Rendering app icon"
-  swift "$ROOT/packaging/render-icon.swift" "$ICON_PNG"
+echo "▸ Rendering app icon from $(basename "$ICON_SVG")"
+ICON_RENDER="$DIST/icon-render"
+rm -rf "$ICON_RENDER" && mkdir -p "$ICON_RENDER"
+if qlmanage -t -s 1024 -o "$ICON_RENDER" "$ICON_SVG" >/dev/null 2>&1 && [ -s "$ICON_RENDER/AppIcon.svg.png" ]; then
+  ICON_PNG="$ICON_RENDER/AppIcon.svg.png"
+else
+  echo "  (Quick Look could not render the SVG; using packaging/AppIcon-1024.png)"
 fi
 
 # ---------------------------------------------------------------- bundle ---
@@ -107,6 +114,7 @@ for size in 16 32 128 256 512; do
   sips -z "$double" "$double" "$ICON_PNG" --out "$ICONSET/icon_${size}x${size}@2x.png" >/dev/null
 done
 iconutil -c icns "$ICONSET" -o "$ICNS"
+rm -rf "$ICON_RENDER"
 cp "$ICNS" "$APP/Contents/Resources/AppIcon.icns"
 rm -rf "$ICONSET"
 

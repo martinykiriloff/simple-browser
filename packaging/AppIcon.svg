@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <title>Keel</title>
+  <!-- A boat seen through the side of a tank: the hull dark in the air,
+       its keel light in the water, split by an amber waterline. -->
+  <defs>
+    <clipPath id="tile">
+      <rect x="100" y="100" width="824" height="824" rx="185" ry="185"/>
+    </clipPath>
+    <clipPath id="air"><rect x="0" y="0" width="1024" height="452"/></clipPath>
+    <clipPath id="water"><rect x="0" y="452" width="1024" height="572"/></clipPath>
+    <linearGradient id="depth" x1="0" y1="452" x2="0" y2="924" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0E2633"/>
+      <stop offset="1" stop-color="#081820"/>
+    </linearGradient>
+    <filter id="lift" x="-10%" y="-10%" width="120%" height="125%">
+      <feDropShadow dx="0" dy="12" stdDeviation="14" flood-color="#000" flood-opacity="0.32"/>
+    </filter>
+    <!-- The boat in profile: deck, raked bow, flat run, short transom;
+         a fin keel swept aft, and a torpedo bulb at its foot. -->
+    <g id="boat">
+      <path d="M 170 352 L 866 352 C 818 452 730 500 640 500 L 392 500 C 286 500 210 474 186 428 Q 170 398 170 352 Z"/>
+      <path d="M 548 480 L 646 480 L 566 690 L 500 690 Z"/>
+      <path d="M 662 708 C 662 646 466 664 382 708 C 466 752 662 770 662 708 Z"/>
+    </g>
+  </defs>
+
+  <g filter="url(#lift)">
+    <rect x="100" y="100" width="824" height="824" rx="185" ry="185" fill="#081820"/>
+  </g>
+
+  <g clip-path="url(#tile)">
+    <rect x="0" y="0" width="1024" height="452" fill="#E8EDF1"/>
+    <rect x="0" y="452" width="1024" height="572" fill="url(#depth)"/>
+
+    <g clip-path="url(#air)"><use href="#boat" fill="#0B0D11"/></g>
+    <g clip-path="url(#water)"><use href="#boat" fill="#E8EDF1"/></g>
+
+    <rect x="0" y="444" width="1024" height="16" fill="#F2A93B"/>
+  </g>
+
+  <rect x="101.5" y="101.5" width="821" height="821" rx="183.5" ry="183.5" fill="none" stroke="#000" stroke-opacity="0.18" stroke-width="3"/>
+</svg>
