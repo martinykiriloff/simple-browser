@@ -313,7 +313,8 @@
     if (el === focused) out.push("focused");
     if (role === "link") {
       const href = el.getAttribute("href") || "";
-      if (href && !href.startsWith("javascript:")) out.push("url=" + clip(href, 120));
+      // A same-page anchor says nothing its name does not.
+      if (href && !href.startsWith("javascript:") && !href.startsWith("#")) out.push("url=" + clip(href, 120));
     }
     if (role === "img" && el.localName === "img" && !el.complete) out.push("loading");
     return out;
@@ -408,9 +409,14 @@
     }
 
     if (ctx.interactiveOnly && !interactive && role !== "heading") return children;
-    const line = { role, name: shownName, ref: refFor(el), attributes, value };
+    // Structure nobody acts on keeps its ref out of the text: it is the
+    // largest share of a snapshot's tokens and agents target what they can use.
+    const quiet = !interactive && QUIET_ROLES.has(role);
+    const line = { role, name: shownName, ref: refFor(el), attributes, value, quiet };
     return [{ line, children }];
   }
+
+  const QUIET_ROLES = new Set(["list", "listitem", "paragraph", "group", "generic", "rowgroup", "term", "definition", "blockquote", "figure", "note", "strong", "emphasis", "code", "time"]);
 
   function frameItem(frame, ctx) {
     const doc = frameDocument(frame);
@@ -433,11 +439,11 @@
       if (ctx.length > ctx.maxLength) return;
       if (item.text !== undefined) { pendingText.push(item.text); continue; }
       flushText();
-      const { role, name, ref, attributes, value } = item.line;
+      const { role, name, ref, attributes, value, quiet } = item.line;
       let head = "  ".repeat(depth) + "- " + role;
       if (name) head += " " + quote(clip(name, 200));
       for (const a of attributes) head += " [" + a + "]";
-      head += " [ref=" + ref + "]";
+      if (!quiet) head += " [ref=" + ref + "]";
       const kids = item.children;
       const onlyText = kids.length && kids.every((k) => k.text !== undefined);
       if (value !== null && value !== undefined && value !== "") head += ": " + quote(clip(String(value), 200));
