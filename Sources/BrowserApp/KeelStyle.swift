@@ -185,3 +185,535 @@ class KeelPanel: NSView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 }
+
+// MARK: - Dialog parts (pairing, grants, lending, the activity log)
+
+extension Keel {
+    /// Radio and checkbox rings, "off".
+    static let ring = hex(0x5B6472)
+    /// The ring of a picked row that is not an identity choice.
+    static let pickedRing = hex(0x3A414D)
+
+    /// A flat, dark window for the agent dialogs: no title bar to speak of,
+    /// the dialog fill, and only a close button.
+    static func dialogWindow(title: String, width: CGFloat) -> NSWindow {
+        let window = KeelDialogWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: 400),
+                                      styleMask: [.titled, .closable, .fullSizeContentView], backing: .buffered, defer: false)
+        window.title = title
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.isMovableByWindowBackground = true
+        window.appearance = NSAppearance(named: .darkAqua)
+        window.backgroundColor = surface
+        window.isReleasedWhenClosed = false
+        window.standardWindowButton(.miniaturizeButton)?.isHidden = true
+        window.standardWindowButton(.zoomButton)?.isHidden = true
+        QuietMode.apply(to: window)
+        return window
+    }
+
+    /// Puts a view in a dialog window and sizes the window to it, keeping the
+    /// top edge where it was.
+    static func setDialogContent(_ view: NSView, of window: NSWindow, width: CGFloat) {
+        let container = NSView()
+        container.wantsLayer = true
+        container.layer?.backgroundColor = surface.cgColor
+        view.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(view)
+        NSLayoutConstraint.activate([
+            view.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            view.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            view.topAnchor.constraint(equalTo: container.topAnchor, constant: 12),
+            view.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            view.widthAnchor.constraint(equalToConstant: width),
+        ])
+        let top = window.frame.maxY
+        let wasVisible = window.isVisible
+        window.contentView = container
+        container.layoutSubtreeIfNeeded()
+        let size = container.fittingSize
+        var frame = window.frameRect(forContentRect: NSRect(origin: .zero, size: size))
+        frame.origin.x = window.frame.minX
+        frame.origin.y = top - frame.height
+        window.setFrame(frame, display: true, animate: false)
+        if !wasVisible { window.center() }
+    }
+
+    /// A 1 pt hairline.
+    static func separator(_ color: NSColor = Keel.hairline) -> NSView {
+        let line = NSView()
+        line.wantsLayer = true
+        line.layer?.backgroundColor = color.cgColor
+        line.translatesAutoresizingMaskIntoConstraints = false
+        line.heightAnchor.constraint(equalToConstant: 1).isActive = true
+        return line
+    }
+
+    /// A flat square or circle with an optional glyph: icons, status marks.
+    static func mark(_ fill: NSColor, size: CGFloat = 16, radius: CGFloat? = nil, glyph: String? = nil, glyphColor: NSColor = Keel.text,
+                     border: NSColor? = nil) -> NSView {
+        let view = NSView()
+        view.wantsLayer = true
+        view.layer?.backgroundColor = fill.cgColor
+        view.layer?.cornerRadius = radius ?? size / 2
+        if let border { view.layer?.borderColor = border.cgColor; view.layer?.borderWidth = 1.5 }
+        view.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([view.widthAnchor.constraint(equalToConstant: size), view.heightAnchor.constraint(equalToConstant: size)])
+        if let glyph {
+            let label = Keel.label(glyph, size: max(9, size * 0.6), weight: .heavy, color: glyphColor)
+            label.alignment = .center
+            label.translatesAutoresizingMaskIntoConstraints = false
+            view.addSubview(label)
+            NSLayoutConstraint.activate([label.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+                                         label.centerYAnchor.constraint(equalTo: view.centerYAnchor)])
+        }
+        view.setAccessibilityElement(false)
+        return view
+    }
+
+    /// The green ✓ of a step that is done.
+    static func checkBadge(size: CGFloat = 18) -> NSView { mark(greenChip, size: size, glyph: "✓", glyphColor: green) }
+
+    /// A 24 pt toolbar button ("Export JSON", "Copy").
+    static func miniButton(_ title: String, kind: KeelButton.Kind = .neutral, handler: @escaping () -> Void) -> NSButton {
+        let button = KeelMiniButton(title: title, kind: kind)
+        KeelButtonActions.attach(button, handler)
+        return button
+    }
+
+    /// A text field in the design's rounded input box.
+    static func inputField(placeholder: String, mono: Bool = false) -> (box: NSView, field: NSTextField) {
+        let box = KeelPanel(fill: raised, border: inputBorder, radius: 9)
+        let field = NSTextField()
+        field.isBordered = false
+        field.drawsBackground = false
+        field.focusRingType = .none
+        field.font = mono ? NSFont.monospacedSystemFont(ofSize: 12, weight: .regular) : font(13)
+        field.textColor = text
+        field.placeholderAttributedString = NSAttributedString(string: placeholder, attributes: [.foregroundColor: dim, .font: field.font!])
+        field.translatesAutoresizingMaskIntoConstraints = false
+        field.setAccessibilityLabel(placeholder)
+        box.addSubview(field)
+        NSLayoutConstraint.activate([
+            box.heightAnchor.constraint(equalToConstant: 32),
+            field.leadingAnchor.constraint(equalTo: box.leadingAnchor, constant: 10),
+            field.trailingAnchor.constraint(equalTo: box.trailingAnchor, constant: -10),
+            field.centerYAnchor.constraint(equalTo: box.centerYAnchor),
+        ])
+        return (box, field)
+    }
+
+    /// Lays views out in rows that wrap at `width`, like inline chips.
+    static func wrapping(_ views: [NSView], width: CGFloat, spacing: CGFloat = 6) -> NSStackView {
+        let rows = NSStackView()
+        rows.orientation = .vertical
+        rows.alignment = .leading
+        rows.spacing = spacing
+        var row = NSStackView()
+        var used: CGFloat = 0
+        for view in views {
+            let needed = view.fittingSize.width
+            if used > 0, used + spacing + needed > width {
+                rows.addArrangedSubview(row)
+                row = NSStackView()
+                used = 0
+            }
+            row.spacing = spacing
+            row.addArrangedSubview(view)
+            used += (used > 0 ? spacing : 0) + needed
+        }
+        if !row.arrangedSubviews.isEmpty { rows.addArrangedSubview(row) }
+        return rows
+    }
+
+    /// "HH:mm:ss" in the person's time zone.
+    static func clock(_ date: Date, seconds: Bool = false) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = seconds ? "HH:mm:ss" : "HH:mm"
+        return formatter.string(from: date)
+    }
+}
+
+/// A dialog window that closes on Esc when no Cancel button took the key.
+final class KeelDialogWindow: NSWindow {
+    override func cancelOperation(_ sender: Any?) { performClose(sender) }
+
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 53 { performClose(nil) } else { super.keyDown(with: event) }
+    }
+}
+
+/// A 24 pt flat button, for toolbars and Copy.
+final class KeelMiniButton: NSButton {
+    private let kind: KeelButton.Kind
+
+    init(title: String, kind: KeelButton.Kind) {
+        self.kind = kind
+        super.init(frame: .zero)
+        self.title = title
+        isBordered = false
+        wantsLayer = true
+        layer?.cornerRadius = 6
+        setButtonType(.momentaryChange)
+        translatesAutoresizingMaskIntoConstraints = false
+        heightAnchor.constraint(equalToConstant: 24).isActive = true
+        restyle()
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    /// Changes the title and keeps the design's fills.
+    func setLabel(_ text: String) {
+        title = text
+        restyle()
+    }
+
+    override var isEnabled: Bool {
+        didSet { restyle() }
+    }
+
+    private func restyle() {
+        let fill: NSColor, color: NSColor
+        switch kind {
+        case .danger: (fill, color) = (Keel.dangerFill, Keel.dangerText)
+        case .allow: (fill, color) = (Keel.amber, Keel.onAmber)
+        case .coral: (fill, color) = (Keel.coral, Keel.hex(0x2A0F05))
+        case .primary: (fill, color) = (Keel.text, Keel.chrome)
+        case .neutral: (fill, color) = (Keel.inputBorder, Keel.text)
+        }
+        layer?.backgroundColor = fill.cgColor
+        alphaValue = isEnabled ? 1 : 0.45
+        attributedTitle = NSAttributedString(string: title, attributes: [.font: Keel.font(12, .semibold), .foregroundColor: color])
+        invalidateIntrinsicContentSize()
+    }
+
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: ceil(attributedTitle.size().width) + 20, height: 24)
+    }
+
+    override func resetCursorRects() { if isEnabled { addCursorRect(bounds, cursor: .pointingHand) } }
+}
+
+/// A row the person picks: a radio or a checkbox, a title and a line of
+/// explanation. Session type, approval policy, origins to lend.
+final class KeelOptionRow: NSView {
+    enum Indicator { case radio, check }
+
+    @MainActor
+    struct Accent {
+        var mark: NSColor
+        /// Fill and ring of the picked row; nil keeps the plain look.
+        var fill: NSColor?
+        var ring: NSColor
+        var title: NSColor
+        static let sandbox = Accent(mark: Keel.green, fill: Keel.greenChip, ring: Keel.green, title: Keel.greenText)
+        static let borrowed = Accent(mark: Keel.coral, fill: Keel.coralChip, ring: Keel.coral, title: Keel.coralText)
+        static let plain = Accent(mark: Keel.green, fill: Keel.raised, ring: Keel.pickedRing, title: Keel.text)
+        static let lend = Accent(mark: Keel.coral, fill: Keel.raised, ring: Keel.coral, title: Keel.text)
+    }
+
+    private let indicatorKind: Indicator
+    private let accent: Accent
+    private let indicator = NSView()
+    private let inner = NSTextField(labelWithString: "")
+    private let titleLabel: NSTextField
+    private let subtitleLabel: NSTextField
+    let trailing = NSStackView()
+    var onToggle: (() -> Void)?
+
+    var isOn = false { didSet { restyle() } }
+    var isDisabled = false { didSet { restyle() } }
+
+    init(title: String, subtitle: String, indicator kind: Indicator, accent: Accent, monoTitle: Bool = false) {
+        indicatorKind = kind
+        self.accent = accent
+        titleLabel = Keel.label(title, size: 13, weight: .semibold)
+        if monoTitle { titleLabel.font = NSFont.monospacedSystemFont(ofSize: 12.5, weight: .semibold) }
+        titleLabel.lineBreakMode = .byTruncatingMiddle
+        subtitleLabel = Keel.label(subtitle, size: 12, color: Keel.muted, wraps: true)
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = 9
+        translatesAutoresizingMaskIntoConstraints = false
+
+        indicator.wantsLayer = true
+        indicator.translatesAutoresizingMaskIntoConstraints = false
+        let size: CGFloat = kind == .radio ? 16 : 18
+        indicator.layer?.cornerRadius = kind == .radio ? 8 : 5
+        inner.font = Keel.font(11, .heavy)
+        inner.alignment = .center
+        inner.translatesAutoresizingMaskIntoConstraints = false
+        indicator.addSubview(inner)
+
+        let text = NSStackView(views: [titleLabel, subtitleLabel])
+        text.orientation = .vertical
+        text.alignment = .leading
+        text.spacing = 2
+        text.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        trailing.spacing = 6
+        let row = NSStackView(views: [indicator, text, trailing])
+        row.alignment = .top
+        row.spacing = 12
+        row.edgeInsets = NSEdgeInsets(top: 10, left: 12, bottom: 10, right: 12)
+        row.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(row)
+        NSLayoutConstraint.activate([
+            indicator.widthAnchor.constraint(equalToConstant: size), indicator.heightAnchor.constraint(equalToConstant: size),
+            inner.centerXAnchor.constraint(equalTo: indicator.centerXAnchor), inner.centerYAnchor.constraint(equalTo: indicator.centerYAnchor),
+            row.leadingAnchor.constraint(equalTo: leadingAnchor), row.trailingAnchor.constraint(equalTo: trailingAnchor),
+            row.topAnchor.constraint(equalTo: topAnchor), row.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+        setAccessibilityElement(true)
+        setAccessibilityRole(kind == .radio ? .radioButton : .checkBox)
+        setAccessibilityLabel(title)
+        setAccessibilityHelp(subtitle)
+        restyle()
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    /// The width the explanation wraps at.
+    func setTextWidth(_ width: CGFloat) {
+        subtitleLabel.preferredMaxLayoutWidth = width
+        titleLabel.preferredMaxLayoutWidth = width
+    }
+
+    var subtitle: String {
+        get { subtitleLabel.stringValue }
+        set { subtitleLabel.stringValue = newValue; setAccessibilityHelp(newValue) }
+    }
+
+    private func restyle() {
+        let picked = isOn && !isDisabled
+        layer?.backgroundColor = (isDisabled ? Keel.hex(0x0F1217) : picked ? (accent.fill ?? .clear) : .clear).cgColor
+        layer?.borderColor = (isDisabled ? Keel.hex(0x1C2027) : picked ? accent.ring : Keel.hairline).cgColor
+        layer?.borderWidth = picked && accent.fill != Keel.raised ? 1.5 : 1
+        titleLabel.textColor = picked ? accent.title : Keel.text
+        indicator.layer?.backgroundColor = (picked ? accent.mark : isDisabled ? Keel.hairline : .clear).cgColor
+        indicator.layer?.borderColor = Keel.ring.cgColor
+        indicator.layer?.borderWidth = picked || isDisabled ? 0 : 1.5
+        switch indicatorKind {
+        case .radio:
+            inner.stringValue = picked ? "●" : ""
+            inner.font = Keel.font(7)
+            inner.textColor = Keel.chrome
+        case .check:
+            inner.stringValue = picked ? "✓" : ""
+            inner.textColor = Keel.hex(0x1F0B04)
+        }
+        alphaValue = isDisabled ? 0.62 : 1
+        setAccessibilityValue(isOn)
+        setAccessibilityEnabled(!isDisabled)
+    }
+
+    override func mouseDown(with event: NSEvent) { if !isDisabled { onToggle?() } }
+    override func accessibilityPerformPress() -> Bool {
+        guard !isDisabled, let onToggle else { return false }
+        onToggle()
+        return true
+    }
+    override func resetCursorRects() { if !isDisabled { addCursorRect(bounds, cursor: .pointingHand) } }
+}
+
+/// One choice out of a few, in a flat track: "15 min · 1 h · Until I stop".
+final class KeelSegmented: NSView {
+    private var buttons: [NSButton] = []
+    private let titles: [String]
+    private let fill: NSColor
+    private let selectedText: NSColor
+    var onChange: ((Int) -> Void)?
+
+    var selectedIndex: Int { didSet { restyle() } }
+
+    init(_ titles: [String], selected: Int = 0, fill: NSColor = Keel.coral, selectedText: NSColor = Keel.hex(0x1F0B04), label: String) {
+        self.titles = titles
+        self.fill = fill
+        self.selectedText = selectedText
+        selectedIndex = selected
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = 10
+        layer?.backgroundColor = Keel.chrome.cgColor
+        layer?.borderColor = Keel.hairline.cgColor
+        layer?.borderWidth = 1
+        translatesAutoresizingMaskIntoConstraints = false
+        let stack = NSStackView()
+        stack.distribution = .fillEqually
+        stack.spacing = 2
+        stack.edgeInsets = NSEdgeInsets(top: 3, left: 3, bottom: 3, right: 3)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        for (index, title) in titles.enumerated() {
+            let button = NSButton(title: title, target: nil, action: nil)
+            button.isBordered = false
+            button.wantsLayer = true
+            button.layer?.cornerRadius = 7
+            button.setButtonType(.momentaryChange)
+            button.translatesAutoresizingMaskIntoConstraints = false
+            button.heightAnchor.constraint(equalToConstant: 30).isActive = true
+            KeelButtonActions.attach(button) { [weak self] in
+                guard let self else { return }
+                self.selectedIndex = index
+                self.onChange?(index)
+            }
+            buttons.append(button)
+            stack.addArrangedSubview(button)
+        }
+        addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor), stack.trailingAnchor.constraint(equalTo: trailingAnchor),
+            stack.topAnchor.constraint(equalTo: topAnchor), stack.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+        setAccessibilityElement(true)
+        setAccessibilityRole(.radioGroup)
+        setAccessibilityLabel(label)
+        restyle()
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    private func restyle() {
+        for (index, button) in buttons.enumerated() {
+            let on = index == selectedIndex
+            button.layer?.backgroundColor = (on ? fill : .clear).cgColor
+            button.attributedTitle = NSAttributedString(string: titles[index], attributes: [
+                .font: Keel.font(13, on ? .bold : .regular), .foregroundColor: on ? selectedText : Keel.muted,
+            ])
+            button.setAccessibilityValue(on ? "selected" : "")
+        }
+    }
+}
+
+/// − value unit +, for budgets.
+final class KeelStepper: NSView {
+    private let value = NSTextField(labelWithString: "")
+    var onStep: ((Int) -> Void)?
+
+    init(label: String) {
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = 9
+        layer?.backgroundColor = Keel.raised.cgColor
+        layer?.borderColor = Keel.inputBorder.cgColor
+        layer?.borderWidth = 1
+        translatesAutoresizingMaskIntoConstraints = false
+        func step(_ glyph: String, _ delta: Int, _ name: String) -> NSButton {
+            let button = NSButton(title: glyph, target: nil, action: nil)
+            button.isBordered = false
+            button.wantsLayer = true
+            button.layer?.cornerRadius = 6
+            button.layer?.backgroundColor = Keel.inputBorder.cgColor
+            button.attributedTitle = NSAttributedString(string: glyph, attributes: [.font: Keel.font(15), .foregroundColor: Keel.text])
+            button.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([button.widthAnchor.constraint(equalToConstant: 28), button.heightAnchor.constraint(equalToConstant: 28)])
+            button.setAccessibilityLabel("\(name) \(label)")
+            KeelButtonActions.attach(button) { [weak self] in self?.onStep?(delta) }
+            return button
+        }
+        value.alignment = .center
+        value.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let stack = NSStackView(views: [step("−", -1, "Decrease"), value, step("+", 1, "Increase")])
+        stack.spacing = 4
+        stack.edgeInsets = NSEdgeInsets(top: 4, left: 4, bottom: 4, right: 4)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stack)
+        NSLayoutConstraint.activate([
+            heightAnchor.constraint(equalToConstant: 36),
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor), stack.trailingAnchor.constraint(equalTo: trailingAnchor),
+            stack.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+        setAccessibilityElement(true)
+        setAccessibilityRole(.incrementor)
+        setAccessibilityLabel(label)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    /// "200" "actions".
+    func set(_ number: String, unit: String) {
+        let text = NSMutableAttributedString(string: number, attributes: [
+            .font: NSFont.monospacedSystemFont(ofSize: 13, weight: .semibold), .foregroundColor: Keel.text,
+        ])
+        text.append(NSAttributedString(string: " " + unit, attributes: [.font: Keel.font(12), .foregroundColor: Keel.dim]))
+        value.attributedStringValue = text
+        setAccessibilityValue("\(number) \(unit)")
+    }
+
+    override func accessibilityPerformIncrement() -> Bool { onStep?(1); return true }
+    override func accessibilityPerformDecrement() -> Bool { onStep?(-1); return true }
+}
+
+/// Text the person copies: an endpoint, a command, a config. Mono, in a
+/// raised box, with a Copy button.
+final class KeelCopyField: KeelPanel {
+    private let text: NSTextField
+    private var copy: NSButton?
+
+    /// `width`: the box's width, for text that wraps.
+    init(_ value: String, note: String? = nil, wraps: Bool = false, label: String, width: CGFloat? = nil) {
+        text = wraps ? NSTextField(wrappingLabelWithString: value) : NSTextField(labelWithString: value)
+        super.init(fill: Keel.raised, border: Keel.inputBorder, radius: 9)
+        text.font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        text.textColor = Keel.text
+        text.isSelectable = true
+        text.lineBreakMode = wraps ? .byCharWrapping : .byTruncatingMiddle
+        text.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        text.setAccessibilityLabel(label)
+        if let width { text.preferredMaxLayoutWidth = width - 100 }
+        let button = Keel.miniButton("Copy") { [weak self] in self?.copyValue() }
+        button.setAccessibilityLabel("Copy \(label)")
+        copy = button
+        var views: [NSView] = [text]
+        if let note { views.append(Keel.label(note, size: 12, color: Keel.dim)) }
+        views.append(button)
+        let stack = NSStackView(views: views)
+        stack.spacing = 10
+        stack.alignment = wraps ? .top : .centerY
+        stack.edgeInsets = NSEdgeInsets(top: wraps ? 9 : 6, left: 12, bottom: wraps ? 9 : 6, right: 6)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor), stack.trailingAnchor.constraint(equalTo: trailingAnchor),
+            stack.topAnchor.constraint(equalTo: topAnchor), stack.bottomAnchor.constraint(equalTo: bottomAnchor),
+            heightAnchor.constraint(greaterThanOrEqualToConstant: 36),
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    var value: String { text.stringValue }
+
+    private func copyValue() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text.stringValue, forType: .string)
+        (copy as? KeelMiniButton)?.setLabel("Copied")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            MainActor.assumeIsolated { (self?.copy as? KeelMiniButton)?.setLabel("Copy") }
+        }
+    }
+}
+
+/// An origin as a removable pill: "shop.acme.test ×".
+final class KeelTokenChip: KeelPanel {
+    init(_ text: String, onRemove: @escaping () -> Void) {
+        super.init(fill: Keel.raised, border: Keel.menuBorder, radius: 13)
+        let label = Keel.monoLabel(text, color: Keel.text)
+        label.font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        let remove = NSButton(title: "×", target: nil, action: nil)
+        remove.isBordered = false
+        remove.attributedTitle = NSAttributedString(string: "×", attributes: [.font: Keel.font(13), .foregroundColor: Keel.dim])
+        remove.setAccessibilityLabel("Remove \(text)")
+        KeelButtonActions.attach(remove, onRemove)
+        let stack = NSStackView(views: [label, remove])
+        stack.spacing = 6
+        stack.edgeInsets = NSEdgeInsets(top: 0, left: 10, bottom: 0, right: 8)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stack)
+        NSLayoutConstraint.activate([
+            heightAnchor.constraint(equalToConstant: 26),
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor), stack.trailingAnchor.constraint(equalTo: trailingAnchor),
+            stack.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+}
