@@ -11,6 +11,10 @@ let package = Package(
         .library(name: "InspectKit", targets: ["InspectKit"]),
         .library(name: "PasswordKit", targets: ["PasswordKit"]),
         .library(name: "AgentKit", targets: ["AgentKit"]),
+        // The `keel` command line. Named keel-cli in SwiftPM: on a
+        // case-insensitive disk `keel` and `Keel` would be the same file in
+        // .build and in the app bundle. Installed as `keel`.
+        .executable(name: "keel-cli", targets: ["KeelCLI"]),
     ],
     targets: [
         // The only target allowed to import AppKit / WebKit. Everything it
@@ -68,6 +72,13 @@ let package = Package(
         .target(name: "AgentKit", swiftSettings: [.swiftLanguageMode(.v6)]),
         .executableTarget(
             name: "AgentKitChecks",
+            dependencies: ["AgentKit"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        // `keel`: pairing, the stdio MCP launcher, status, schema, replay.
+        // Foundation and Security only; the protocol logic is AgentKit's.
+        .executableTarget(
+            name: "KeelCLI",
             dependencies: ["AgentKit"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
