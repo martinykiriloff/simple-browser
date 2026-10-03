@@ -10,25 +10,29 @@ public struct MCPTool: Sendable {
     public var readOnly: Bool
     /// May lose something the person had (closing a tab, clearing storage).
     public var destructive: Bool
+    /// Extra annotations (WebMCP's consequential and untrusted-content hints).
+    public var extraAnnotations: [String: JSONValue]
 
     public init(name: String, title: String, description: String, inputSchema: JSONValue,
-                readOnly: Bool = false, destructive: Bool = false) {
+                readOnly: Bool = false, destructive: Bool = false, extraAnnotations: [String: JSONValue] = [:]) {
         self.name = name; self.title = title; self.description = description
         self.inputSchema = inputSchema; self.readOnly = readOnly; self.destructive = destructive
+        self.extraAnnotations = extraAnnotations
     }
 
-    var listing: JSONValue {
-        [
+    public var listing: JSONValue {
+        let annotations: [String: JSONValue] = [
+            "title": .string(title),
+            "readOnlyHint": .bool(readOnly),
+            "destructiveHint": .bool(destructive),
+            "openWorldHint": true,
+        ].merging(extraAnnotations) { _, extra in extra }
+        return [
             "name": .string(name),
             "title": .string(title),
             "description": .string(description),
             "inputSchema": inputSchema,
-            "annotations": [
-                "title": .string(title),
-                "readOnlyHint": .bool(readOnly),
-                "destructiveHint": .bool(destructive),
-                "openWorldHint": true,
-            ],
+            "annotations": .object(annotations),
         ]
     }
 }
@@ -43,16 +47,24 @@ public struct MCPToolResult: Sendable, Equatable {
 
     public var content: [Content]
     public var isError: Bool
+    /// Machine-readable outcome (AR-5): `ok`, `navigated`, `changedRefs`,
+    /// `error: {code, message, retryable}`. Sent as `structuredContent`.
+    public var structured: JSONValue?
 
-    public init(_ content: [Content], isError: Bool = false) {
-        self.content = content; self.isError = isError
+    public init(_ content: [Content], isError: Bool = false, structured: JSONValue? = nil) {
+        self.content = content; self.isError = isError; self.structured = structured
+    }
+
+    /// The text parts joined, for logs and token counts.
+    public var text: String {
+        content.compactMap { if case .text(let text) = $0 { return text } else { return nil } }.joined(separator: "\n")
     }
 
     public static func text(_ text: String) -> MCPToolResult { MCPToolResult([.text(text)]) }
     public static func error(_ text: String) -> MCPToolResult { MCPToolResult([.text(text)], isError: true) }
 
-    var json: JSONValue {
-        .object([
+    public var json: JSONValue {
+        var object: [String: JSONValue] = [
             "content": .array(content.map {
                 switch $0 {
                 case .text(let text): return ["type": "text", "text": .string(text)]
@@ -60,7 +72,9 @@ public struct MCPToolResult: Sendable, Equatable {
                 }
             }),
             "isError": .bool(isError),
-        ])
+        ]
+        if let structured { object["structuredContent"] = structured }
+        return .object(object)
     }
 }
 
@@ -114,6 +128,9 @@ public struct MCPClientInfo: Sendable, Equatable {
 /// message out. The Streamable HTTP transport around it lives in the app.
 public struct MCPDispatcher: Sendable {
     public static let supportedVersions = ["2025-06-18", "2025-03-26", "2024-11-05"]
+    /// The version of the tool contract (AR-11). Minor versions only add
+    /// tools or optional arguments; a removal or rename is a major version.
+    public static let toolSchemaVersion = "1.1.0"
 
     public var serverName: String
     public var serverVersion: String
@@ -174,12 +191,14 @@ public struct MCPDispatcher: Sendable {
                 "protocolVersion": .string(version),
                 "capabilities": ["tools": ["listChanged": false], "prompts": ["listChanged": false], "logging": [:]],
                 "serverInfo": ["name": .string(serverName), "title": "Keel", "version": .string(serverVersion)],
+                "_meta": ["keel/toolSchemaVersion": .string(Self.toolSchemaVersion)],
                 "instructions": .string(instructions),
             ]))
         case "ping":
             return .reply(Self.result(id: id, [:]))
         case "tools/list":
-            return .reply(Self.result(id: id, ["tools": .array(tools.map(\.listing))]))
+            return .reply(Self.result(id: id, ["tools": .array(tools.map(\.listing)),
+                                               "_meta": ["keel/toolSchemaVersion": .string(Self.toolSchemaVersion)]]))
         case "tools/call":
             guard let name = params["name"]?.string else {
                 return .reply(Self.error(id: id, code: -32602, message: "tools/call needs a name"))
@@ -189,7 +208,7 @@ public struct MCPDispatcher: Sendable {
             }
             let arguments = params["arguments"] ?? [:]
             if let problem = Self.validate(arguments, against: tools.first { $0.name == name }!.inputSchema) {
-                return .reply(Self.result(id: id, MCPToolResult.error("Invalid arguments for \(name): \(problem)").json))
+                return .reply(Self.result(id: id, AgentError(.invalidArguments, "Invalid arguments for \(name): \(problem)").result.json))
             }
             let result = await call(name, arguments)
             return .reply(Self.result(id: id, result.json))
