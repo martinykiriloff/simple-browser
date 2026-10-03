@@ -1,6 +1,12 @@
 # Keel
 
-A native macOS browser. Swift above the engine, WebKit below it.
+A native macOS browser for developers and the AI agents they run. Swift
+above the engine, WebKit below it. Formerly SimpleBrowser.
+
+Agents connect over MCP and get their own sandboxed session by default:
+a fresh profile with none of your cookies, tabs of their own, budgets, and
+an approval card before anything consequential. Everything they do is on
+the page in amber and in an audit log. See [AI agents](#ai-agents-mcp).
 
 ## Status
 
@@ -469,6 +475,10 @@ catalogue, and the feature self-test fails if the menu bar drifts from it.
 | Inspect Elements | ⌥⌘C | — | ⌥⌘C |
 | Show Recording Log | ⌃⌥⌘L | — | — |
 | Pick Color… | ⌃⌥⌘C | — | — (Color Picker extension) |
+| Pair a New Agent… | ⌥⌘P | — | — |
+| Agent Activity Log | ⌥⌘A | — | — |
+| Pause All Agents | ⇧⌘. | — | — |
+| Copy Snapshot for AI | ⌥⇧⌘C | — | — |
 | Downloads | ⌥⌘L | ⌥⌘L | ⇧⌘J |
 | Show tab 1–9 | ⌘1–⌘9 | ⌘1–9 | ⌘1–8, ⌘9 last |
 | Next tab | ⇧⌘] | ⇧⌘] / ⌃⇥ | ⌥⌘→ / ⌃⇥ |
@@ -737,25 +747,81 @@ panel debugs; Clockwork's own XHR history beyond what the page loaded.
 
 The browser is also an MCP server, so Claude Code, Cursor, Codex or any
 other MCP client can drive it and see what DevTools sees. Turn it on in
-**Settings → Developer** (or Develop → AI Agent Server…), then use
-*Copy Claude Code Command*, which copies something like:
+**Settings → Agents & permissions → Allow agent connections**.
 
-```sh
-claude mcp add --transport http keel http://127.0.0.1:9333/mcp \
-  --header "Authorization: Bearer <token>"
-```
+**Pairing.** Every client pairs once and gets a token of its own, which
+you can pause or revoke on its own. Two ways:
 
-*Copy JSON Config* gives the `mcpServers` entry Cursor, Windsurf and VS Code
-take. Clients that only speak stdio can reach it through
-`npx mcp-remote http://127.0.0.1:9333/mcp --header "Authorization: Bearer <token>"`.
+- From the client: `keel pair` (the [command-line tool](docs/CLI.md)) asks
+  Keel to pair; Keel shows the request with the client's name and process,
+  you choose its grants and press **Pair**. For stdio clients, the launcher
+  pairs by itself on first use:
+
+  ```sh
+  claude mcp add keel -- keel mcp
+  ```
+
+- From Keel: **Agent → Pair a New Agent…** (⌥⌘P) makes a token and gives
+  you the command for the client, for example
+  `claude mcp add --transport http keel http://127.0.0.1:9333/mcp --header "Authorization: Bearer keel_…"`,
+  or the `mcpServers` JSON for Cursor, Windsurf and VS Code.
+
+Tokens live in the login Keychain; Keel keeps only their hashes. A token
+from before pairing existed keeps working as a client called "Shared token
+(before pairing)" until you revoke it.
+
+**Sessions.** Each client gets a session (`session a91f`). By default it is
+a **sandbox**: its tabs open in a window of their own with an in-memory
+data store, so the agent has none of your cookies, logins or history, and
+everything is wiped when the session ends. It sees only its own tabs, never
+yours. For debugging an app you are signed in to, **Agent → Session →
+Borrowed…** lends chosen origins of your profile for 15 minutes, an hour or
+until you stop it: the agent can then act as you on those origins only, a
+coral banner says so with *End now*, and navigation anywhere else is
+blocked and logged. Email, banking and password managers are never
+lendable. **Agent → Hand Tab to Agent…** gives one of your tabs to the
+session the same way.
+
+**What always asks first.** Paying or placing an order, typing a card
+number or a password, sending or publishing, deleting, uploading or
+downloading files, running JavaScript in a borrowed session, and anything
+on a page whose text tries to instruct agents. The page shows an amber ring
+and the ref (`e14 · Claude`) on the element, and an approval card says what,
+where and why: *Allow once*, *Deny*, *Always allow on this origin for 1 h*
+(never for payments or passwords), or *Stop & revoke*. No answer within two
+minutes counts as denied. The policy, the timeout and per-origin rules
+(Ask, Allow, Never) are in Settings → Agents & permissions.
+
+**Page content is untrusted.** Text a page controls comes back to the
+agent inside `<untrusted-page-content origin="…">`, and text addressed to AI
+agents ("ignore previous instructions…", hidden or not) is flagged beside
+it and shown to you. No control eliminates prompt injection; the sandbox,
+the origin limits and the approvals keep what an obeyed injection can reach
+small.
+
+**Budgets and the kill switch.** A session has an action budget (200), a
+navigation rate (30 a minute), a snapshot size (8,000 tokens), a tab limit
+(10) and a time limit (60 minutes), all adjustable per client.
+**Pause All Agents** (⇧⌘.) stops every session where it is; **Stop &
+Revoke All** deletes every token, ends every session, wipes the sandboxes,
+and tells you what it did.
+
+**Seeing what happened.** Agent tabs are amber: a 3-point edge along the
+top of the page, a marker with the client's name in the tab strip, and the
+identity chip (*Sandbox · ephemeral* in green, *Borrowed · origin · 42 min*
+in coral) and *N waiting* in the toolbar. **Agent Activity Log** (⌥⌘A)
+lists every session with its timeline, exports it as JSON, and exports a
+*replay* that `keel replay` runs again. Logs are append-only JSON Lines in
+`~/Library/Application Support/Keel/Agents/Logs`, kept for 30 days, with
+card numbers left out.
 
 | Tools | What they do |
 |---|---|
-| `list_tabs` `new_tab` `select_tab` `close_tab` | Tabs across every window. Tools act on the tab the agent last opened or selected, else the front one; each takes a `tabId`. |
+| `list_tabs` `new_tab` `select_tab` `close_tab` | The session's own tabs. Tools act on the tab the agent last opened or selected; each takes a `tabId`. `new_tab` opens in the session's sandbox (or borrowed) window. |
 | `navigate` `wait_for` | Go to a URL, back, forward, reload; wait for the load, text, a selector, network idle. Results give the final URL, title and HTTP status. |
-| `snapshot` | The page as an accessibility tree with a ref on every element, the way Playwright's MCP server does it: roles, names, states, values, link targets; open shadow roots and same-origin iframes included. 10–20 ms on a large page. |
+| `snapshot` | The page as an accessibility tree with a ref on every element, the way Playwright's MCP server does it: roles, names, states, values, link targets; open shadow roots and same-origin iframes included. 10–20 ms on a large page. Held to `maxTokens` (the session's snapshot budget by default), with its token count. |
 | `click` `hover` `fill` `fill_form` `type_text` `press_key` `select_option` `scroll` `drag` `upload_files` | Act by ref or CSS selector. Clicks and keys are real `NSEvent`s delivered to the web view (`isTrusted`), not DOM events, at the element's centre after scrolling it into view; a click on something covered is refused and names what covers it. Each result reports a navigation it started, new console errors and failed requests, and a dialog it opened. |
-| `handle_dialog` | `alert`, `confirm` and `prompt` now show as sheets (they were dropped before); an agent answers them with the same buttons. |
+| `handle_dialog` | `alert`, `confirm` and `prompt` show as sheets; an agent answers them with the same buttons. Accepting a "Delete…?" asks you first. |
 | `console_messages` `network_requests` `network_request` | Everything the recorder has kept since the tab opened: console with stacks, requests with headers, bodies, timing. `afterId` returns only what is new. |
 | `evaluate` `inspect_element` `performance_metrics` `storage` | JavaScript in the page or the isolated world (a function receives the element); the box model, computed styles and matched CSS rules in cascade order; Core Web Vitals rated, navigation timing, slowest resources; cookies including HttpOnly, local and session storage. |
 | `screenshot` `get_page_content` | Viewport, element or full page as PNG or JPEG, optionally saved; the page as Markdown, text or HTML. |
@@ -766,11 +832,24 @@ take. Clients that only speak stdio can reach it through
 | `heap_snapshot` | JavaScript heap by class after garbage collection; `compare: true` shows what grew since the previous snapshot, for leaks. |
 | `application_data` | IndexedDB databases, stores and records; Cache Storage; the web app manifest; service workers; running animations. |
 | `devtools` `devtools_selection` | Open DevTools for the person on a panel or an element; and the other way round, read the element and the request the person has selected in DevTools ("why is *this* blue?"). |
+| `session_info` `session_events` | The session's identity, origins, budgets left and expiry; and what happened since an event id (`afterId`), instead of polling pages. |
+| `request_human` | Hands the tab to the person for a sign-in, a CAPTCHA, payment details or a confirmation; a banner asks them, and the call returns when they press *Done — hand back*. |
+| `page_tools` `call_page_tool` | WebMCP (experimental, off by default): tools a page registers with `document.modelContext`, also listed as `webmcp__<origin>__<name>`. Their descriptions and results are untrusted; tools that change something ask first. |
 
 Targets are a `ref` from `snapshot`, a CSS `selector`, or the visible `text`
 (with an optional `role`), as a person would say "the Sign up button".
 `snapshot` with `diff: true` returns only the lines that changed since the
 agent's previous snapshot of that tab, which keeps long sessions cheap.
+
+**Results and errors.** Every result carries `structuredContent`: `ok`,
+the tab, its URL, whether the call navigated, actions left and tokens; a
+failure carries `error: {code, message, retryable}`, with codes such as
+`approval_denied`, `origin_blocked`, `budget_exhausted`, `rate_limited`,
+`session_paused`, `needs_human`, `element_not_found` and `timeout`. The
+tool schema is versioned (`toolSchemaVersion`, now 1.1.0): within a major
+version tools are only added and arguments only gain optional fields. The
+whole contract is served at `http://127.0.0.1:9333/schema` and printed by
+`keel schema`.
 
 **Prompts.** Clients that support MCP prompts offer these as commands (in
 Claude Code, `/mcp__keel__debug_page` and so on): `debug_page`,
@@ -783,12 +862,10 @@ taken, result and screenshots, failures marked, filterable, *Reveal element*
 for selector-based calls, and *Copy session* as Markdown for a bug report or
 to hand to another agent. Calls made before DevTools opened are there too.
 
-It listens on 127.0.0.1 only, and every request needs the bearer token
-unless the person turns that off; a request from a web page (an `Origin`
-header) is refused unless it carries the token and comes from this machine,
-and a `Host` that is not loopback is refused, so DNS rebinding goes nowhere.
-The first time an agent acts on a tab, the tab says so. Agents act in the
-person's profile, signed in as them, which is the point and the risk.
+**Transport.** It listens on 127.0.0.1 only. A request from a web page (an
+`Origin` that is not this machine) is refused, a `Host` that is not
+loopback is refused, so DNS rebinding goes nowhere, and a web page cannot
+ask to pair.
 
 Right and middle clicks are DOM events: a real right click opens a context
 menu that holds the main thread. HTML5 drag and drop needs a drag session
@@ -796,7 +873,8 @@ menu that holds the main thread. HTML5 drag and drop needs a drag session
 
 ```sh
 scripts/test-agent.sh         # AgentKit's checks, then an MCP client drives the real app through every tool
-.build/debug/Keel --mcp-port 9399 --mcp-token secret   # or --mcp-no-auth; overrides Settings for this run
+scripts/test-trust.sh         # the trust layer: isolation, approvals, origins, budgets, untrusted content, the log
+.build/debug/Keel --mcp-port 9399 --mcp-token secret --agent-approve deny   # a scripted client; approvals answered for it
 ```
 
 ### Testing the DevTools

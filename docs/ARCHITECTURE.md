@@ -328,6 +328,45 @@ is what keeps two distributions as one codebase.
 Ship `isInspectable = true` and a "Debug in Safari" menu item regardless. When
 instrumentation breaks a site, the user needs an out.
 
+## The trust layer for agents
+
+Agents reach the browser over MCP (`AgentServer`, Streamable HTTP on
+127.0.0.1). Between the transport and the tools sits the trust layer, which
+decides what a connected agent may touch. The rules are pure Foundation in
+`AgentKit/Trust` and checked by `AgentKitChecks`; the app holds the state.
+
+```
+MCP client ──HTTP──▶ AgentServer ──▶ AgentTrust ──▶ AgentToolbox ──▶ tabs
+  keel mcp (stdio)    host/origin     client by        session's tabs
+                      bearer token    token hash       only; page text
+                      /pair, /schema  session, gate    wrapped untrusted
+```
+
+- **Clients** (`ClientRegistry`): one token per paired client, SHA-256 hash
+  on disk (`Agents/clients.json`, 0600), the token in the Keychain. Pairing
+  is `POST /pair`, answered by the person, or Agent → Pair a New Agent….
+- **Sessions** (`AgentSession`, `AgentTrust.Live`): one per client. A
+  sandbox session's tabs share a `PrivateSession`, the same in-memory
+  `WKWebsiteDataStore.nonPersistent()` private windows use, made for that
+  session alone and wiped when it ends. A borrowed session's tabs use the
+  person's profile, limited to lent origins until an expiry. Tabs carry
+  `agentSessionID`; the toolbox only ever lists and resolves the calling
+  session's tabs (a task-local carries the session through a call).
+- **The gate** (`AgentToolbox+Trust`): `admit` checks state, time, origins,
+  action and navigation budgets; `ActionClassifier` rates the call against
+  what the automation agent reports about the target element (role, name,
+  type, autocomplete, the form's fields); `needsApproval` applies the
+  policy, standing approvals and per-origin rules; an approval card waits
+  for the person. Results from page-reading tools are wrapped in
+  `<untrusted-page-content>`, scanned for text addressed to agents, held to
+  the snapshot budget, and given `structuredContent` with an error code.
+- **The log** (`AuditLog`): append-only, one JSON line per event in
+  `Agents/Logs/<date>-<session>.jsonl`; `session_events` pages through it
+  with `afterId`, and the replay export is what `keel replay` runs.
+- **WebMCP** (`WebMCPRegistry`, flag-gated): page tools are namespaced by
+  origin, capped, untrusted, and ask first unless the page marks them
+  read-only.
+
 ## Where this beats Chrome
 
 Not on breadth. On four specifics Chrome is structurally unable to match:
