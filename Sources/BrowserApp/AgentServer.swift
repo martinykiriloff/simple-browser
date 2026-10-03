@@ -69,6 +69,8 @@ final class AgentServer {
     private var policy = AgentAccessPolicy(token: nil, port: AgentServer.defaultPort)
     /// A client the command line set up (`--mcp-token`), kept in memory only.
     private var commandLineClient: PairedClient?
+    /// `--agent-budget-actions`: its action budget.
+    var commandLineBudget: Int?
     /// Overrides from the command line, for scripted runs.
     var portOverride: Int?
     var tokenOverride: String??
@@ -114,7 +116,8 @@ final class AgentServer {
         if let tokenOverride {
             commandLineClient = PairedClient(id: "cli0", name: "Command line", tokenHash: tokenOverride.map(ClientRegistry.hash) ?? "",
                                              tokenHint: String((tokenOverride ?? "none").suffix(4)), pairedAt: Date(),
-                                             defaultMode: trust.settings.defaultMode, approvalPolicy: trust.settings.policy, budgets: trust.settings.budgets)
+                                             defaultMode: trust.settings.defaultMode, approvalPolicy: trust.settings.policy,
+                                             budgets: commandLineBudget.map { var b = trust.settings.budgets; b.maxActions = $0; return b } ?? trust.settings.budgets)
         }
         let port = activePort
         policy = AgentAccessPolicy(token: activeToken, port: port)

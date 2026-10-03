@@ -319,6 +319,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             agentServer.portOverride = port
             if let token = launch.mcpToken { agentServer.tokenOverride = .some(token) }
             agentTrust.autoAnswer = launch.agentApprove
+            if let actions = launch.agentBudgetActions { agentServer.commandLineBudget = actions }
             if launch.agentHandTab {
                 let first = controllers.first
                 agentTrust.handOnConnect = { [weak first] in first }
@@ -1388,6 +1389,8 @@ struct LaunchOptions {
     var agentApprove: String?
     /// `--agent-hand-tab`: the first tab is handed to the command-line client, as Hand Tab to Agent… does.
     var agentHandTab = false
+    /// `--agent-budget-actions <n>`: the command-line client's action budget, for scripted runs.
+    var agentBudgetActions: Int?
 
     static func parse(_ arguments: [String]) -> LaunchOptions {
         var options = LaunchOptions()
@@ -1460,6 +1463,8 @@ struct LaunchOptions {
                 options.agentApprove = iterator.next()
             case "--agent-hand-tab":
                 options.agentHandTab = true
+            case "--agent-budget-actions":
+                options.agentBudgetActions = iterator.next().flatMap(Int.init)
             case "--devtools-delay":
                 options.devToolsDelay = iterator.next().flatMap(Double.init) ?? 4
             case let value where value.hasPrefix("-"):

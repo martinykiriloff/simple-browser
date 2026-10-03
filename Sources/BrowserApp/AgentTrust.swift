@@ -156,7 +156,9 @@ final class AgentTrust {
 
     init(directory: URL? = nil) {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        self.directory = directory ?? support.appendingPathComponent("Keel/Agents", isDirectory: true)
+        // Scripted runs keep their sessions and logs out of the person's folder.
+        let scripted = ProcessInfo.processInfo.environment["KEEL_AGENT_DIR"].map { URL(fileURLWithPath: $0, isDirectory: true) }
+        self.directory = directory ?? scripted ?? support.appendingPathComponent("Keel/Agents", isDirectory: true)
         load()
         expiryTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }

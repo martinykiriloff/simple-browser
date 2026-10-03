@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Checkout · Acme Shop</title></head>
+<body>
+  <h1>Checkout</h1>
+  <form id="order" method="post" action="/confirm" onsubmit="event.preventDefault(); document.getElementById('status').textContent = 'ORDER PLACED';">
+    <label>Email <input name="email" type="email" autocomplete="email"></label>
+    <label>Card number <input name="card" autocomplete="cc-number"></label>
+    <label>Password <input name="pw" type="password" autocomplete="current-password"></label>
+    <button type="submit" id="place">Place order · €84.00</button>
+  </form>
+  <button id="note" onclick="document.getElementById('status').textContent = 'NOTE OPENED'">Show delivery notes</button>
+  <p id="status">waiting</p>
+</body></html>

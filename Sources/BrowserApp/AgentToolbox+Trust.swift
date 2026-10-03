@@ -114,7 +114,9 @@ extension AgentToolbox {
                     let fieldRisk = ActionClassifier.risk(tool: "fill", element: facts, typedText: field["value"]?.string)
                     if fieldRisk != .safe { risk = fieldRisk; targetText = "“\(facts.name)” [ref=\(facts.ref ?? "?")]"; ref = facts.ref; break }
                 }
-            } else if let facts = try? await elementFacts(tab, Self.hasTarget(a) ? a : [:]) {
+            } else {
+                // A target that cannot be found fails on its own, with its own error.
+                guard let facts = try? await elementFacts(tab, Self.hasTarget(a) ? a : [:]) else { return nil }
                 let typed = a["value"]?.string ?? a["text"]?.string ?? a["key"]?.string
                 let elementRisk = ActionClassifier.risk(tool: name, element: facts, typedText: typed)
                 if elementRisk != .safe { risk = elementRisk }
