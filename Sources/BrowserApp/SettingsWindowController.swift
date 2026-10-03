@@ -1,8 +1,9 @@
 import AppKit
 import BrowserKit
 
-/// The Settings window (⌘,). Two panes: General, with the homepage and what
-/// new windows start with, and Passwords.
+/// The Settings window (⌘,): General, Tabs, Passwords, AutoFill, Privacy,
+/// Websites, Extensions, Agents (who may drive the browser), Developer (the
+/// MCP server) and Advanced. Agents and Developer are drawn dark, Design D.
 ///
 /// Changes apply as you type, as macOS settings do; there is no Save button.
 /// The line under the field always says where Home will actually go, so a
@@ -34,7 +35,7 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate, N
     let memorySaverCheckbox = NSButton(checkboxWithTitle: "Put inactive tabs to sleep to save memory", target: nil, action: nil)
     let keepActiveField = NSTextField()
 
-    enum Pane: Int { case general, tabs, passwords, autofill, privacy, websites, extensions, developer, advanced }
+    enum Pane: Int { case general, tabs, passwords, autofill, privacy, websites, extensions, agents, developer, advanced }
     let shortcutsPane = ShortcutsSettingsPane()
 
     private let tabs = SettingsTabViewController()
@@ -43,6 +44,7 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate, N
     let websitesPane = WebsitesSettingsPane()
     let extensionsPane = ExtensionsSettingsPane()
     let autofillPane = AutofillSettingsPane()
+    let agentsPane = AgentsSettingsPane()
     let developerPane = DeveloperSettingsPane()
 
     init(passwords: PasswordService, blocker: ContentBlocker) {
@@ -74,9 +76,14 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate, N
         tabs.addChild(privacyPane)
         tabs.addChild(websitesPane)
         tabs.addChild(extensionsPane)
+        tabs.addChild(agentsPane)
         tabs.addChild(developerPane)
         tabs.addChild(shortcutsPane)
         window.contentViewController = tabs
+        // The Agents pane reaches the server the app hands the Developer
+        // pane, and follows its changes through it.
+        agentsPane.server = { [weak self] in self?.developerPane.server() }
+        developerPane.onRefresh = { [weak self] in self?.agentsPane.refreshServerState() }
         // The pane chooser is AppKit's; VoiceOver needs a name for it.
         func name(_ view: NSView) {
             if let segmented = view as? NSSegmentedControl { segmented.setAccessibilityLabel("Settings pane") }

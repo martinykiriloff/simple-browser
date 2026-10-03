@@ -35,23 +35,6 @@ final class AgentServer {
         set { UserDefaults.standard.set(newValue, forKey: "agent.port") }
     }
 
-    static var requiresToken: Bool {
-        get { UserDefaults.standard.object(forKey: "agent.requireToken") as? Bool ?? true }
-        set { UserDefaults.standard.set(newValue, forKey: "agent.requireToken") }
-    }
-
-    /// Made on first use and kept until regenerated.
-    static var token: String {
-        if let saved = UserDefaults.standard.string(forKey: "agent.token"), saved.count >= 32 { return saved }
-        let made = AgentAccessPolicy.makeToken()
-        UserDefaults.standard.set(made, forKey: "agent.token")
-        return made
-    }
-
-    static func regenerateToken() {
-        UserDefaults.standard.set(AgentAccessPolicy.makeToken(), forKey: "agent.token")
-    }
-
     // MARK: State
 
     let toolbox: AgentToolbox
@@ -66,7 +49,6 @@ final class AgentServer {
     private var listener: NWListener?
     private var connections: [ObjectIdentifier: NWConnection] = [:]
     private var sessions: [String: (info: MCPClientInfo, client: String)] = [:]
-    private var policy = AgentAccessPolicy(token: nil, port: AgentServer.defaultPort)
     /// A client the command line set up (`--mcp-token`), kept in memory only.
     private var commandLineClient: PairedClient?
     /// `--agent-budget-actions`: its action budget.
@@ -99,10 +81,6 @@ final class AgentServer {
     }
 
     var activePort: Int { portOverride ?? Self.port }
-    var activeToken: String? {
-        if let tokenOverride { return tokenOverride }
-        return Self.requiresToken ? Self.token : nil
-    }
 
     var endpointURL: String { "http://127.0.0.1:\(activePort)\(Self.endpointPath)" }
 
@@ -120,7 +98,6 @@ final class AgentServer {
                                              budgets: commandLineBudget.map { var b = trust.settings.budgets; b.maxActions = $0; return b } ?? trust.settings.budgets)
         }
         let port = activePort
-        policy = AgentAccessPolicy(token: activeToken, port: port)
         guard let nwPort = NWEndpoint.Port(rawValue: UInt16(port)) else { state = .failed("Invalid port \(port)"); return }
         let parameters = NWParameters.tcp
         parameters.requiredLocalEndpoint = .hostPort(host: .ipv4(.loopback), port: nwPort)
@@ -368,11 +345,7 @@ final class AgentServer {
     /// The same through the stdio launcher, which pairs by itself.
     static let claudeCodeStdioCommand = "claude mcp add keel -- keel mcp"
 
-    var claudeCodeCommand: String { claudeCodeCommand(token: activeToken) }
-
     /// The `mcpServers` entry most other clients (Cursor, Windsurf, VS Code) take.
-    var clientConfigJSON: String { clientConfigJSON(token: activeToken) }
-
     func clientConfigJSON(token: String?) -> String {
         var server: [String: JSONValue] = ["type": "http", "url": .string(endpointURL)]
         if let token { server["headers"] = ["Authorization": .string("Bearer \(token)")] }
