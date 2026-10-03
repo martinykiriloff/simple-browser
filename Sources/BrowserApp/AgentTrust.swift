@@ -1,6 +1,7 @@
 import AppKit
 import WebKit
 import AgentKit
+import BrowserKit
 
 extension Notification.Name {
     /// Paired clients, sessions, approvals or settings changed.
@@ -43,6 +44,8 @@ final class AgentTrust {
         /// The in-memory data store of a sandbox session.
         var sandbox: PrivateSession?
         weak var currentTab: BrowserWindowController?
+        /// The tab group the session's tabs share, named after it.
+        var groupID: TabGroupID?
         /// MCP session ids (one per `initialize`) that map to this session.
         var transportIDs: Set<String> = []
         var lastActivity = Date()

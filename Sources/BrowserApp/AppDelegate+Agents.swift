@@ -57,6 +57,14 @@ extension AppDelegate {
                 if !inFront { front.orderFront(nil) }
             }
         }
+        // One group per session, named after it, so its tabs read as the agent's and close in one action.
+        if let group = live.groupID, tabOrganizer.group(group) != nil {
+            tabOrganizer.add([tab], to: group)
+        } else if let group = tabOrganizer.newGroup(with: [tab], name: "\(live.session.clientName) · \(live.session.id)") {
+            tabOrganizer.setColor(group, .orange)
+            live.groupID = group
+        }
+        tabOrganizer.changed()
         tab.load(url ?? URL(string: "about:blank")!)
         tab.syncAgentChrome()
         return tab

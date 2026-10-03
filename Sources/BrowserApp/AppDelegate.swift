@@ -994,6 +994,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // A tab shown beside another in a split is saved with that one's window.
         for controller in ordered + controllers where !controller.isPrivate && controller.splitHost == nil {
             guard let window = controller.window else { continue }
+            // An agent's own window ends with its session; a tab handed to an agent stays the person's.
+            if controller.agentSessionID != nil, (window.tabbedWindows ?? [window]).allSatisfy({ tabWindow in
+                controllers.first { $0.window === tabWindow }?.agentSessionID != nil
+            }) { continue }
             let key = window.tabGroup.map(ObjectIdentifier.init) ?? ObjectIdentifier(window)
             guard !seen.contains(key) else { continue }
             seen.insert(key)
