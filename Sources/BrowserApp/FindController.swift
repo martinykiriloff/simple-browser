@@ -94,7 +94,7 @@ final class FindController: NSObject, NSSearchFieldDelegate {
                 flat.topAnchor.constraint(equalTo: bar.topAnchor),
                 flat.bottomAnchor.constraint(equalTo: bar.bottomAnchor),
             ])
-            countLabel.font = Keel.font(12).withMonospacedDigits
+            countLabel.font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
             countLabel.textColor = Keel.muted
         }
         let stack = NSStackView(views: [field, countLabel, previousButton, nextButton, doneButton])

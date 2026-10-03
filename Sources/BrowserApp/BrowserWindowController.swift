@@ -2037,7 +2037,7 @@ final class BrowserWindowController: NSWindowController,
         preferredWidth.priority = .defaultLow
         addressWidth = preferredWidth
         NSLayoutConstraint.activate([
-            addressField.widthAnchor.constraint(greaterThanOrEqualToConstant: 196),
+            addressField.widthAnchor.constraint(greaterThanOrEqualToConstant: Self.minimumAddressWidth),
             preferredWidth,
         ])
     }
@@ -2058,8 +2058,44 @@ final class BrowserWindowController: NSWindowController,
         }
         // The window's own buttons, and the margins at both ends.
         let available = window.frame.width - others - 110
-        let width = max(196, min(860, available))
+        let width = max(Self.minimumAddressWidth, min(860, available))
         if abs(addressWidth.constant - width) > 0.5 { addressWidth.constant = width }
+        // The estimate above can be short (toolbar buttons are wider on some
+        // systems): if a button still went to the overflow menu, the address
+        // gives way until it is back, never below its minimum.
+        guard !isFittingAddress else { return }
+        isFittingAddress = true
+        defer { isFittingAddress = false }
+        window.layoutIfNeeded()
+        var tries = 0
+        while tries < 16, addressWidth.constant > Self.minimumAddressWidth, !overflowingToolbarItems(in: toolbar).isEmpty {
+            addressWidth.constant = max(Self.minimumAddressWidth, addressWidth.constant - 24)
+            window.layoutIfNeeded()
+            tries += 1
+        }
+        // The estimate can also be long: held at its minimum, the address
+        // takes back what the buttons leave.
+        if tries == 0, addressWidth.constant <= Self.minimumAddressWidth {
+            for _ in 0..<12 {
+                addressWidth.constant += 24
+                window.layoutIfNeeded()
+                if !overflowingToolbarItems(in: toolbar).isEmpty {
+                    addressWidth.constant -= 24
+                    window.layoutIfNeeded()
+                    break
+                }
+            }
+        }
+    }
+
+    private var isFittingAddress = false
+    /// Narrow enough that a 900 pt window keeps every button: the address
+    /// gives way first (the domain still shows).
+    static let minimumAddressWidth: CGFloat = 120
+
+    private func overflowingToolbarItems(in toolbar: NSToolbar) -> [String] {
+        let visible = Set((toolbar.visibleItems ?? []).map(\.itemIdentifier))
+        return toolbar.items.filter { !$0.isHidden && !visible.contains($0.itemIdentifier) }.map(\.itemIdentifier.rawValue)
     }
 
     func windowDidResize(_ notification: Notification) {

@@ -61,6 +61,11 @@ final class DownloadRowView: NSView, NSDraggingSource {
             label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         }
         pageLabel.isHidden = !showsPage
+        // Design D's downloads popover (G1-05): the file name in mono.
+        if Keel.chromeEnabled && !showsPage {
+            nameLabel.font = NSFont.monospacedSystemFont(ofSize: 12, weight: .semibold)
+            statusLabel.font = Keel.font(11)
+        }
         progress.style = .bar
         progress.controlSize = .small
         progress.minValue = 0
@@ -222,7 +227,25 @@ final class DownloadsListController: NSViewController {
         footer.edgeInsets = NSEdgeInsets(top: 6, left: 10, bottom: 8, right: 10)
         footer.translatesAutoresizingMaskIntoConstraints = false
 
-        let root = NSView()
+        // The popover in Keel's chrome: flat #171B22 under a small heading.
+        let keel = Keel.chromeEnabled && limit != nil
+        let root: NSView = keel ? KeelFill(fill: Keel.raised) : NSView()
+        var top = root.topAnchor
+        var topInset: CGFloat = 4
+        if keel {
+            root.translatesAutoresizingMaskIntoConstraints = true
+            root.appearance = Keel.darkAppearance
+            let heading = Keel.sectionLabel("Downloads")
+            heading.translatesAutoresizingMaskIntoConstraints = false
+            root.addSubview(heading)
+            NSLayoutConstraint.activate([
+                heading.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 14),
+                heading.topAnchor.constraint(equalTo: root.topAnchor, constant: 12),
+            ])
+            top = heading.bottomAnchor
+            topInset = 6
+            emptyLabel.textColor = Keel.dim
+        }
         root.addSubview(scroll)
         root.addSubview(footer)
         root.addSubview(emptyLabel)
@@ -231,7 +254,7 @@ final class DownloadsListController: NSViewController {
         NSLayoutConstraint.activate([
             scroll.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-            scroll.topAnchor.constraint(equalTo: root.topAnchor, constant: 4),
+            scroll.topAnchor.constraint(equalTo: top, constant: topInset),
             scroll.bottomAnchor.constraint(equalTo: footer.topAnchor),
             footer.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             footer.trailingAnchor.constraint(equalTo: root.trailingAnchor),
