@@ -62,7 +62,7 @@ enum PageSelfTest {
             let translator = browser.translator
             let menu = browser.contextMenu
 
-            let suite = "SimpleBrowser.page-selftest"
+            let suite = "Keel.page-selftest"
             UserDefaults.standard.removePersistentDomain(forName: suite)
             if let scratch = UserDefaults(suiteName: suite) { BrowserSettings.store = scratch }
             BrowserSettings.translateTarget = "en"
@@ -83,7 +83,7 @@ enum PageSelfTest {
                 return (data, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
             }
 
-            let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("SimpleBrowser-page-selftest-\(UUID().uuidString)")
+            let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("Keel-page-selftest-\(UUID().uuidString)")
             try? FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
             defer { try? FileManager.default.removeItem(at: scratch) }
             browser.downloads.downloadsDirectory = scratch

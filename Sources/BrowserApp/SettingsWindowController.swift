@@ -140,12 +140,12 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate, N
         help.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         help.textColor = .secondaryLabelColor
 
-        let startupTitle = NSTextField(labelWithString: "SimpleBrowser opens with:")
+        let startupTitle = NSTextField(labelWithString: "Keel opens with:")
         startupTitle.alignment = .right
         startupPopUp.addItems(withTitles: ["All windows from last time", "A new window"])
         startupPopUp.target = self
         startupPopUp.action = #selector(startupChanged(_:))
-        startupPopUp.setAccessibilityLabel("SimpleBrowser opens with")
+        startupPopUp.setAccessibilityLabel("Keel opens with")
 
         let engineTitle = NSTextField(labelWithString: "Search engine:")
         engineTitle.alignment = .right

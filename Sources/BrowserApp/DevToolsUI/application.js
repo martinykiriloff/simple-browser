@@ -1,4 +1,4 @@
-// SimpleBrowser DevTools — Application panel: storage (local, session,
+// Keel DevTools — Application panel: storage (local, session,
 // cookies, IndexedDB, Cache Storage), the Web App Manifest, service workers
 // and page info.
 "use strict";

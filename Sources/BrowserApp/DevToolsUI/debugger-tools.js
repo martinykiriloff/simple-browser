@@ -1,4 +1,4 @@
-// SimpleBrowser DevTools — the debugger's conveniences: hover a variable
+// Keel DevTools — the debugger's conveniences: hover a variable
 // while paused to see its value, values inline at the end of the lines of
 // the paused function, Continue to here, Never pause here, the ignore list
 // (scripts the debugger steps over and the call stack folds away), and

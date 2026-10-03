@@ -212,7 +212,7 @@ extension FeatureSelfTest {
 
         // MARK: Files a page hands over by itself
 
-        let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("SimpleBrowser-feature-downloads-\(UUID().uuidString)")
+        let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("Keel-feature-downloads-\(UUID().uuidString)")
         try? FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: scratch) }
         browser.downloads.downloadsDirectory = scratch
@@ -344,7 +344,7 @@ extension FeatureSelfTest {
         check("certificates: …which has no warning about it", !browser.isShowingCertificateWarning && browser.securityTitle.isEmpty)
 
         // A web page cannot press the warning's buttons.
-        _ = await js("location.href = 'simplebrowser://warning-action/proceed?token=guess'", in: browser)
+        _ = await js("location.href = 'keel://warning-action/proceed?token=guess'", in: browser)
         await pause(0.8)
         check("certificates: a web page asking to go on is ignored", browser.pageWebView.url?.absoluteString == site + "/second", browser.pageWebView.url as Any)
 

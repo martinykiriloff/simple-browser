@@ -5,9 +5,9 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-	<string>SimpleBrowser</string>
+	<string>Keel</string>
 	<key>CFBundleExecutable</key>
-	<string>SimpleBrowser</string>
+	<string>Keel</string>
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
@@ -15,7 +15,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>SimpleBrowser</string>
+	<string>Keel</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleURLTypes</key>
@@ -39,15 +39,15 @@
 	<key>LSMinimumSystemVersion</key>
 	<string>15.4</string>
 	<key>NSContactsUsageDescription</key>
-	<string>SimpleBrowser fills forms with your own card from Contacts, when you ask it to in Settings → AutoFill.</string>
+	<string>Keel fills forms with your own card from Contacts, when you ask it to in Settings → AutoFill.</string>
 	<key>NSCameraUsageDescription</key>
-	<string>Websites you allow can use the camera, for video calls and the like. SimpleBrowser asks you first, site by site.</string>
+	<string>Websites you allow can use the camera, for video calls and the like. Keel asks you first, site by site.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Websites you allow can use the microphone, for calls and recordings. SimpleBrowser asks you first, site by site.</string>
+	<string>Websites you allow can use the microphone, for calls and recordings. Keel asks you first, site by site.</string>
 	<key>NSLocationUsageDescription</key>
-	<string>Websites you allow can learn where you are, for maps and local results. SimpleBrowser asks you first, site by site.</string>
+	<string>Websites you allow can learn where you are, for maps and local results. Keel asks you first, site by site.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Websites you allow can learn where you are, for maps and local results. SimpleBrowser asks you first, site by site.</string>
+	<string>Websites you allow can learn where you are, for maps and local results. Keel asks you first, site by site.</string>
 	<key>NSUserActivityTypes</key>
 	<array>
 		<string>NSUserActivityTypeBrowsingWeb</string>

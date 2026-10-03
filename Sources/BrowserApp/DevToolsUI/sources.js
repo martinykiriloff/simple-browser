@@ -1,4 +1,4 @@
-// SimpleBrowser DevTools — Sources panel: navigator, viewer, find.
+// Keel DevTools — Sources panel: navigator, viewer, find.
 "use strict";
 
 (function () {

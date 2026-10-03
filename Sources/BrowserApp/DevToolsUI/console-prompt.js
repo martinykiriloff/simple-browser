@@ -1,4 +1,4 @@
-// SimpleBrowser DevTools — the console prompt: a syntax-highlighted,
+// Keel DevTools — the console prompt: a syntax-highlighted,
 // multi-line editor (⇧↩ for a new line; ↩ continues while brackets are
 // open), history kept across sessions, autocomplete of the properties of
 // whatever is before the dot (with what each one is), and Chrome's eager

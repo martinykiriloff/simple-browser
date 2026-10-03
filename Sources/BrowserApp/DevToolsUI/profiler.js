@@ -1,4 +1,4 @@
-// SimpleBrowser DevTools — CPU profile and timeline recording for the
+// Keel DevTools — CPU profile and timeline recording for the
 // Performance panel: an event track, a flame chart and a bottom-up table.
 //
 // Data comes from WebKit's sampling profiler (`ScriptProfiler`, a stack trace

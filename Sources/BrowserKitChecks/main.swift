@@ -195,15 +195,15 @@ do {
     for trick in ["http://127.0.0.1.evil.example/", "http://localhost.evil.example/", "http://127.evil.example/"] {
         check("\(trick) is not this Mac", PageSecurity.of(u(trick), hasOnlySecureContent: false) == .notSecure)
     }
-    check("the start page says nothing", PageSecurity.of(u("simplebrowser://start"), hasOnlySecureContent: false) == .none)
+    check("the start page says nothing", PageSecurity.of(u("keel://start"), hasOnlySecureContent: false) == .none)
     check("no page says nothing", PageSecurity.of(nil, hasOnlySecureContent: false) == .none)
     let original = u("https://news.example/2026/story?id=7&x=a%20b#part")
     let reader = ReaderPage.url(token: "abc123", original: original)
     check("a Reader address carries its article's address, intact", ReaderPage.original(of: reader) == original, reader as Any)
     check("…and its token", ReaderPage.token(of: reader) == "abc123" && ReaderPage.isReader(reader))
-    check("the start page is not a Reader page", !ReaderPage.isReader(u("simplebrowser://start")) && ReaderPage.original(of: u("simplebrowser://start")) == nil)
-    check("a Reader address naming a script or a file has no article", ReaderPage.original(of: u("simplebrowser://reader/x?url=javascript:alert(1)")) == nil
-          && ReaderPage.original(of: u("simplebrowser://reader/x?url=file:///etc/passwd")) == nil)
+    check("the start page is not a Reader page", !ReaderPage.isReader(u("keel://start")) && ReaderPage.original(of: u("keel://start")) == nil)
+    check("a Reader address naming a script or a file has no article", ReaderPage.original(of: u("keel://reader/x?url=javascript:alert(1)")) == nil
+          && ReaderPage.original(of: u("keel://reader/x?url=file:///etc/passwd")) == nil)
     var article = ReaderArticle(url: original, title: "Tom & Jerry <script>alert(1)</script>", byline: "A \"Writer\"", site: "News", published: "2026-03-12T09:30:00Z",
                                 language: "en", words: 1150, html: "<p>Body</p>")
     let page = ReaderPage.html(article, appearance: ReaderAppearance())
@@ -231,7 +231,7 @@ do {
     check("…with a port that is not the default", SitePermissions.site(of: u("http://localhost:8767/")) == "http://localhost:8767")
     check("…and http is another site than https", SitePermissions.site(of: u("http://meet.example.com/")) != SitePermissions.site(of: u("https://meet.example.com/")))
     check("WebKit's port 0 is the default port", SitePermissions.site(scheme: "https", host: "meet.example.com", port: 0) == "https://meet.example.com")
-    check("the browser's own pages are no site", SitePermissions.site(of: u("simplebrowser://start")) == nil && SitePermissions.site(of: u("file:///x")) == nil)
+    check("the browser's own pages are no site", SitePermissions.site(of: u("keel://start")) == nil && SitePermissions.site(of: u("file:///x")) == nil)
     var permissions = SitePermissions()
     let meet = "https://meet.example.com"
     check("nothing chosen: a camera request is asked about", PermissionDecision.decide([.camera], site: meet, stored: permissions) == .ask)
@@ -277,12 +277,12 @@ do {
     problem.fingerprint = "ab12cd34"
     let warning = WarningPage.url(token: "t1", original: site443)
     check("a warning's address carries the page it is about", WarningPage.original(of: warning) == site443 && WarningPage.token(of: warning) == "t1" && WarningPage.isWarning(warning))
-    check("…which is never an http page or a script", WarningPage.original(of: u("simplebrowser://warning/t?url=http://x.example/")) == nil
-          && WarningPage.original(of: u("simplebrowser://warning/t?url=javascript:1")) == nil)
-    check("a warning is not a Reader page or the start page", !ReaderPage.isReader(warning) && !WarningPage.isWarning(u("simplebrowser://start")))
-    check("the warning's two buttons", WarningPage.action(of: u("simplebrowser://warning-action/back")) == .back
-          && WarningPage.action(of: u("simplebrowser://warning-action/proceed?token=t1")) == .proceed(token: "t1")
-          && WarningPage.action(of: u("simplebrowser://warning-action/proceed")) == nil && WarningPage.action(of: u("https://warning-action/back")) == nil)
+    check("…which is never an http page or a script", WarningPage.original(of: u("keel://warning/t?url=http://x.example/")) == nil
+          && WarningPage.original(of: u("keel://warning/t?url=javascript:1")) == nil)
+    check("a warning is not a Reader page or the start page", !ReaderPage.isReader(warning) && !WarningPage.isWarning(u("keel://start")))
+    check("the warning's two buttons", WarningPage.action(of: u("keel://warning-action/back")) == .back
+          && WarningPage.action(of: u("keel://warning-action/proceed?token=t1")) == .proceed(token: "t1")
+          && WarningPage.action(of: u("keel://warning-action/proceed")) == nil && WarningPage.action(of: u("https://warning-action/back")) == nil)
     let warningHTML = WarningPage.html(problem, token: "t1")
     check("the warning names the site and shows the certificate, as text", warningHTML.contains("<b>bank.example</b>") && warningHTML.contains("Nobody &lt;b&gt;")
           && warningHTML.contains("AB12 CD34") && warningHTML.contains("Expired"))
@@ -359,7 +359,7 @@ do {
     check("zoom is kept per site: www and the scheme do not matter", PageZoom.key(for: u("https://www.Example.com/a?b")) == "example.com"
           && PageZoom.key(for: u("http://example.com:8080/")) == "example.com")
     check("…a subdomain is another site", PageZoom.key(for: u("https://docs.example.com/")) == "docs.example.com")
-    check("…and the browser's own pages have none", PageZoom.key(for: u("simplebrowser://start")) == nil && PageZoom.key(for: nil) == nil)
+    check("…and the browser's own pages have none", PageZoom.key(for: u("keel://start")) == nil && PageZoom.key(for: nil) == nil)
     check("100% is forgotten rather than remembered", PageZoom.setting(1, for: "a.example", in: ["a.example": 1.5, "b.example": 2]) == ["b.example": 2])
     check("another level is remembered", PageZoom.setting(1.25, for: "a.example", in: [:]) == ["a.example": 1.25])
     check("only trouble gets words", PageSecurity.secure.label == nil && PageSecurity.local.label == nil
@@ -417,7 +417,7 @@ do {
     typealias I = CommandPalette.Item
     let now = Date()
     let items = [
-        I(id: "t1", kind: .tab, title: "Pull requests · simple-browser", detail: "https://github.com/pulls", lastUsed: now),
+        I(id: "t1", kind: .tab, title: "Pull requests · keel", detail: "https://github.com/pulls", lastUsed: now),
         I(id: "t2", kind: .tab, title: "Inbox (3) - Mail", detail: "https://mail.example.com/", lastUsed: now.addingTimeInterval(-60)),
         I(id: "c1", kind: .command, title: "Translate Page", detail: "View"),
         I(id: "c2", kind: .command, title: "Clear History…", detail: "History"),
@@ -435,8 +435,8 @@ do {
     // keys away after ⌘K, against every menu command as well. Titles as
     // people have them: sites with many tabs of their own, alike on purpose.
     let sites: [(String, [String])] = [
-        ("github.com", ["Pull requests", "Issues · simple-browser", "Actions · simple-browser", "swift-nio: Event-driven network framework", "apple/swift: The Swift Programming Language",
-                        "Notifications", "Release v1.4 · simple-browser", "Settings · Branches", "Compare changes", "Insights · Contributors"]),
+        ("github.com", ["Pull requests", "Issues · keel", "Actions · keel", "swift-nio: Event-driven network framework", "apple/swift: The Swift Programming Language",
+                        "Notifications", "Release v1.4 · keel", "Settings · Branches", "Compare changes", "Insights · Contributors"]),
         ("mail.google.com", ["Inbox (12) - Gmail", "Starred - Gmail", "Sent Mail - Gmail", "Drafts (2) - Gmail", "Invoice for September - Gmail"]),
         ("docs.google.com", ["Q4 planning - Google Docs", "Roadmap 2027 - Google Sheets", "Team offsite notes - Google Docs", "Budget - Google Sheets", "Hiring plan - Google Docs"]),
         ("developer.apple.com", ["WKWebView | Apple Developer Documentation", "NSWindowTab | Apple Developer Documentation", "WKWebExtension | Apple Developer Documentation",
@@ -546,7 +546,7 @@ do {
     check("a key another command has is refused, naming it", Shortcuts.refusal(giving: KeyShortcut("t"), to: "reload:", overrides: [:]) == "⌘T is “New Tab”.")
     check("…including one given by the person", Shortcuts.refusal(giving: KeyShortcut("j"), to: "reload:", overrides: ["findInPage:": KeyShortcut("j")]) == "⌘J is “Find…”.")
     check("a free key is allowed", Shortcuts.refusal(giving: KeyShortcut("j"), to: "reload:", overrides: [:]) == nil)
-    check("the keys every Mac app has stay as they are", Shortcuts.refusal(giving: KeyShortcut("j"), to: "terminate:", overrides: [:]) == "“Quit SimpleBrowser” keeps its key.")
+    check("the keys every Mac app has stay as they are", Shortcuts.refusal(giving: KeyShortcut("j"), to: "terminate:", overrides: [:]) == "“Quit Keel” keeps its key.")
     check("…as do the tab keys the window handles", Shortcuts.refusal(giving: KeyShortcut("j"), to: "tab.next", overrides: [:]) == "“Next tab” keeps its key.")
 
     let overrides: [String: KeyShortcut?] = ["reload:": KeyShortcut("j"), "findInPage:": nil]
@@ -611,19 +611,19 @@ do {
 
 do {
     let home = "/Users/ada"
-    check("location: /Applications needs no move", AppLocation.of(bundlePath: "/Applications/SimpleBrowser.app", home: home) == .applications
+    check("location: /Applications needs no move", AppLocation.of(bundlePath: "/Applications/Keel.app", home: home) == .applications
           && !AppLocation.applications.shouldOfferMove)
-    check("location: ~/Applications neither", AppLocation.of(bundlePath: "/Users/ada/Applications/SimpleBrowser.app", home: home) == .userApplications)
+    check("location: ~/Applications neither", AppLocation.of(bundlePath: "/Users/ada/Applications/Keel.app", home: home) == .userApplications)
     check("location: macOS's temporary copy is told apart",
-          AppLocation.of(bundlePath: "/private/var/folders/x/T/AppTranslocation/6A1D/d/SimpleBrowser.app", home: home) == .translocated)
-    check("location: the disk image", AppLocation.of(bundlePath: "/Volumes/SimpleBrowser/SimpleBrowser.app", home: home) == .diskImage)
-    check("location: Downloads is elsewhere, and offered a move", AppLocation.of(bundlePath: "/Users/ada/Downloads/SimpleBrowser.app", home: home) == .elsewhere
+          AppLocation.of(bundlePath: "/private/var/folders/x/T/AppTranslocation/6A1D/d/Keel.app", home: home) == .translocated)
+    check("location: the disk image", AppLocation.of(bundlePath: "/Volumes/Keel/Keel.app", home: home) == .diskImage)
+    check("location: Downloads is elsewhere, and offered a move", AppLocation.of(bundlePath: "/Users/ada/Downloads/Keel.app", home: home) == .elsewhere
           && AppLocation.elsewhere.shouldOfferMove)
     check("location: only a copy of its own goes to the Trash", AppLocation.elsewhere.removesOriginal && !AppLocation.diskImage.removesOriginal
           && !AppLocation.translocated.removesOriginal)
     check("location: a build or test copy in a temporary folder is not offered a move",
-          AppLocation.of(bundlePath: "/var/folders/x/T/tmp.abc/SimpleBrowser.app", home: home) == .temporary && !AppLocation.temporary.shouldOfferMove)
-    check("location: /Applications-something is not /Applications", AppLocation.of(bundlePath: "/Applications Old/SimpleBrowser.app", home: home) == .elsewhere)
+          AppLocation.of(bundlePath: "/var/folders/x/T/tmp.abc/Keel.app", home: home) == .temporary && !AppLocation.temporary.shouldOfferMove)
+    check("location: /Applications-something is not /Applications", AppLocation.of(bundlePath: "/Applications Old/Keel.app", home: home) == .elsewhere)
 }
 
 print(failures == 0 ? "✔ \(passed) checks passed" : "\(failures) of \(passed + failures) checks failed")

@@ -7,7 +7,7 @@ import Foundation
 /// names; `BrowserApp` turns them into `WKUserScript` / message handlers.
 public enum InspectorAgent {
     /// Name of the isolated `WKContentWorld` the observer runs in.
-    public static let isolatedWorldName = "SimpleBrowserInspector"
+    public static let isolatedWorldName = "KeelInspector"
     /// Message handler registered in the isolated world only.
     public static let isolatedHandlerName = "inspector"
     /// Message handler registered in the page world only.
@@ -73,7 +73,7 @@ public enum InspectorAgent {
     /// wrong inside an `.app`, where the packaging script puts resource
     /// bundles in `Contents/Resources`. Check there first.
     static let resourceBundle: Bundle = {
-        let name = "SimpleBrowser_InspectKit.bundle"
+        let name = "Keel_InspectKit.bundle"
         for base in [Bundle.main.resourceURL, Bundle.main.bundleURL] {
             if let base, let bundle = Bundle(url: base.appendingPathComponent(name)) { return bundle }
         }

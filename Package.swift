@@ -2,10 +2,10 @@
 import PackageDescription
 
 let package = Package(
-    name: "SimpleBrowser",
+    name: "Keel",
     platforms: [.macOS("15.4")],
     products: [
-        .executable(name: "SimpleBrowser", targets: ["BrowserApp"]),
+        .executable(name: "Keel", targets: ["BrowserApp"]),
         .library(name: "BrowserKit", targets: ["BrowserKit"]),
         .library(name: "BlockKit",   targets: ["BlockKit"]),
         .library(name: "InspectKit", targets: ["InspectKit"]),

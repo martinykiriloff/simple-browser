@@ -157,8 +157,8 @@ public struct AgentAccessPolicy: Sendable {
             switch self {
             case .badHost(let host): return "Host \(host) is not this machine's loopback address"
             case .foreignOrigin(let origin): return "Requests from web pages are refused (Origin: \(origin))"
-            case .missingToken: return "Missing Authorization: Bearer <token>. Copy it from SimpleBrowser → Settings → Developer."
-            case .wrongToken: return "Wrong token. Copy the current one from SimpleBrowser → Settings → Developer."
+            case .missingToken: return "Missing Authorization: Bearer <token>. Copy it from Keel → Settings → Developer."
+            case .wrongToken: return "Wrong token. Copy the current one from Keel → Settings → Developer."
             }
         }
     }

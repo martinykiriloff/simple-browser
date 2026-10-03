@@ -1,4 +1,4 @@
-// SimpleBrowser DevTools — the Styles, Computed and Layout panes' tools:
+// Keel DevTools — the Styles, Computed and Layout panes' tools:
 // the colour picker on swatches, .cls (toggle the element's classes), the
 // Copy menu on declarations and rules (also as JavaScript), Computed with
 // "Show all", grouping and the trace of the rules that set each value, and

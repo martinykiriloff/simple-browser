@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Builds SimpleBrowser.app from the SwiftPM executable product and wraps it in
+# Builds Keel.app from the SwiftPM executable product and wraps it in
 # a drag-to-Applications DMG. Needs only the Command Line Tools; no Xcode.
 #
 #   scripts/make-dmg.sh                       # ad-hoc signed, arm64 + x86_64
@@ -16,13 +16,13 @@
 # The DMG's window has a background with an arrow to Applications, laid
 # out through the Finder; DMG_LAYOUT=0 makes a plain one.
 #
-# Output: dist/SimpleBrowser-<version>.dmg
+# Output: dist/Keel-<version>.dmg
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-APP_NAME="SimpleBrowser"
+APP_NAME="Keel"
 VERSION="${VERSION:-0.1.0}"
 BUILD_NUMBER="${BUILD_NUMBER:-$(date +%Y%m%d%H%M)}"
 ARCHS="${ARCHS:-arm64 x86_64}"

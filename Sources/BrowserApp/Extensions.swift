@@ -36,7 +36,7 @@ final class ExtensionStore {
         case declined
         var errorDescription: String? {
             switch self {
-            case .notAnExtension(let why): return "That is not an extension SimpleBrowser can use: \(why)"
+            case .notAnExtension(let why): return "That is not an extension Keel can use: \(why)"
             case .declined: return "Not added."
             }
         }

@@ -1,4 +1,4 @@
-// SimpleBrowser DevTools — dataLayer: every push to `window.dataLayer` (Google
+// Keel DevTools — dataLayer: every push to `window.dataLayer` (Google
 // Tag Manager and gtag), recorded from document start, beside the GA4 hits
 // the page actually sent. Filter, inspect each push as a tree, see the
 // merged model, push a test event, export everything as JSON.
@@ -155,7 +155,7 @@
       const detail = $("#dl-detail");
       detail.textContent = "";
       const editor = h("textarea", { class: "react-input mono dl-editor", spellcheck: "false" });
-      editor.value = '{\n  "event": "devtools_test",\n  "source": "SimpleBrowser"\n}';
+      editor.value = '{\n  "event": "devtools_test",\n  "source": "Keel"\n}';
       const push = h("button", { class: "text-button primary" }, "Push");
       const status = h("span", { class: "muted" });
       push.addEventListener("click", async () => {

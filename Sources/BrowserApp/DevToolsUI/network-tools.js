@@ -1,4 +1,4 @@
-// SimpleBrowser DevTools — Network power tools: request blocking, local
+// Keel DevTools — Network power tools: request blocking, local
 // overrides, search across every request, and "Copy for AI" (Markdown and
 // HAR). Extends the Network panel (network.js) and adds three drawer panes.
 "use strict";
@@ -513,7 +513,7 @@
     },
 
     harFromRequests(list) {
-      return { log: { version: "1.2", creator: { name: "SimpleBrowser", version: "0.1" }, pages: [], entries: list.map((r) => this.harEntry(r)) } };
+      return { log: { version: "1.2", creator: { name: "Keel", version: "0.1" }, pages: [], entries: list.map((r) => this.harEntry(r)) } };
     },
 
     allAsCurl() { return this.visibleRequests().map((r) => this.asCurl(r)).join(" ;\n"); },

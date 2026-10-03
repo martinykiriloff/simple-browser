@@ -1,4 +1,4 @@
-// SimpleBrowser DevTools — what the built-in developer extensions share:
+// Keel DevTools — what the built-in developer extensions share:
 // which are on (Develop → Developer Extensions), their tabs, the screen
 // colour picker in the toolbar, and turning hook previews into JSON trees.
 "use strict";

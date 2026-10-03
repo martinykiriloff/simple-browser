@@ -1,4 +1,4 @@
-// SimpleBrowser DevTools — the Animations drawer: every running CSS
+// Keel DevTools — the Animations drawer: every running CSS
 // animation, CSS transition and Web Animation on the page, with pause,
 // replay, scrubbing and a global playback rate. WebKit's Animation domain
 // only reports animations, so control goes through the Web Animations API in

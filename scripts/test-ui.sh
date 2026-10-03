@@ -11,7 +11,7 @@
 # be unlocked: a locked screen is reported as an environment problem (exit 3).
 #
 #   scripts/test-ui.sh                       # debug build
-#   APP=dist/SimpleBrowser.app/Contents/MacOS/SimpleBrowser scripts/test-ui.sh
+#   APP=dist/Keel.app/Contents/MacOS/Keel scripts/test-ui.sh
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -20,7 +20,7 @@ cd "$ROOT"
 APP="${APP:-}"
 if [ -z "$APP" ]; then
   swift build 2>&1 | grep -E "error|Build complete" || true
-  APP="$ROOT/.build/debug/SimpleBrowser"
+  APP="$ROOT/.build/debug/Keel"
 fi
 REPORT="${REPORT:-$(mktemp -t ui-report).json}"
 rm -f "$REPORT"
@@ -32,7 +32,7 @@ if ! curl -s -m 2 -o /dev/null http://127.0.0.1:8765/; then
   sleep 1
 fi
 
-pkill -x SimpleBrowser 2>/dev/null || true
+pkill -x Keel 2>/dev/null || true
 sleep 0.5
 "$APP" --ui-selftest "$REPORT" http://127.0.0.1:8765/ >/dev/null 2>&1 &
 APP_PID=$!

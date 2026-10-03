@@ -12,7 +12,7 @@ import TranslateKit
 /// would do nothing, or open Safari, so they are replaced by the app's own.
 @MainActor
 final class PageContextMenu: NSObject, WKScriptMessageHandler {
-    static let worldName = "SimpleBrowserPageMenu"
+    static let worldName = "KeelPageMenu"
     static let handlerName = "pageMenu"
 
     /// What the pointer was on, reported by the agent as the menu opened.

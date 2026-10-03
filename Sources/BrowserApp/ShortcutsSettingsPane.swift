@@ -28,7 +28,7 @@ final class ShortcutsSettingsPane: NSViewController, NSTableViewDataSource, NSTa
     required init?(coder: NSCoder) { fatalError("not supported") }
 
     override func loadView() {
-        for (id, title, width) in [("command", "Command", 200.0), ("key", "SimpleBrowser", 110.0), ("safari", "Safari", 110.0), ("chrome", "Chrome", 110.0)] {
+        for (id, title, width) in [("command", "Command", 200.0), ("key", "Keel", 110.0), ("safari", "Safari", 110.0), ("chrome", "Chrome", 110.0)] {
             let column = NSTableColumn(identifier: .init(id))
             column.title = title
             column.width = width

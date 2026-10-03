@@ -10,8 +10,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 swift build 2>&1 | grep -E "error|Build complete" || true
-APP="$ROOT/.build/debug/SimpleBrowser"
-WORK="$(mktemp -d -t simplebrowser-downloads-test)"
+APP="$ROOT/.build/debug/Keel"
+WORK="$(mktemp -d -t keel-downloads-test)"
 trap 'rm -rf "$WORK"; [ -n "${SERVER_PID:-}" ] && kill "$SERVER_PID" 2>/dev/null || true' EXIT
 mkdir -p "$WORK/downloads/Files"
 

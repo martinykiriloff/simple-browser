@@ -103,10 +103,10 @@ public struct ReaderAppearance: Equatable, Sendable, Codable {
 
 /// The Reader page's address, and its markup.
 public enum ReaderPage {
-    public static let scheme = "simplebrowser"
+    public static let scheme = "keel"
     public static let host = "reader"
 
-    /// `simplebrowser://reader/<token>?url=<the article's own address>`.
+    /// `keel://reader/<token>?url=<the article's own address>`.
     /// The article's address is in it so that a Reader page reached when the
     /// article is no longer held (a restored session) can send the tab there.
     public static func url(token: String, original: URL) -> URL? {

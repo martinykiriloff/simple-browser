@@ -1,4 +1,4 @@
-// SimpleBrowser DevTools — values rendered the way Chrome's console renders
+// Keel DevTools — values rendered the way Chrome's console renders
 // them: `Array(3) [1, 2, 3]`, `{a: 1, b: {…}}`, `Map(1) {'a' => 1}`,
 // `Promise {<fulfilled>: 3}`, DOM nodes as inline elements that highlight
 // the node on hover and reveal it on click, functions that show their source

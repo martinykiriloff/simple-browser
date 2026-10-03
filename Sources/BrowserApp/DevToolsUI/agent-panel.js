@@ -1,4 +1,4 @@
-// SimpleBrowser DevTools — Agent panel: what an AI agent connected over MCP
+// Keel DevTools — Agent panel: what an AI agent connected over MCP
 // (Settings → Developer) is doing in this tab. Every tool call with its
 // arguments, how long it took, and what the agent was told back, including
 // screenshots. The app pushes calls in as they finish (`AgentPanel.add`).

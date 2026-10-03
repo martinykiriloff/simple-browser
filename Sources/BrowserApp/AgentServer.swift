@@ -70,7 +70,7 @@ final class AgentServer {
     var tokenOverride: String??
 
     private lazy var dispatcher = MCPDispatcher(
-        serverName: "simplebrowser",
+        serverName: "keel",
         serverVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev",
         instructions: BrowserTools.instructions,
         tools: BrowserTools.all,
@@ -206,7 +206,7 @@ final class AgentServer {
         if request.method == "OPTIONS" { return HTTPResponse(status: 204) }
         if request.method == "GET", request.path == "/" || request.path == "/health" {
             // Enough for a client to find the endpoint; nothing about the browser.
-            return .json(["name": "SimpleBrowser agent server", "mcp": .string(Self.endpointPath), "transport": "streamable-http"])
+            return .json(["name": "Keel agent server", "mcp": .string(Self.endpointPath), "transport": "streamable-http"])
         }
         guard request.path == Self.endpointPath else { return .text("Not found. The MCP endpoint is \(Self.endpointPath).", status: 404) }
         if let denial = policy.check(request) {
@@ -274,7 +274,7 @@ final class AgentServer {
 
     /// The command that adds this browser to Claude Code.
     var claudeCodeCommand: String {
-        var command = "claude mcp add --transport http simplebrowser \(endpointURL)"
+        var command = "claude mcp add --transport http keel \(endpointURL)"
         if let token = activeToken { command += " --header \"Authorization: Bearer \(token)\"" }
         return command
     }
@@ -283,7 +283,7 @@ final class AgentServer {
     var clientConfigJSON: String {
         var server: [String: JSONValue] = ["type": "http", "url": .string(endpointURL)]
         if let token = activeToken { server["headers"] = ["Authorization": .string("Bearer \(token)")] }
-        let config: JSONValue = ["mcpServers": ["simplebrowser": .object(server)]]
+        let config: JSONValue = ["mcpServers": ["keel": .object(server)]]
         return String(decoding: config.encoded(pretty: true), as: UTF8.self)
     }
 }

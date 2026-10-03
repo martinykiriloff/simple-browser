@@ -1,4 +1,4 @@
-// SimpleBrowser DevTools — Audits panel: Lighthouse-style checks for
+// Keel DevTools — Audits panel: Lighthouse-style checks for
 // accessibility, SEO, best practices and performance, scored per category.
 // DOM checks run in the isolated world (tools-agent.js); network, console and
 // vitals checks use what DevTools already recorded. Every finding links to its

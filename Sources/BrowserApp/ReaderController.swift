@@ -34,9 +34,9 @@ final class ReaderStore {
 /// the article taken from the page, and how it looks.
 @MainActor
 final class ReaderController: NSObject, WKScriptMessageHandler {
-    static let worldName = "SimpleBrowserReader"
+    static let worldName = "KeelReader"
     static let handlerName = "reader"
-    static let appearanceDidChange = Notification.Name("SimpleBrowser.readerAppearanceDidChange")
+    static let appearanceDidChange = Notification.Name("Keel.readerAppearanceDidChange")
 
     weak var webView: WKWebView?
     var onStateChange: (() -> Void)?

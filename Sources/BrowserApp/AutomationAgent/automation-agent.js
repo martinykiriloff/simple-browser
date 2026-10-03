@@ -1,4 +1,4 @@
-// SimpleBrowser automation agent -- what AI agents see of a page and how
+// Keel automation agent -- what AI agents see of a page and how
 // they point at it.
 //
 // Evaluated on demand in the inspector's isolated world (so it shares the

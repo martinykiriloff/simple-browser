@@ -1,4 +1,4 @@
-// SimpleBrowser DevTools — Markdown for "Copy for AI": requests, console
+// Keel DevTools — Markdown for "Copy for AI": requests, console
 // messages and reports as compact, self-describing text an assistant (or a
 // bug report) can use without the DevTools in front of it.
 "use strict";

@@ -9,7 +9,7 @@ import BrowserKit
 /// one is a new, empty cookie jar, which signs the user out of everything.
 @MainActor
 final class ProfileStore {
-    static let didChange = Notification.Name("SimpleBrowser.profilesDidChange")
+    static let didChange = Notification.Name("Keel.profilesDidChange")
 
     private static let rosterKey = "profiles.roster"
     /// Where the single-profile shell kept its profile. Read once, so the

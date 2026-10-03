@@ -89,7 +89,7 @@ data: bye
 
 """
 FX_NDJSON = b'{"n": 1, "ok": true}\n{"n": 2, "ok": false}\n{"n": 3, "tags": ["a", "b"]}\n'
-FX_BINARY = bytes(range(256)) + b"SimpleBrowser hex view" + bytes(range(255, -1, -1))
+FX_BINARY = bytes(range(256)) + b"Keel hex view" + bytes(range(255, -1, -1))
 FX_FONT_CANDIDATES = [
     "/System/Library/Fonts/Supplemental/NotoSansGothic-Regular.ttf",
     "/System/Library/Fonts/Supplemental/NotoSansCoptic-Regular.ttf",

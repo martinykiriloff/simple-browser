@@ -1,4 +1,4 @@
-// SimpleBrowser DevTools — the Elements panel's editing tools: undo/redo
+// Keel DevTools — the Elements panel's editing tools: undo/redo
 // (⌘Z / ⇧⌘Z) of every edit, drag and drop in the tree, badges (grid, flex,
 // scroll, event, slot) with the grid and flex overlays, search
 // highlighting, the Copy menu (selector, JS path, XPath, styles, element

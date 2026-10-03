@@ -1,4 +1,4 @@
-// SimpleBrowser DevTools — the Rendering drawer (paint flashing, layer
+// Keel DevTools — the Rendering drawer (paint flashing, layer
 // borders, FPS meter, CSS media emulation, disable JavaScript) and
 // screenshots. The emulation is held natively and undone while DevTools is
 // hidden, as in Chrome.

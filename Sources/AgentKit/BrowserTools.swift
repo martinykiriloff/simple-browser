@@ -5,7 +5,7 @@ import Foundation
 public enum BrowserTools {
 
     public static let instructions = """
-    SimpleBrowser is a real desktop browser (WebKit) the person is also using. You drive its tabs.
+    Keel is a real desktop browser (WebKit) the person is also using. You drive its tabs.
 
     Workflow:
     1. `snapshot` the page: an accessibility tree where every element you can act on has a ref like [ref=e12].
@@ -301,7 +301,7 @@ public enum BrowserTools {
                   description: "Find out what is broken on a page and why, then propose (or make) the fix.",
                   arguments: [.init("url", "Page to open; omit for the current tab"), .init("symptom", "What looks wrong, if known")],
                   template: """
-                  Debug the page {url} in SimpleBrowser. Reported symptom: {symptom}.
+                  Debug the page {url} in Keel. Reported symptom: {symptom}.
                   1. If a URL is given, open it with new_tab; otherwise use the current tab.
                   2. Call diagnose. For every error, read the stack (console_messages with includeStacks) and the failing requests (network_request with the body).
                   3. Reproduce the symptom by acting on the page (snapshot, then click/fill), checking the action results for new errors.
@@ -311,7 +311,7 @@ public enum BrowserTools {
                   description: "Run every audit, rank the problems, and fix what can be fixed in the code.",
                   arguments: [.init("url", "Page to audit; omit for the current tab")],
                   template: """
-                  Audit {url} in SimpleBrowser. Open it if a URL is given. Run run_audit and performance_metrics, and check the page in dark mode and on a phone with emulate (take a screenshot of each).
+                  Audit {url} in Keel. Open it if a URL is given. Run run_audit and performance_metrics, and check the page in dark mode and on a phone with emulate (take a screenshot of each).
                   Report the problems ranked by user impact, each with the elements involved (selectors) and the concrete fix. If the source is in this workspace, fix the top issues and re-run the audit to confirm the scores went up.
                   """),
         MCPPrompt(name: "fix_layout", title: "Fix a layout or styling bug",
@@ -319,7 +319,7 @@ public enum BrowserTools {
                   arguments: [.init("element", "The element (its text, a selector, or \"the one I selected in DevTools\")", required: true),
                               .init("problem", "What is wrong with it")],
                   template: """
-                  In SimpleBrowser, look at {element}. Problem: {problem}.
+                  In Keel, look at {element}. Problem: {problem}.
                   If the person refers to their DevTools selection, call devtools_selection. Otherwise find it with snapshot.
                   Use inspect_element for the box model, computed styles and matched rules (in cascade order), screenshot it, and check its parent's layout the same way. Explain which rule causes the problem, then change the CSS (in the workspace if the source is here; otherwise give the exact rule), reload and confirm with another screenshot and inspect_element. Finally open devtools on the element so the person can see it.
                   """),
@@ -328,7 +328,7 @@ public enum BrowserTools {
                   arguments: [.init("flow", "The flow, e.g. \"sign up with a new email and reach the dashboard\"", required: true),
                               .init("url", "Where it starts")],
                   template: """
-                  Test this flow in SimpleBrowser, starting at {url}: {flow}.
+                  Test this flow in Keel, starting at {url}: {flow}.
                   Act as a user with snapshot, click, fill and press_key; after each step read the action result for navigation, console errors, failed requests and dialogs. Also try one failure path (invalid input, or mock_network to make the key API return 500) and check the page handles it.
                   Report each step (pass/fail), every problem with evidence, and screenshots of anything that looks broken.
                   """),
@@ -336,7 +336,7 @@ public enum BrowserTools {
                   description: "Measure load and runtime performance and say what to change first.",
                   arguments: [.init("url", "Page to measure; omit for the current tab")],
                   template: """
-                  Review the performance of {url} in SimpleBrowser. Load it (navigate with reload_bypassing_cache), then call performance_metrics, network_requests (largest and slowest), and run_audit with categories [performance].
+                  Review the performance of {url} in Keel. Load it (navigate with reload_bypassing_cache), then call performance_metrics, network_requests (largest and slowest), and run_audit with categories [performance].
                   Interact with the main controls and call performance_metrics again for INP and long tasks. For a page that stays open, take heap_snapshot, repeat the main interaction a few times, and heap_snapshot with compare: true to look for leaks.
                   Give the top changes ranked by expected gain, each tied to a measured number.
                   """),

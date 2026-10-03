@@ -81,7 +81,7 @@ public enum HARExporter {
         let log: [String: Any] = [
             "log": [
                 "version": "1.2",
-                "creator": ["name": "SimpleBrowser", "version": creatorVersion],
+                "creator": ["name": "Keel", "version": creatorVersion],
                 "pages": [[
                     "startedDateTime": formatter.string(from: pageStart),
                     "id": pageID,

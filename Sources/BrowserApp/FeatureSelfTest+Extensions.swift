@@ -9,7 +9,7 @@ extension FeatureSelfTest {
         let browser = first
         let profile = browser.profile
         let store = app.extensionStore
-        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("SimpleBrowser-fixture-extension-\(UUID().uuidString)")
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("Keel-fixture-extension-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: folder) }
         do { try Self.writeFixtureExtension(to: folder) } catch { check("extensions: (setup) a fixture extension", false, error); return }
 

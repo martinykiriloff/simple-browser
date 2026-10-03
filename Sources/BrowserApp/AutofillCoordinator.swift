@@ -12,7 +12,7 @@ import PasswordKit
 /// security code is never kept, and never filled.
 @MainActor
 final class AutofillCoordinator: NSObject, WKScriptMessageHandler {
-    static let worldName = "SimpleBrowserAutofill"
+    static let worldName = "KeelAutofill"
     static let handlerName = "simpleBrowserAutofill"
     static let passkeyHandlerName = "simpleBrowserPasskeys"
 

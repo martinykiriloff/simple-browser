@@ -31,18 +31,18 @@ func release(tag: String, assets: [String], draft: Bool = false, prerelease: Boo
     return Data(#"{"tag_name":"\#(tag)","draft":\#(draft),"prerelease":\#(prerelease),"html_url":"https://github.com/o/r/releases/tag/\#(tag)","body":"Faster.","assets":[\#(list.joined(separator: ","))]}"#.utf8)
 }
 do {
-    let update = try GitHubReleases.parse(release(tag: "v0.3.0", assets: ["SimpleBrowser-0.3.0.dmg", "SimpleBrowser-0.3.0.dmg.sig"]))
+    let update = try GitHubReleases.parse(release(tag: "v0.3.0", assets: ["Keel-0.3.0.dmg", "Keel-0.3.0.dmg.sig"]))
     check("a release parses", update?.version == v("0.3.0") && update?.notes == "Faster.")
-    check("the DMG and its signature are found", update?.dmgURL.lastPathComponent == "SimpleBrowser-0.3.0.dmg" && update?.signatureURL.lastPathComponent == "SimpleBrowser-0.3.0.dmg.sig")
+    check("the DMG and its signature are found", update?.dmgURL.lastPathComponent == "Keel-0.3.0.dmg" && update?.signatureURL.lastPathComponent == "Keel-0.3.0.dmg.sig")
     check("a draft is not offered", try GitHubReleases.parse(release(tag: "v9.0", assets: ["a.dmg", "a.dmg.sig"], draft: true)) == nil)
     check("a pre-release is not offered", try GitHubReleases.parse(release(tag: "v9.0", assets: ["a.dmg", "a.dmg.sig"], prerelease: true)) == nil)
 } catch {
     check("releases parse", false, error)
 }
 do {
-    _ = try GitHubReleases.parse(release(tag: "v1.0", assets: ["SimpleBrowser-1.0.dmg"]))
+    _ = try GitHubReleases.parse(release(tag: "v1.0", assets: ["Keel-1.0.dmg"]))
     check("a DMG without a signature is refused", false)
-} catch { check("a DMG without a signature is refused", error as? GitHubReleases.ParseError == .missingAsset("simplebrowser-1.0.dmg.sig")) }
+} catch { check("a DMG without a signature is refused", error as? GitHubReleases.ParseError == .missingAsset("keel-1.0.dmg.sig")) }
 do {
     _ = try GitHubReleases.parse(release(tag: "nightly", assets: []))
     check("a tag that is not a version is refused", false)

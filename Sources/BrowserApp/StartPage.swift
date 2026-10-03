@@ -7,12 +7,12 @@ import BrowserKit
 /// sites, the reading list and recently closed tabs. Built on the Mac from
 /// the profile's own data, so it shows at once and needs no network.
 ///
-/// Served from `simplebrowser://start` by a scheme handler on each tab's
+/// Served from `keel://start` by a scheme handler on each tab's
 /// configuration. The page is inert HTML: every link is an ordinary link.
 @MainActor
 final class StartPageSchemeHandler: NSObject, WKURLSchemeHandler {
-    static let scheme = "simplebrowser"
-    static let url = URL(string: "simplebrowser://start")!
+    static let scheme = "keel"
+    static let url = URL(string: "keel://start")!
 
     struct Content {
         var favorites: [(title: String, url: URL)] = []
@@ -45,7 +45,7 @@ final class StartPageSchemeHandler: NSObject, WKURLSchemeHandler {
     }
 
     func webView(_ webView: WKWebView, start task: any WKURLSchemeTask) {
-        // Reader pages share the scheme: simplebrowser://reader/<token>.
+        // Reader pages share the scheme: keel://reader/<token>.
         let html: String
         if ReaderPage.isReader(task.request.url) {
             html = ReaderStore.shared.html(for: task.request.url)
@@ -101,7 +101,7 @@ final class StartPageSchemeHandler: NSObject, WKURLSchemeHandler {
         </style></head><body><main>
         <h1 id="private-title">Private Browsing</h1>
         <p class="lead">What you do in this window stays out of your history and is gone when you close it.</p>
-        <form action="simplebrowser://search" method="get" role="search">
+        <form action="keel://search" method="get" role="search">
           <input name="q" type="search" autocomplete="off" spellcheck="false" aria-label="Search \(escape(content.searchEngine)) or enter an address"
                  placeholder="Search \(escape(content.searchEngine)) or enter an address">
         </form>
@@ -165,7 +165,7 @@ final class StartPageSchemeHandler: NSObject, WKURLSchemeHandler {
                   border: 1px solid rgba(128,128,128,.3); background: var(--card); color: var(--text); outline: none; }
           input:focus { border-color: AccentColor; box-shadow: 0 0 0 3px color-mix(in srgb, AccentColor 30%, transparent); }
         </style></head><body><main>
-        <form action="simplebrowser://search" method="get" role="search">
+        <form action="keel://search" method="get" role="search">
           <input name="q" type="search" autocomplete="off" spellcheck="false" aria-label="Search \(escape(content.searchEngine)) or enter an address"
                  placeholder="Search \(escape(content.searchEngine)) or enter an address">
         </form>

@@ -1,4 +1,4 @@
-// SimpleBrowser DevTools — syntax highlighting and pretty-printing for the
+// Keel DevTools — syntax highlighting and pretty-printing for the
 // Sources panel. Small hand-written tokenizers: good enough to read code by,
 // not parsers. Every tokenizer returns [[className|null, text], …] whose
 // texts concatenate back to the input exactly.

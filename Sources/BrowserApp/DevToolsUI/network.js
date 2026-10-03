@@ -1,4 +1,4 @@
-// SimpleBrowser DevTools — Network panel.
+// Keel DevTools — Network panel.
 "use strict";
 
 (function () {

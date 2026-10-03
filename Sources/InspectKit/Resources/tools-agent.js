@@ -1,4 +1,4 @@
-// SimpleBrowser inspector tools agent -- audits, accessibility, storage
+// Keel inspector tools agent -- audits, accessibility, storage
 // browsers, animations and page overlays.
 //
 // Runs in the isolated world, injected by DevToolsController the first time

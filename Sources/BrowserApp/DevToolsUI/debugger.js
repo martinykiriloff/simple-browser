@@ -1,4 +1,4 @@
-// SimpleBrowser DevTools — JavaScript debugger: breakpoints, stepping, call
+// Keel DevTools — JavaScript debugger: breakpoints, stepping, call
 // stack, scopes and watches, in the Sources panel's sidebar.
 //
 // Backed by WebKit's real JavaScriptCore debugger over the inspector

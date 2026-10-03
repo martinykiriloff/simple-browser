@@ -446,10 +446,10 @@ def serve_https():
     """The same site over https on 8768, with a certificate it signed itself:
     a connection no browser should trust without being told to."""
     import os, ssl, subprocess, tempfile, threading
-    folder = tempfile.mkdtemp(prefix="simplebrowser-fixture-")
+    folder = tempfile.mkdtemp(prefix="keel-fixture-")
     key, cert = os.path.join(folder, "key.pem"), os.path.join(folder, "cert.pem")
     made = subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", key, "-out", cert, "-days", "2",
-                           "-subj", "/CN=Fixture Self-Signed/O=SimpleBrowser Tests",
+                           "-subj", "/CN=Fixture Self-Signed/O=Keel Tests",
                            "-addext", "subjectAltName=IP:127.0.0.1,DNS:localhost"], capture_output=True)
     if made.returncode != 0:
         return

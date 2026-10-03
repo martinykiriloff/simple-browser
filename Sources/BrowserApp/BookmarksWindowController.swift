@@ -12,7 +12,7 @@ final class BookmarksWindowController: NSWindowController, NSOutlineViewDataSour
 
     let outline = NSOutlineView()
     let searchField = NSSearchField()
-    private static let dragType = NSPasteboard.PasteboardType("dev.simplebrowser.bookmark")
+    private static let dragType = NSPasteboard.PasteboardType("dev.keel.bookmark")
 
     final class Item: NSObject {
         let node: BookmarkStore.Node

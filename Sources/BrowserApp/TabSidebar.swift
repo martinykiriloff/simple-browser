@@ -381,7 +381,7 @@ final class TabSidebarController: NSViewController, NSTableViewDataSource, NSTab
 }
 
 extension NSPasteboard.PasteboardType {
-    static let sidebarTab = NSPasteboard.PasteboardType("com.simplebrowser.sidebar-tab")
+    static let sidebarTab = NSPasteboard.PasteboardType("com.keel.sidebar-tab")
 }
 
 /// A chosen row: a rounded fill in the system's selection colour, and the

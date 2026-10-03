@@ -1,4 +1,4 @@
-// SimpleBrowser developer extensions — page-world hooks, installed at
+// Keel developer extensions — page-world hooks, installed at
 // document start when React Developer Tools or the dataLayer inspector is on.
 //
 // React: the same global hook React DevTools installs. React looks for

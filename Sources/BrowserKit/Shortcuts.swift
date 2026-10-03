@@ -112,10 +112,10 @@ public enum Shortcuts {
     public static func isStandard(_ id: String) -> Bool { standard.contains(id) }
 
     public static let commands: [ShortcutCommand] = [
-        ShortcutCommand("showSettings:", "Settings…", menu: "SimpleBrowser", KeyShortcut(","), safari: "⌘,", chrome: "⌘,"),
-        ShortcutCommand("hide:", "Hide SimpleBrowser", menu: "SimpleBrowser", KeyShortcut("h"), safari: "⌘H", chrome: "⌘H"),
-        ShortcutCommand("hideOtherApplications:", "Hide Others", menu: "SimpleBrowser", KeyShortcut("h", [.command, .option]), safari: "⌥⌘H", chrome: "⌥⌘H"),
-        ShortcutCommand("terminate:", "Quit SimpleBrowser", menu: "SimpleBrowser", KeyShortcut("q"), safari: "⌘Q", chrome: "⌘Q"),
+        ShortcutCommand("showSettings:", "Settings…", menu: "Keel", KeyShortcut(","), safari: "⌘,", chrome: "⌘,"),
+        ShortcutCommand("hide:", "Hide Keel", menu: "Keel", KeyShortcut("h"), safari: "⌘H", chrome: "⌘H"),
+        ShortcutCommand("hideOtherApplications:", "Hide Others", menu: "Keel", KeyShortcut("h", [.command, .option]), safari: "⌥⌘H", chrome: "⌥⌘H"),
+        ShortcutCommand("terminate:", "Quit Keel", menu: "Keel", KeyShortcut("q"), safari: "⌘Q", chrome: "⌘Q"),
         ShortcutCommand("newWindow:", "New Window", menu: "File", KeyShortcut("n"), safari: "⌘N", chrome: "⌘N"),
         ShortcutCommand("newPrivateWindow:", "New Private Window", menu: "File", KeyShortcut("n", [.command, .shift]), safari: "⇧⌘N", chrome: "⇧⌘N"),
         ShortcutCommand("newWindowForTab:", "New Tab", menu: "File", KeyShortcut("t"), safari: "⌘T", chrome: "⌘T"),
@@ -216,7 +216,7 @@ public enum Shortcuts {
 
     /// The README's table, so the two cannot drift apart.
     public static func readmeTable() -> String {
-        var lines = ["| Command | SimpleBrowser | Safari | Chrome |", "|---|---|---|---|"]
+        var lines = ["| Command | Keel | Safari | Chrome |", "|---|---|---|---|"]
         for command in commands where !standard.contains(command.id) {
             let ours = command.id == "tab.select" ? "⌘1–⌘9" : command.id == "openProfileWindow:" ? "⌥⇧⌘1–9" : (command.shortcut?.display ?? "—")
             lines.append("| \(command.title) | \(ours) | \(command.safari) | \(command.chrome) |")

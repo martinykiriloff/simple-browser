@@ -30,7 +30,7 @@ final class FeatureSelfTest {
     static func run(app: AppDelegate, browser: BrowserWindowController, output: String, snapshots: String?, only: Set<String>, quitWhenDone: Bool = false) {
         let test = FeatureSelfTest(app: app, browser: browser, snapshots: snapshots)
         Task { @MainActor in
-            let suite = "SimpleBrowser.feature-selftest"
+            let suite = "Keel.feature-selftest"
             UserDefaults.standard.removePersistentDomain(forName: suite)
             if let scratch = UserDefaults(suiteName: suite) { BrowserSettings.store = scratch }
             BrowserSettings.newWindowContent = .empty
@@ -250,7 +250,7 @@ final class FeatureSelfTest {
 
         // Only the start page may use the search address.
         await open("/second", in: browser)
-        _ = await js("location.href = 'simplebrowser://search?q=http://127.0.0.1:8767/long'", in: browser)
+        _ = await js("location.href = 'keel://search?q=http://127.0.0.1:8767/long'", in: browser)
         await pause(1)
         check("start page: a web page cannot drive the browser's search box", browser.currentURL?.path == "/second", browser.currentURL as Any)
 

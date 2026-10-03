@@ -462,7 +462,7 @@ final class PasswordsSettingsPane: NSViewController, NSTableViewDataSource, NSTa
         guard let window = view.window else { return }
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.commaSeparatedText]
-        panel.nameFieldStringValue = "SimpleBrowser Passwords.csv"
+        panel.nameFieldStringValue = "Keel Passwords.csv"
         panel.message = "The exported file is not encrypted: anyone who can read it can read your passwords."
         panel.beginSheetModal(for: window) { [weak self] response in
             guard response == .OK, let url = panel.url, let self else { return }
@@ -526,7 +526,7 @@ final class PasswordsSettingsPane: NSViewController, NSTableViewDataSource, NSTa
         guard let window = view.window else { return }
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.commaSeparatedText]
-        panel.nameFieldStringValue = "SimpleBrowser Passwords for Apple.csv"
+        panel.nameFieldStringValue = "Keel Passwords for Apple.csv"
         panel.message = "Written in the format the Passwords app imports. The file is not encrypted: delete it after importing."
         panel.beginSheetModal(for: window) { [weak self] response in
             guard response == .OK, let url = panel.url, let self else { return }
@@ -716,7 +716,7 @@ final class NeverSavedViewController: NSViewController, NSTableViewDataSource, N
     override func loadView() {
         let title = NSTextField(labelWithString: "Sites never saved")
         title.font = .boldSystemFont(ofSize: NSFont.systemFontSize + 1)
-        let help = NSTextField(wrappingLabelWithString: "SimpleBrowser does not offer to save passwords for these sites. Remove one to be asked again.")
+        let help = NSTextField(wrappingLabelWithString: "Keel does not offer to save passwords for these sites. Remove one to be asked again.")
         help.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         help.textColor = .secondaryLabelColor
 

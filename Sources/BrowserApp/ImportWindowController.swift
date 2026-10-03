@@ -5,7 +5,7 @@ import DataKit
 /// The first launch, and File → Import From…: pick the browser you came
 /// from and what to bring (bookmarks, history, open tabs, passwords). On
 /// the first launch it also offers the search engine and making
-/// SimpleBrowser the default browser, and says so in a minute's reading.
+/// Keel the default browser, and says so in a minute's reading.
 @MainActor
 final class ImportWindowController: NSWindowController {
     enum Mode { case firstRun, importOnly }
@@ -40,7 +40,7 @@ final class ImportWindowController: NSWindowController {
     let spinner = NSProgressIndicator()
     let resultLabel = NSTextField(wrappingLabelWithString: "")
     let enginePopUp = NSPopUpButton(frame: .zero, pullsDown: false)
-    let defaultButton = NSButton(title: "Make SimpleBrowser the Default Browser", target: nil, action: nil)
+    let defaultButton = NSButton(title: "Make Keel the Default Browser", target: nil, action: nil)
     let defaultLabel = NSTextField(labelWithString: "")
     let doneButton = NSButton(title: "Start Browsing", target: nil, action: nil)
     private var firstRunRows: [NSView] = []
@@ -160,8 +160,8 @@ final class ImportWindowController: NSWindowController {
         sourcePopUp.removeAllItems()
         sourcePopUp.addItems(withTitles: sources.map(\.title))
         let firstRun = mode == .firstRun
-        window?.title = firstRun ? "Welcome to SimpleBrowser" : "Import"
-        headline.stringValue = firstRun ? "Welcome to SimpleBrowser" : "Import from Another Browser"
+        window?.title = firstRun ? "Welcome to Keel" : "Import"
+        headline.stringValue = firstRun ? "Welcome to Keel" : "Import from Another Browser"
         intro.stringValue = firstRun
             ? "Bring your bookmarks, history, open tabs and passwords from the browser you use now, straight from its files: nothing to export. You can do this again at any time from File → Import From…."
             : "Bookmarks, history, open tabs and passwords, straight from the other browser’s files. Nothing already here is duplicated."
@@ -207,10 +207,10 @@ final class ImportWindowController: NSWindowController {
         tabsBox.isEnabled = !blocked && source.offersOpenTabs
         passwordsBox.isEnabled = !blocked && source.offersPasswords
         if blocked {
-            note.stringValue = "macOS keeps Safari’s bookmarks and history from other apps. To bring them over, give SimpleBrowser Full Disk Access in System Settings → Privacy & Security, then come back here."
+            note.stringValue = "macOS keeps Safari’s bookmarks and history from other apps. To bring them over, give Keel Full Disk Access in System Settings → Privacy & Security, then come back here."
             noteButton.title = "Open Privacy Settings"
         } else if source.offersPasswords {
-            note.stringValue = "\(source.browser.name) keeps its passwords’ key in your Keychain: macOS will ask you to allow SimpleBrowser to use it, once."
+            note.stringValue = "\(source.browser.name) keeps its passwords’ key in your Keychain: macOS will ask you to allow Keel to use it, once."
             noteButton.title = ""
         } else {
             let how = source.browser == .safari
@@ -270,7 +270,7 @@ final class ImportWindowController: NSWindowController {
     private func syncDefault() {
         let isDefault = isDefaultBrowser()
         defaultButton.isHidden = isDefault
-        defaultLabel.stringValue = isDefault ? "SimpleBrowser opens your web links." : ""
+        defaultLabel.stringValue = isDefault ? "Keel opens your web links." : ""
     }
 
     @objc func finish(_ sender: Any?) {

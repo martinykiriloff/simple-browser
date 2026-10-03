@@ -1,4 +1,4 @@
-// SimpleBrowser inspector agent -- isolated-world observer.
+// Keel inspector agent -- isolated-world observer.
 //
 // Injected at .atDocumentStart into a NAMED WKContentWorld, never the page
 // world. Page script cannot see, override or restore anything in here.

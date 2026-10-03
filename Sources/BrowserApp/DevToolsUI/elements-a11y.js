@@ -1,4 +1,4 @@
-// SimpleBrowser DevTools — the Elements sidebar's Accessibility pane: the
+// Keel DevTools — the Elements sidebar's Accessibility pane: the
 // accessibility tree around the selected node, and its computed role, name,
 // description and properties. WebKit's own accessibility object comes from
 // the protocol (DOM.getAccessibilityPropertiesForNode); the name's source,

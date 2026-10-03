@@ -1,4 +1,4 @@
-// SimpleBrowser JSON Viewer. Runs in its own isolated world when a document
+// Keel JSON Viewer. Runs in its own isolated world when a document
 // finishes loading; if the document is JSON (served as JSON, or a .json file
 // shown as text), it replaces WebKit's plain-text rendering with a
 // collapsible tree, a raw and a pretty view, a filter, and copyable paths.

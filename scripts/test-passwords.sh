@@ -9,7 +9,7 @@
 # briefly takes focus while it runs.
 #
 #   scripts/test-passwords.sh                # debug build
-#   APP=dist/SimpleBrowser.app/Contents/MacOS/SimpleBrowser scripts/test-passwords.sh
+#   APP=dist/Keel.app/Contents/MacOS/Keel scripts/test-passwords.sh
 #   KEYCHAIN=1 scripts/test-passwords.sh     # also round-trips a throwaway key through the login Keychain
 #   QUIET=1 scripts/test-passwords.sh        # without taking the keyboard: skips the steps that need it
 #
@@ -24,7 +24,7 @@ cd "$ROOT"
 APP="${APP:-}"
 if [ -z "$APP" ]; then
   swift build 2>&1 | grep -E "error|Build complete" || true
-  APP="$ROOT/.build/debug/SimpleBrowser"
+  APP="$ROOT/.build/debug/Keel"
   "$ROOT/.build/debug/PasswordKitChecks" ${KEYCHAIN:+--keychain}
 fi
 REPORT="${REPORT:-$(mktemp -t passwords-report).json}"

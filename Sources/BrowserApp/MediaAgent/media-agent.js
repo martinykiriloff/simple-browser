@@ -1,4 +1,4 @@
-// SimpleBrowser media agent: what a tab is playing, and play/pause/next
+// Keel media agent: what a tab is playing, and play/pause/next
 // from the toolbar, the media keys and Picture in Picture. Runs in its own
 // content world; next and previous are the page's own media session
 // actions, which a small hook in the page keeps for it.

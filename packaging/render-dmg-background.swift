@@ -44,7 +44,7 @@ func render(scale: CGFloat) -> Data? {
     head.stroke()
 
     // What to do, in one line.
-    let caption = NSAttributedString(string: "Drag SimpleBrowser to Applications", attributes: [
+    let caption = NSAttributedString(string: "Drag Keel to Applications", attributes: [
         .font: NSFont.systemFont(ofSize: 17, weight: .medium),
         .foregroundColor: NSColor(srgbRed: 0.25, green: 0.25, blue: 0.32, alpha: 1),
     ])

@@ -1,4 +1,4 @@
-// SimpleBrowser AutoFill agent: addresses, cards and one-time codes.
+// Keel AutoFill agent: addresses, cards and one-time codes.
 // Runs in its own content world, so the page can neither see nor call it.
 // It describes the form around the field in focus; the app decides what
 // the fields are for and what to offer, and hands back the values to fill.

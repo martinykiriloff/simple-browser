@@ -7,12 +7,12 @@ extension FeatureSelfTest {
 
     func distribution() async {
         let fm = FileManager.default
-        let scratch = fm.temporaryDirectory.appendingPathComponent("SimpleBrowser-move-\(UUID().uuidString)")
+        let scratch = fm.temporaryDirectory.appendingPathComponent("Keel-move-\(UUID().uuidString)")
         defer { try? fm.removeItem(at: scratch) }
         let home = scratch.appendingPathComponent("home")
         let downloads = home.appendingPathComponent("Downloads")
-        let app = downloads.appendingPathComponent("SimpleBrowser.app")
-        let binary = app.appendingPathComponent("Contents/MacOS/SimpleBrowser")
+        let app = downloads.appendingPathComponent("Keel.app")
+        let binary = app.appendingPathComponent("Contents/MacOS/Keel")
         let locked = scratch.appendingPathComponent("Applications")
         let mine = home.appendingPathComponent("Applications")
         try? fm.createDirectory(at: binary.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -25,8 +25,8 @@ extension FeatureSelfTest {
         try? fm.setAttributes([.posixPermissions: 0o555], ofItemAtPath: locked.path)
         defer { try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: locked.path) }
         // An older copy is there already.
-        try? fm.createDirectory(at: mine.appendingPathComponent("SimpleBrowser.app/Contents/MacOS"), withIntermediateDirectories: true)
-        try? Data("old".utf8).write(to: mine.appendingPathComponent("SimpleBrowser.app/Contents/MacOS/SimpleBrowser"))
+        try? fm.createDirectory(at: mine.appendingPathComponent("Keel.app/Contents/MacOS"), withIntermediateDirectories: true)
+        try? Data("old".utf8).write(to: mine.appendingPathComponent("Keel.app/Contents/MacOS/Keel"))
 
         let mover = ApplicationMover()
         mover.bundle = app
@@ -42,15 +42,15 @@ extension FeatureSelfTest {
 
         check("move: opened from Downloads, it offers to move", mover.location == .elsewhere && mover.location.shouldOfferMove)
         let moved = mover.offerIfNeeded()
-        let destination = mine.appendingPathComponent("SimpleBrowser.app")
+        let destination = mine.appendingPathComponent("Keel.app")
         check("move: …asking once, it moves to the first Applications folder it may write to", asked == 1 && moved == destination, mover.lastError as Any)
-        check("move: …replacing the older copy", (try? String(contentsOf: destination.appendingPathComponent("Contents/MacOS/SimpleBrowser"), encoding: .utf8)) == "new")
+        check("move: …replacing the older copy", (try? String(contentsOf: destination.appendingPathComponent("Contents/MacOS/Keel"), encoding: .utf8)) == "new")
         check("move: …without the download's quarantine, so it is not moved away again",
               getxattr(destination.path, "com.apple.quarantine", nil, 0, 0, XATTR_NOFOLLOW) < 0
-              && getxattr(destination.appendingPathComponent("Contents/MacOS/SimpleBrowser").path, "com.apple.quarantine", nil, 0, 0, XATTR_NOFOLLOW) < 0)
+              && getxattr(destination.appendingPathComponent("Contents/MacOS/Keel").path, "com.apple.quarantine", nil, 0, 0, XATTR_NOFOLLOW) < 0)
         check("move: …the copy in Downloads goes", discarded == app && !fm.fileExists(atPath: app.path))
         check("move: …and it opens again from there", relaunched == destination)
-        check("move: nothing is left half way", (try? fm.contentsOfDirectory(atPath: mine.path)) == ["SimpleBrowser.app"])
+        check("move: nothing is left half way", (try? fm.contentsOfDirectory(atPath: mine.path)) == ["Keel.app"])
 
         let fromApplications = ApplicationMover()
         fromApplications.bundle = destination
@@ -60,7 +60,7 @@ extension FeatureSelfTest {
         check("move: from an Applications folder, it asks nothing", fromApplications.offerIfNeeded() == nil && asked == 1)
 
         let fromImage = ApplicationMover()
-        fromImage.bundle = URL(fileURLWithPath: "/Volumes/SimpleBrowser/SimpleBrowser.app")
+        fromImage.bundle = URL(fileURLWithPath: "/Volumes/Keel/Keel.app")
         fromImage.home = home
         fromImage.ask = { (false, true) }
         check("move: from the disk image, the original is not the person's to throw away", fromImage.location == .diskImage && !fromImage.location.removesOriginal)

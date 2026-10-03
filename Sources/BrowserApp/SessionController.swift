@@ -25,7 +25,7 @@ final class SessionController {
 
     init(directory: URL? = nil) {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        self.directory = directory ?? support.appendingPathComponent("SimpleBrowser", isDirectory: true)
+        self.directory = directory ?? support.appendingPathComponent("Keel", isDirectory: true)
     }
 
     /// Reads what the last run left, and marks this run as running.

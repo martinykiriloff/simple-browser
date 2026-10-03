@@ -1,4 +1,4 @@
-// SimpleBrowser DevTools — Node: debug a Node.js process started with
+// Keel DevTools — Node: debug a Node.js process started with
 // `node --inspect` (or --inspect-brk), the way chrome://inspect does. Finds
 // targets on the inspector ports, then speaks the Chrome DevTools Protocol
 // to it over a WebSocket: console and REPL, scripts, breakpoints, pause and

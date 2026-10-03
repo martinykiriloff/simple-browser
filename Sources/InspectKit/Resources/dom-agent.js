@@ -1,4 +1,4 @@
-// SimpleBrowser inspector agent -- DOM, CSS, overlay and storage commands.
+// Keel inspector agent -- DOM, CSS, overlay and storage commands.
 //
 // Runs in the isolated world, loaded before agent.js so the two share one
 // node registry. The DOM and CSSOM are shared across worlds, so everything

@@ -1,4 +1,4 @@
-// SimpleBrowser DevTools — Elements panel: DOM tree, Styles, Computed, Layout.
+// Keel DevTools — Elements panel: DOM tree, Styles, Computed, Layout.
 "use strict";
 
 (function () {

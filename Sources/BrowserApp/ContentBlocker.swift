@@ -12,7 +12,7 @@ import BlockKit
 /// profile's own, and lives in its settings.
 @MainActor
 final class ContentBlocker {
-    static let didChange = Notification.Name("SimpleBrowser.contentBlockingDidChange")
+    static let didChange = Notification.Name("Keel.contentBlockingDidChange")
 
     /// What is known about one downloaded list.
     struct ListState: Codable, Equatable {
@@ -99,7 +99,7 @@ final class ContentBlocker {
 
     static func standard() -> ContentBlocker {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        return ContentBlocker(directory: support.appendingPathComponent("SimpleBrowser/ContentBlocking", isDirectory: true))
+        return ContentBlocker(directory: support.appendingPathComponent("Keel/ContentBlocking", isDirectory: true))
     }
 
     private var stateURL: URL { directory.appendingPathComponent("state.json") }

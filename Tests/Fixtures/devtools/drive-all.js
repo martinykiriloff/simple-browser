@@ -3,7 +3,7 @@
 // the DevTools test suite:
 //
 //   python3 Tests/Fixtures/devtools/server.py &
-//   swift run SimpleBrowser --show-devtools \
+//   swift run Keel --show-devtools \
 //     --devtools-script Tests/Fixtures/devtools/drive-all.js \
 //     --devtools-out /tmp/devtools-report.json --devtools-delay 4 http://127.0.0.1:8765/
 //
@@ -1217,7 +1217,7 @@ try {
       const bin = find("/fx/blob.bin");
       b = await openTab(bin, "preview");
       const hexRows = Array.from(b.querySelectorAll(".nv-hex-row:not(.nv-hex-head)"));
-      check("binary preview is a hex dump", b.dataset.previewKind === "binary" && hexRows.length === Math.ceil(534 / 16) && hexRows[0].textContent.startsWith("0000000000 01 02 03") && hexRows[16].querySelector(".nv-hex-ascii").textContent.startsWith("SimpleBrowser he"), hexRows.slice(0, 1).map((r) => r.textContent).concat(hexRows[16]?.textContent));
+      check("binary preview is a hex dump", b.dataset.previewKind === "binary" && hexRows.length === Math.ceil(534 / 16) && hexRows[0].textContent.startsWith("0000000000 01 02 03") && hexRows[16].querySelector(".nv-hex-ascii").textContent.startsWith("Keel he"), hexRows.slice(0, 1).map((r) => r.textContent).concat(hexRows[16]?.textContent));
       b = await openTab(bin, "response");
       check("binary response: hex and Save", !!b.querySelector(".nv-hex") && Array.from(b.querySelectorAll("button")).some((x) => x.textContent === "Save…"));
     }

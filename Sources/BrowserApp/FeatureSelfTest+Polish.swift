@@ -40,7 +40,7 @@ extension FeatureSelfTest {
         let pane = settings.shortcutsPane
         check("polish: Settings has General, Tabs, Passwords, AutoFill, Privacy, Websites, Extensions and Advanced",
               settings.paneTitles == ["General", "Tabs", "Passwords", "AutoFill", "Privacy", "Websites", "Extensions", "Developer", "Advanced"], settings.paneTitles)
-        check("polish: Advanced lists every shortcut beside Safari's and Chrome's", pane.table.numberOfRows == pane.commands.count && pane.table.tableColumns.map(\.title) == ["Command", "SimpleBrowser", "Safari", "Chrome"])
+        check("polish: Advanced lists every shortcut beside Safari's and Chrome's", pane.table.numberOfRows == pane.commands.count && pane.table.tableColumns.map(\.title) == ["Command", "Keel", "Safari", "Chrome"])
         if let row = pane.commands.firstIndex(where: { $0.id == "reload:" }) {
             pane.table.selectRowIndexes([row], byExtendingSelection: false)
             pane.recorder.take(KeyShortcut("j"))

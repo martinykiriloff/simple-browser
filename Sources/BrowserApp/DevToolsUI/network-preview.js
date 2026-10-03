@@ -1,4 +1,4 @@
-// SimpleBrowser DevTools — Network panel: the Preview and Response tabs.
+// Keel DevTools — Network panel: the Preview and Response tabs.
 //
 // Preview shows a response for what it is: HTML rendered (scripts off), JSON
 // as a searchable tree, XML and RSS as a tree, event streams and NDJSON as

@@ -6,7 +6,7 @@ enum AppResources {
     /// wrong inside an `.app`, where the packaging script puts resource
     /// bundles in `Contents/Resources`. Check there first.
     static let bundle: Bundle = {
-        let name = "SimpleBrowser_BrowserApp.bundle"
+        let name = "Keel_BrowserApp.bundle"
         for base in [Bundle.main.resourceURL, Bundle.main.bundleURL] {
             if let base, let bundle = Bundle(url: base.appendingPathComponent(name)) { return bundle }
         }

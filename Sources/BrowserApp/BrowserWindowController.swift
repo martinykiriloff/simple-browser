@@ -474,7 +474,7 @@ final class BrowserWindowController: NSWindowController,
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("not supported") }
 
-    static func tabbingIdentifier(for profile: Profile) -> String { "SimpleBrowser.profile.\(profile.id)" }
+    static func tabbingIdentifier(for profile: Profile) -> String { "Keel.profile.\(profile.id)" }
 
     // MARK: - Tabs
 
@@ -1213,7 +1213,7 @@ final class BrowserWindowController: NSWindowController,
                 styleMask: [.titled, .closable, .miniaturizable, .resizable],
                 backing: .buffered, defer: false
             )
-            toolsWindow.title = "DevTools — \(window?.title ?? "SimpleBrowser")"
+            toolsWindow.title = "DevTools — \(window?.title ?? "Keel")"
             toolsWindow.contentView = tools.view
             toolsWindow.isReleasedWhenClosed = false
             toolsWindow.delegate = self
@@ -1372,7 +1372,7 @@ final class BrowserWindowController: NSWindowController,
             recorderPanel = panel
             return panel
         }()
-        panel.update(title: window?.title ?? "SimpleBrowser")
+        panel.update(title: window?.title ?? "Keel")
         panel.showWindow(sender)
         panel.window?.makeKeyAndOrderFront(sender)
     }
@@ -1398,7 +1398,7 @@ final class BrowserWindowController: NSWindowController,
         alert.informativeText = """
         This page is inspectable from Safari on this Mac or a Mac connected over the network.
 
-        Safari → Develop → \(Host.current().localizedName ?? "this Mac") → SimpleBrowser → \(webView.title ?? webView.url?.absoluteString ?? "the page")
+        Safari → Develop → \(Host.current().localizedName ?? "this Mac") → Keel → \(webView.title ?? webView.url?.absoluteString ?? "the page")
 
         If the Develop menu is hidden: Safari → Settings → Advanced → Show features for web developers.
         """
@@ -2085,7 +2085,7 @@ final class BrowserWindowController: NSWindowController,
             addressField.stringValue = Self.displayAddress(shownURL)
         }
         let title = webView.title.flatMap { $0.isEmpty ? nil : $0 }
-        let resolved = title ?? shownURL?.host() ?? (isPrivate ? "Private" : "SimpleBrowser")
+        let resolved = title ?? shownURL?.host() ?? (isPrivate ? "Private" : "Keel")
         window?.title = resolved
         recorderPanel?.update(title: resolved)
         devToolsWindow?.title = "DevTools — \(resolved)"

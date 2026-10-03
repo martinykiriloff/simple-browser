@@ -7,7 +7,7 @@ import WebKit
 /// Picture.
 @MainActor
 final class TabMedia: NSObject, WKScriptMessageHandler {
-    static let worldName = "SimpleBrowserMedia"
+    static let worldName = "KeelMedia"
     static let handlerName = "simpleBrowserMedia"
 
     weak var webView: WKWebView?

@@ -42,7 +42,7 @@ final class ApplicationMover {
         } catch {
             lastError = error.localizedDescription
             let alert = NSAlert()
-            alert.messageText = "SimpleBrowser could not be moved"
+            alert.messageText = "Keel could not be moved"
             alert.informativeText = "\(error.localizedDescription)\n\nDrag it to the Applications folder in the Finder instead."
             if !QuietMode.isOn { alert.runModal() }
             return nil
@@ -78,7 +78,7 @@ final class ApplicationMover {
 
     static func askPerson() -> (move: Bool, never: Bool) {
         let alert = NSAlert()
-        alert.messageText = "Move SimpleBrowser to the Applications folder?"
+        alert.messageText = "Move Keel to the Applications folder?"
         alert.informativeText = "From there it opens without a warning and keeps itself up to date. Opened from the downloaded disk image or from Downloads, it cannot update."
         alert.addButton(withTitle: "Move to Applications")
         alert.addButton(withTitle: "Do Not Move")

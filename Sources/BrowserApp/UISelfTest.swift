@@ -53,7 +53,7 @@ enum UISelfTest {
             let startURL = browser.currentURL
             // A scratch settings suite, emptied first: the user's own homepage
             // is never read or written, even if this run is killed half way.
-            let suite = "SimpleBrowser.ui-selftest"
+            let suite = "Keel.ui-selftest"
             UserDefaults.standard.removePersistentDomain(forName: suite)
             if let scratch = UserDefaults(suiteName: suite) { BrowserSettings.store = scratch }
             check("the self-test got its own settings suite", BrowserSettings.store !== UserDefaults.standard)

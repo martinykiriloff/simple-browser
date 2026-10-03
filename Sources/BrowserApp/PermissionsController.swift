@@ -11,7 +11,7 @@ import BrowserKit
 /// what the person gives the page they chose to visit, no more.
 @MainActor
 final class PermissionsController: NSObject, NSPopoverDelegate {
-    static let didChange = Notification.Name("SimpleBrowser.sitePermissionsDidChange")
+    static let didChange = Notification.Name("Keel.sitePermissionsDidChange")
 
     weak var webView: WKWebView? { didSet { if webView !== oldValue { observeCapture() } } }
     /// The profile's choices, or for a private window the private session's.

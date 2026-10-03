@@ -185,7 +185,7 @@ public struct PwnedPasswords: Sendable {
         for (prefix, members) in byPrefix {
             var request = URLRequest(url: URL(string: "https://api.pwnedpasswords.com/range/\(prefix)")!)
             request.setValue("true", forHTTPHeaderField: "Add-Padding")
-            request.setValue("SimpleBrowser password checkup", forHTTPHeaderField: "User-Agent")
+            request.setValue("Keel password checkup", forHTTPHeaderField: "User-Agent")
             request.httpShouldHandleCookies = false
             request.cachePolicy = .reloadIgnoringLocalCacheData
             let (data, response) = try await fetch(request)

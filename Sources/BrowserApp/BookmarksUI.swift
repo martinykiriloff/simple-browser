@@ -4,7 +4,7 @@ import BrowserKit
 
 extension Notification.Name {
     /// Posted with the profile's ID as the object whenever its bookmarks or reading list change.
-    static let bookmarksDidChange = Notification.Name("SimpleBrowser.bookmarksDidChange")
+    static let bookmarksDidChange = Notification.Name("Keel.bookmarksDidChange")
 }
 
 /// ⌘D, or the star in the address bar: name it, pick a folder, Return. A

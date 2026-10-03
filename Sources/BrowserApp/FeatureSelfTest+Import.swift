@@ -9,7 +9,7 @@ extension FeatureSelfTest {
     func importing() async {
         let browser = first
         let profile = browser.profile
-        let home = FileManager.default.temporaryDirectory.appendingPathComponent("SimpleBrowser-import-home-\(UUID().uuidString)")
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("Keel-import-home-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: home) }
         let secret = "fixture-safe-storage"
         let key = ChromiumPasswords.key(from: secret)!
@@ -41,7 +41,7 @@ extension FeatureSelfTest {
         check("import: File → Import From…", menu?.action == #selector(AppDelegate.showImport(_:)))
         BrowserSettings.didFirstRun = false
         window.show(.firstRun)
-        check("import: the first launch welcomes", window.window?.isVisible == true && window.headline.stringValue == "Welcome to SimpleBrowser")
+        check("import: the first launch welcomes", window.window?.isVisible == true && window.headline.stringValue == "Welcome to Keel")
         check("import: …offering every browser on the Mac", window.sourcePopUp.itemTitles == ["Google Chrome — Ada", "Google Chrome — Work", "Firefox", "Safari"],
               window.sourcePopUp.itemTitles)
         check("import: …the search engine and the default browser", !window.enginePopUp.isHidden && !window.defaultButton.isHidden)

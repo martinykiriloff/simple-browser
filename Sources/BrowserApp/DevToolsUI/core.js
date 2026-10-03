@@ -1,4 +1,4 @@
-// SimpleBrowser DevTools — core: transport, panels, shared widgets.
+// Keel DevTools — core: transport, panels, shared widgets.
 "use strict";
 
 const DevTools = window.DevTools = {

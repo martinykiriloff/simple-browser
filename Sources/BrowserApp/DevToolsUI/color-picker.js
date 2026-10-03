@@ -1,4 +1,4 @@
-// SimpleBrowser DevTools — the Styles pane's colour picker, as in Chrome:
+// Keel DevTools — the Styles pane's colour picker, as in Chrome:
 // a saturation/brightness square, hue and opacity sliders, the value as
 // hex, rgb or hsl (click the format to switch), and the eyedropper where
 // the web view offers `EyeDropper`. Changes apply live; Escape restores

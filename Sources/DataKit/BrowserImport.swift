@@ -59,7 +59,7 @@ public enum BrowserImport {
         public let profile: String
         public let directory: URL
         /// Safari's folder is there but macOS keeps it from other apps
-        /// until SimpleBrowser has Full Disk Access.
+        /// until Keel has Full Disk Access.
         public let needsFullDiskAccess: Bool
 
         public var title: String { profile.isEmpty ? browser.name : "\(browser.name) — \(profile)" }
@@ -405,7 +405,7 @@ public enum BrowserImport {
     static func copyOpen(_ file: URL) throws -> SQLiteDatabase? {
         let fm = FileManager.default
         guard fm.fileExists(atPath: file.path) else { return nil }
-        let folder = fm.temporaryDirectory.appendingPathComponent("SimpleBrowser-import-\(UUID().uuidString)")
+        let folder = fm.temporaryDirectory.appendingPathComponent("Keel-import-\(UUID().uuidString)")
         try fm.createDirectory(at: folder, withIntermediateDirectories: true)
         let copy = folder.appendingPathComponent(file.lastPathComponent)
         do {

@@ -74,7 +74,7 @@ check("access: tokens differ", token != AgentAccessPolicy.makeToken())
 
 // MARK: MCP
 
-let dispatcher = MCPDispatcher(serverName: "simplebrowser", serverVersion: "1.0", instructions: "Use snapshot.", tools: BrowserTools.all, prompts: BrowserTools.prompts)
+let dispatcher = MCPDispatcher(serverName: "keel", serverVersion: "1.0", instructions: "Use snapshot.", tools: BrowserTools.all, prompts: BrowserTools.prompts)
 let echo: MCPDispatcher.ToolCall = { name, arguments in .text("\(name) \(arguments.jsonString)") }
 func send(_ message: JSONValue) async -> JSONValue? {
     if case .reply(let reply) = await dispatcher.handle(message.encoded(), call: echo) { return reply }

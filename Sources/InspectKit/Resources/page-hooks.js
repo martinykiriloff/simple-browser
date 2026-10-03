@@ -1,4 +1,4 @@
-// SimpleBrowser inspector agent -- page-world hooks.
+// Keel inspector agent -- page-world hooks.
 //
 // Injected at .atDocumentStart into the PAGE world, because `console`,
 // `fetch` and `XMLHttpRequest` are per-world objects: hooks in an isolated

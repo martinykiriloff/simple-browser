@@ -1,4 +1,4 @@
-// SimpleBrowser DevTools — Components: React Developer Tools, built in. The
+// Keel DevTools — Components: React Developer Tools, built in. The
 // page-world hook (devext-hooks.js) is the same global hook React DevTools
 // installs; this panel walks the committed fiber tree it collects. Tree,
 // search, host elements on demand, props, hooks and state (editable), owners,

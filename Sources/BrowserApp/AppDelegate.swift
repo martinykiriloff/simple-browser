@@ -43,7 +43,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// touch, or prompt for, the real one.
     private lazy var scratchPasswords: PasswordService? = !usesScratchData ? nil
         : PasswordService.scratch(in: FileManager.default.temporaryDirectory
-            .appendingPathComponent("SimpleBrowser-passwords-selftest-\(UUID().uuidString)"))
+            .appendingPathComponent("Keel-passwords-selftest-\(UUID().uuidString)"))
 
     func passwords(for profile: Profile) -> PasswordService {
         if let scratchPasswords { return scratchPasswords }
@@ -83,8 +83,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Installed web extensions, and each profile's running.
     private(set) lazy var extensionStore: ExtensionStore = {
         let directory = usesScratchData
-            ? FileManager.default.temporaryDirectory.appendingPathComponent("SimpleBrowser-extensions-\(UUID().uuidString)")
-            : FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("SimpleBrowser/Extensions")
+            ? FileManager.default.temporaryDirectory.appendingPathComponent("Keel-extensions-\(UUID().uuidString)")
+            : FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Keel/Extensions")
         let store = ExtensionStore(directory: directory)
         NotificationCenter.default.addObserver(forName: ExtensionStore.didChange, object: store, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
@@ -334,7 +334,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Links handed over by Finder, `open -a`, or another app once the user
-    /// picks SimpleBrowser as a handler for http/https.
+    /// picks Keel as a handler for http/https.
     // MARK: - Handoff
 
     func application(_ application: NSApplication, willContinueUserActivityWithType userActivityType: String) -> Bool {
@@ -623,7 +623,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// own, so it never asks the lists' servers for anything.
     private(set) lazy var blocker: ContentBlocker = {
         if usesScratchData || launch.devToolsScript != nil || launch.protocolProbeOutput != nil || launch.blockingProbeOutput != nil {
-            let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("SimpleBrowser-blocking-\(UUID().uuidString)", isDirectory: true)
+            let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("Keel-blocking-\(UUID().uuidString)", isDirectory: true)
             return ContentBlocker(directory: scratch, sources: [])
         }
         return ContentBlocker.standard()
@@ -634,7 +634,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// down what that took and what was left out.
     func runBlockingProbe(output: String, lists: [String], sites: [String], browser: BrowserWindowController) {
         Task { @MainActor in
-            let suite = "SimpleBrowser.blocking-probe"
+            let suite = "Keel.blocking-probe"
             UserDefaults.standard.removePersistentDomain(forName: suite)
             if let scratchSettings = UserDefaults(suiteName: suite) { BrowserSettings.store = scratchSettings }
             let chosen = FilterList.all.filter { lists.isEmpty ? $0.onByDefault : lists.contains($0.id) }
@@ -712,7 +712,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             store = try? HistoryStore(path: nil)
         } else {
             let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-                .appendingPathComponent("SimpleBrowser/Profiles/\(profile.id)", isDirectory: true)
+                .appendingPathComponent("Keel/Profiles/\(profile.id)", isDirectory: true)
             try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             store = try? HistoryStore(path: directory.appendingPathComponent("History.sqlite").path)
             // A year, as Safari keeps by default: pruned when the Mac has a
@@ -782,7 +782,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func profileDirectory(_ profile: Profile) -> URL {
         let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("SimpleBrowser/Profiles/\(profile.id)", isDirectory: true)
+            .appendingPathComponent("Keel/Profiles/\(profile.id)", isDirectory: true)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         return directory
     }
@@ -796,7 +796,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func readingListArchive(for profile: Profile, _ item: BookmarkStore.ReadingItem) -> URL {
-        let base = usesScratchData ? FileManager.default.temporaryDirectory.appendingPathComponent("SimpleBrowser-selftest-\(profile.id)")
+        let base = usesScratchData ? FileManager.default.temporaryDirectory.appendingPathComponent("Keel-selftest-\(profile.id)")
             : profileDirectory(profile)
         return base.appendingPathComponent("ReadingList/\(item.id).webarchive")
     }
@@ -1057,7 +1057,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         if announceCrash, let front = fronts.last {
-            front.showNotice("SimpleBrowser didn’t close properly. Your tabs are back.")
+            front.showNotice("Keel didn’t close properly. Your tabs are back.")
         }
         return fronts
     }
@@ -1336,7 +1336,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-/// `SimpleBrowser [--passwords-selftest <file>] [--show-passwords] [--ui-selftest <file>] [--go-home] [--show-settings] [--snapshot-windows <dir>] [--dump-recording <path>] [--show-recorder] [--show-devtools [panel]]
+/// `Keel [--passwords-selftest <file>] [--show-passwords] [--ui-selftest <file>] [--go-home] [--show-settings] [--snapshot-windows <dir>] [--dump-recording <path>] [--show-recorder] [--show-devtools [panel]]
 ///                [--devtools-script <file> --devtools-out <file> [--devtools-delay <s>]] [<url>]`
 struct LaunchOptions {
     var url: URL?

@@ -57,7 +57,7 @@ check("foreign origin is 403", status == 403, status)
 
 # --- handshake
 status, reply = post({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "claude-code", "version": "test"}}})
-check("initialize", status == 200 and reply["result"]["serverInfo"]["name"] == "simplebrowser" and session, reply)
+check("initialize", status == 200 and reply["result"]["serverInfo"]["name"] == "keel" and session, reply)
 status, _ = post({"jsonrpc": "2.0", "method": "notifications/initialized"})
 check("initialized notification is 202", status == 202, status)
 status, reply = post({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})

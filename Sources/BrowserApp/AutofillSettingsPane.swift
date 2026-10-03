@@ -34,8 +34,8 @@ enum PasskeyAccess {
         }
         switch state {
         case .authorized: return "Sites can use your passkeys, from iCloud Keychain or another passkey app, with Touch ID."
-        case .denied: return "Passkeys are turned off for SimpleBrowser in System Settings → Privacy & Security → Passkeys Access for Web Browsers."
-        default: return "SimpleBrowser has not been allowed to use passkeys yet."
+        case .denied: return "Passkeys are turned off for Keel in System Settings → Privacy & Security → Passkeys Access for Web Browsers."
+        default: return "Keel has not been allowed to use passkeys yet."
         }
     }
 }
@@ -197,7 +197,7 @@ final class AutofillSettingsPane: NSViewController, NSTableViewDataSource, NSTab
         Task { @MainActor in
             do {
                 guard var me = try await meCard() else {
-                    statusLabel.stringValue = "Your card in Contacts could not be read. Allow SimpleBrowser in System Settings → Privacy & Security → Contacts."
+                    statusLabel.stringValue = "Your card in Contacts could not be read. Allow Keel in System Settings → Privacy & Security → Contacts."
                     return
                 }
                 if me.label.isEmpty { me.label = "Me" }

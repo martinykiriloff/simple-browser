@@ -1,4 +1,4 @@
-// SimpleBrowser DevTools — the command menu (⌘⇧P) and Open file (⌘P), as in
+// Keel DevTools — the command menu (⌘⇧P) and Open file (⌘P), as in
 // Chrome: one box, fuzzy matching; a leading ">" means commands, otherwise
 // it is a file from the Sources navigator.
 "use strict";

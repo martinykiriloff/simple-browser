@@ -1,7 +1,7 @@
 import AppKit
 import UpdateKit
 
-/// Keeps SimpleBrowser up to date from the project's GitHub Releases.
+/// Keeps Keel up to date from the project's GitHub Releases.
 ///
 /// On launch, at most once a day, it asks GitHub for the latest release; a
 /// newer one is offered with Install Update / Remind Me Later / Skip This
@@ -76,7 +76,7 @@ final class Updater {
                 }
                 offer(update)
             } catch {
-                if userInitiated { fail("SimpleBrowser could not check for updates.", error) }
+                if userInitiated { fail("Keel could not check for updates.", error) }
             }
         }
     }
@@ -84,7 +84,7 @@ final class Updater {
     private func fetchLatest() async throws -> AvailableUpdate? {
         var request = URLRequest(url: feedURL)
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-        request.setValue("SimpleBrowser/\(currentVersion?.description ?? "dev")", forHTTPHeaderField: "User-Agent")
+        request.setValue("Keel/\(currentVersion?.description ?? "dev")", forHTTPHeaderField: "User-Agent")
         request.cachePolicy = .reloadIgnoringLocalCacheData
         let (data, response) = try await Self.session.data(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
@@ -100,8 +100,8 @@ final class Updater {
 
     private func offer(_ update: AvailableUpdate) {
         let alert = NSAlert()
-        alert.messageText = "A new version of SimpleBrowser is available!"
-        var text = "SimpleBrowser \(update.version) is available — you have \(currentVersion?.description ?? "a development build"). Would you like to update now?"
+        alert.messageText = "A new version of Keel is available!"
+        var text = "Keel \(update.version) is available — you have \(currentVersion?.description ?? "a development build"). Would you like to update now?"
         let notes = update.notes.trimmingCharacters(in: .whitespacesAndNewlines)
         if !notes.isEmpty { text += "\n\nWhat’s new:\n" + (notes.count > 700 ? String(notes.prefix(700)) + "…" : notes) }
         alert.informativeText = text
@@ -125,7 +125,7 @@ final class Updater {
     private func upToDate() {
         let alert = NSAlert()
         alert.messageText = "You’re up to date!"
-        alert.informativeText = "SimpleBrowser \(currentVersion?.description ?? "(development build)") is the newest version available."
+        alert.informativeText = "Keel \(currentVersion?.description ?? "(development build)") is the newest version available."
         alert.icon = NSApp.applicationIconImage
         if autoAnswer == nil { alert.runModal() }
     }
@@ -160,9 +160,9 @@ final class Updater {
         var errorDescription: String? {
             switch self {
             case .http(let status): return "The update server answered \(status)."
-            case .signature: return "The download is not signed by SimpleBrowser’s key, so it was not opened. Nothing was changed."
-            case .noAppInImage: return "The downloaded disk image does not contain SimpleBrowser."
-            case .wrongApp(let id): return "The downloaded app is not SimpleBrowser (\(id))."
+            case .signature: return "The download is not signed by Keel’s key, so it was not opened. Nothing was changed."
+            case .noAppInImage: return "The downloaded disk image does not contain Keel."
+            case .wrongApp(let id): return "The downloaded app is not Keel (\(id))."
             case .wrongVersion(let version): return "The downloaded app is version \(version), not the one offered."
             case .notReplaceable(let why): return why
             case .tool(let name, let output): return "\(name) failed: \(output)"
@@ -185,8 +185,8 @@ final class Updater {
         Task { @MainActor in
             do {
                 try Self.checkReplaceable(installedApp)
-                window.status("Downloading SimpleBrowser \(update.version)…")
-                let work = FileManager.default.temporaryDirectory.appendingPathComponent("SimpleBrowser-update-\(UUID().uuidString)")
+                window.status("Downloading Keel \(update.version)…")
+                let work = FileManager.default.temporaryDirectory.appendingPathComponent("Keel-update-\(UUID().uuidString)")
                 try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
                 let (signatureData, _) = try await Self.session.data(from: update.signatureURL)
                 let (downloaded, response) = try await Self.session.download(from: update.dmgURL)
@@ -204,13 +204,13 @@ final class Updater {
 
                 window.status("Preparing…")
                 let staged = try await Self.stage(dmg, in: work, expecting: update.version)
-                window.status("Restarting SimpleBrowser…")
+                window.status("Restarting Keel…")
                 try Self.scheduleSwap(staged: staged, over: installedApp, work: work)
                 if let onReadyToRelaunch { onReadyToRelaunch(staged); return }
                 onWillRestart?()
                 NSApp.terminate(nil)
             } catch {
-                fail("SimpleBrowser could not be updated.", error)
+                fail("Keel could not be updated.", error)
             }
         }
     }
@@ -219,10 +219,10 @@ final class Updater {
     /// folder this user cannot write, cannot be replaced in place.
     static func checkReplaceable(_ app: URL) throws {
         if app.path.contains("/AppTranslocation/") {
-            throw UpdateError.notReplaceable("SimpleBrowser is running from a temporary location macOS made for it. Move it to the Applications folder, open it from there, and update again.")
+            throw UpdateError.notReplaceable("Keel is running from a temporary location macOS made for it. Move it to the Applications folder, open it from there, and update again.")
         }
         guard FileManager.default.isWritableFile(atPath: app.deletingLastPathComponent().path) else {
-            throw UpdateError.notReplaceable("SimpleBrowser cannot replace itself in \(app.deletingLastPathComponent().path): that folder is not writable for this user.")
+            throw UpdateError.notReplaceable("Keel cannot replace itself in \(app.deletingLastPathComponent().path): that folder is not writable for this user.")
         }
     }
 
@@ -231,10 +231,10 @@ final class Updater {
     static func stage(_ dmg: URL, in work: URL, expecting version: AppVersion) async throws -> URL {
         let mount = work.appendingPathComponent("mount")
         try await run("/usr/bin/hdiutil", ["attach", dmg.path, "-nobrowse", "-readonly", "-noautoopen", "-mountpoint", mount.path])
-        let staged = work.appendingPathComponent("SimpleBrowser.app")
+        let staged = work.appendingPathComponent("Keel.app")
         do {
             let apps = (try? FileManager.default.contentsOfDirectory(at: mount, includingPropertiesForKeys: nil))?.filter { $0.pathExtension == "app" } ?? []
-            guard let app = apps.first(where: { $0.lastPathComponent == "SimpleBrowser.app" }) ?? apps.first else { throw UpdateError.noAppInImage }
+            guard let app = apps.first(where: { $0.lastPathComponent == "Keel.app" }) ?? apps.first else { throw UpdateError.noAppInImage }
             try await run("/usr/bin/ditto", [app.path, staged.path])
         } catch {
             _ = try? await run("/usr/bin/hdiutil", ["detach", mount.path, "-force"])
@@ -311,7 +311,7 @@ final class UpdateProgressWindow {
 
     init(version: AppVersion) {
         window = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 380, height: 90), styleMask: [.titled], backing: .buffered, defer: false)
-        window.title = "Updating SimpleBrowser"
+        window.title = "Updating Keel"
         let icon = NSImageView(image: NSApp.applicationIconImage)
         icon.translatesAutoresizingMaskIntoConstraints = false
         spinner.style = .bar
@@ -327,7 +327,7 @@ final class UpdateProgressWindow {
             spinner.widthAnchor.constraint(equalToConstant: 270),
         ])
         window.contentView = row
-        status("Preparing SimpleBrowser \(version)…")
+        status("Preparing Keel \(version)…")
     }
 
     func show() {

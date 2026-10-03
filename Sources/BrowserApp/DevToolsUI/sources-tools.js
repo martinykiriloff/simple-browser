@@ -1,4 +1,4 @@
-// SimpleBrowser DevTools — the Sources panel's editor tools: search across
+// Keel DevTools — the Sources panel's editor tools: search across
 // every loaded source (⌥⌘F, in the drawer), go to line (⌃G / ⌘L), go to
 // symbol (⇧⌘O), the current line, matching brackets, highlights of the
 // selected word, folding of {} blocks, and Snippets: scripts you keep,

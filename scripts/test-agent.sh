@@ -5,7 +5,7 @@
 # site through every tool. Runs quietly: the app stays behind your windows.
 #
 #   scripts/test-agent.sh                 # debug build
-#   APP=dist/SimpleBrowser.app/Contents/MacOS/SimpleBrowser scripts/test-agent.sh
+#   APP=dist/Keel.app/Contents/MacOS/Keel scripts/test-agent.sh
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -16,7 +16,7 @@ swift run -q AgentKitChecks
 APP="${APP:-}"
 if [ -z "$APP" ]; then
   swift build 2>&1 | grep -E "error|Build complete" || true
-  APP="$ROOT/.build/debug/SimpleBrowser"
+  APP="$ROOT/.build/debug/Keel"
 fi
 
 PORT="${PORT:-9399}"

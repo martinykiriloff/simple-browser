@@ -275,8 +275,8 @@ extension FeatureSelfTest {
     /// A hundred tabs as people have them: many from the same few sites.
     static let hundredTitles: [String] = {
         let sites: [[String]] = [
-            ["Pull requests", "Issues · simple-browser", "Actions · simple-browser", "swift-nio: Event-driven network framework", "apple/swift: The Swift Programming Language",
-             "Notifications", "Release v1.4 · simple-browser", "Settings · Branches", "Compare changes", "Insights · Contributors"],
+            ["Pull requests", "Issues · keel", "Actions · keel", "swift-nio: Event-driven network framework", "apple/swift: The Swift Programming Language",
+             "Notifications", "Release v1.4 · keel", "Settings · Branches", "Compare changes", "Insights · Contributors"],
             ["Inbox (12) - Gmail", "Starred - Gmail", "Sent Mail - Gmail", "Drafts (2) - Gmail", "Invoice for September - Gmail"],
             ["Q4 planning - Google Docs", "Roadmap 2027 - Google Sheets", "Team offsite notes - Google Docs", "Budget - Google Sheets", "Hiring plan - Google Docs"],
             ["WKWebView | Apple Developer Documentation", "NSWindowTab | Apple Developer Documentation", "WKWebExtension | Apple Developer Documentation",

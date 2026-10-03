@@ -1,4 +1,4 @@
-// SimpleBrowser DevTools — the breakpoints that are not on a line: XHR/fetch
+// Keel DevTools — the breakpoints that are not on a line: XHR/fetch
 // (by URL), DOM (on a node) and event listener breakpoints. They live in the
 // Sources sidebar, as in Chrome, and are backed by the inspector protocol's
 // DOMDebugger domain. Extends SBDebugger (debugger.js).

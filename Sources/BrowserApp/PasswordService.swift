@@ -34,7 +34,7 @@ final class DeviceOwnerAuthenticator: PasswordAuthenticator {
 /// it, and the gate in front of anything that reveals a password.
 @MainActor
 final class PasswordService {
-    static let didChange = Notification.Name("SimpleBrowser.passwordsDidChange")
+    static let didChange = Notification.Name("Keel.passwordsDidChange")
 
     let store: any CredentialStore
     /// Addresses and cards, beside the passwords and sealed with their key.
@@ -67,7 +67,7 @@ final class PasswordService {
 
     private static func directory(of profile: Profile) -> URL {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        return support.appendingPathComponent("SimpleBrowser/Profiles/\(profile.id)")
+        return support.appendingPathComponent("Keel/Profiles/\(profile.id)")
     }
 
     /// For the self-test: a vault and its key in a scratch directory, so a test

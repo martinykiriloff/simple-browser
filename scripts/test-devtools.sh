@@ -5,7 +5,7 @@
 # UI, prints the report and exits non-zero on any failure.
 #
 #   scripts/test-devtools.sh                 # debug build
-#   APP=dist/SimpleBrowser.app/Contents/MacOS/SimpleBrowser scripts/test-devtools.sh
+#   APP=dist/Keel.app/Contents/MacOS/Keel scripts/test-devtools.sh
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -14,7 +14,7 @@ cd "$ROOT"
 APP="${APP:-}"
 if [ -z "$APP" ]; then
   swift build 2>&1 | grep -E "error|Build complete" || true
-  APP="$ROOT/.build/debug/SimpleBrowser"
+  APP="$ROOT/.build/debug/Keel"
 fi
 REPORT="${REPORT:-$(mktemp -t devtools-report).json}"
 rm -f "$REPORT"
@@ -33,7 +33,7 @@ if command -v node >/dev/null 2>&1; then
   NODE_PID=$!
 fi
 
-pkill -x SimpleBrowser 2>/dev/null || true
+pkill -x Keel 2>/dev/null || true
 sleep 0.5
 "$APP" --show-devtools --devtools-script "$ROOT/Tests/Fixtures/devtools/drive-all.js" \
        --devtools-out "$REPORT" --devtools-delay 4 http://127.0.0.1:8765/ >/dev/null 2>&1 &

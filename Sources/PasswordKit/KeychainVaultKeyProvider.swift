@@ -46,7 +46,7 @@ public final class KeychainVaultKeyProvider: VaultKeyProvider {
             kSecValueData as String: key,
             kSecAttrLabel as String: service,
             kSecAttrDescription as String: "encryption key",
-            kSecAttrComment as String: "Opens the saved passwords of a SimpleBrowser profile. Deleting this makes them unreadable.",
+            kSecAttrComment as String: "Opens the saved passwords of a Keel profile. Deleting this makes them unreadable.",
         ]) { $1 } as CFDictionary, nil)
         guard status == errSecSuccess else { throw CredentialStoreError.keyUnavailable(Self.describe(status)) }
         return key

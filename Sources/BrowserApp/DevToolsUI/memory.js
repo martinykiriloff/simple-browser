@@ -1,4 +1,4 @@
-// SimpleBrowser DevTools — Memory panel: JavaScriptCore heap snapshots
+// Keel DevTools — Memory panel: JavaScriptCore heap snapshots
 // (WebKit's Heap domain) summarised by class, with retained sizes from the
 // dominator tree, comparison between two snapshots, and the JS heap size
 // over time (Memory domain).

@@ -1,4 +1,4 @@
-// SimpleBrowser DevTools — source maps (revision 3).
+// Keel DevTools — source maps (revision 3).
 //
 // Maps between the code the engine runs (bundled, minified, transpiled) and
 // the files the developer wrote. Used for: showing original files in the

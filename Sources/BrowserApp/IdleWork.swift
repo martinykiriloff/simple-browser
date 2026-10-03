@@ -12,7 +12,7 @@ enum IdleWork {
     /// or sooner when the system finds a moment; `deferrable` work waits for
     /// an idle moment, the rest merely for tolerance.
     static func repeating(_ name: String, every interval: TimeInterval, tolerance: TimeInterval? = nil, _ work: @escaping @MainActor () -> Void) {
-        let scheduler = NSBackgroundActivityScheduler(identifier: "dev.simplebrowser." + name)
+        let scheduler = NSBackgroundActivityScheduler(identifier: "dev.keel." + name)
         scheduler.repeats = true
         scheduler.interval = interval
         scheduler.tolerance = tolerance ?? interval / 4
@@ -28,7 +28,7 @@ enum IdleWork {
 
     /// Once, when the system next finds a quiet moment (within `within` seconds).
     static func once(_ name: String, within: TimeInterval, _ work: @escaping @MainActor () -> Void) {
-        let scheduler = NSBackgroundActivityScheduler(identifier: "dev.simplebrowser." + name)
+        let scheduler = NSBackgroundActivityScheduler(identifier: "dev.keel." + name)
         scheduler.repeats = false
         scheduler.interval = within
         scheduler.tolerance = within / 2

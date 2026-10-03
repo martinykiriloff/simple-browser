@@ -17,7 +17,7 @@ extension FeatureSelfTest {
         let manager = browser.downloads.manager
         manager.openFiles = false
         await manager.forgetAll()   // earlier sections (permissions) download too
-        let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("SimpleBrowser-feature-downloads-\(UUID().uuidString)")
+        let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("Keel-feature-downloads-\(UUID().uuidString)")
         try? FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: scratch) }
         BrowserSettings.downloadFolder = scratch
@@ -71,7 +71,7 @@ extension FeatureSelfTest {
         check("downloads: the finished row says its size and where from", browser.downloadsList?.rows.first?.statusLabel.stringValue.hasSuffix(" · 127.0.0.1") == true,
               browser.downloadsList?.rows.first?.statusLabel.stringValue)
         let quarantine = (try? URL(fileURLWithPath: film.path).resourceValues(forKeys: [.quarantinePropertiesKey]))?.quarantineProperties
-        check("downloads: the file is marked as downloaded from the web", quarantine?[kLSQuarantineAgentNameKey as String] as? String == "SimpleBrowser"
+        check("downloads: the file is marked as downloaded from the web", quarantine?[kLSQuarantineAgentNameKey as String] as? String == "Keel"
               && (quarantine?[kLSQuarantineTypeKey as String] as? String) == (kLSQuarantineTypeWebDownload as String), quarantine as Any)
         check("downloads: clicking a finished download opens it", await {
             browser.downloadsList?.open(film.id)

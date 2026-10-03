@@ -1,4 +1,4 @@
-// SimpleBrowser DevTools — the parts of the Elements panel that need the
+// Keel DevTools — the parts of the Elements panel that need the
 // inspector protocol: the Event Listeners tab, forced element state (:hov)
 // and "Break on…" DOM breakpoints. Extends the Elements panel (elements.js).
 "use strict";

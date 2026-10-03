@@ -12,7 +12,7 @@ import TranslateKit
 /// page's own declaration and a sample of its text.
 @MainActor
 final class PageTranslator: NSObject, WKScriptMessageHandler {
-    static let worldName = "SimpleBrowserTranslate"
+    static let worldName = "KeelTranslate"
     static let handlerName = "translate"
 
     enum State: Equatable {

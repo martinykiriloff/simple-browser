@@ -65,7 +65,7 @@ public struct MCPToolResult: Sendable, Equatable {
 }
 
 /// A prompt template: clients such as Claude Code offer these as slash
-/// commands (`/mcp__simplebrowser__debug_page`).
+/// commands (`/mcp__keel__debug_page`).
 public struct MCPPrompt: Sendable {
     public struct Argument: Sendable {
         public var name: String
@@ -173,7 +173,7 @@ public struct MCPDispatcher: Sendable {
             return .reply(Self.result(id: id, [
                 "protocolVersion": .string(version),
                 "capabilities": ["tools": ["listChanged": false], "prompts": ["listChanged": false], "logging": [:]],
-                "serverInfo": ["name": .string(serverName), "title": "SimpleBrowser", "version": .string(serverVersion)],
+                "serverInfo": ["name": .string(serverName), "title": "Keel", "version": .string(serverVersion)],
                 "instructions": .string(instructions),
             ]))
         case "ping":

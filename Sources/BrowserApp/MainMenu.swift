@@ -68,7 +68,7 @@ enum MainMenu {
 
     private static func appMenuItem() -> NSMenuItem {
         let menu = NSMenu()
-        menu.addItem(withTitle: "About SimpleBrowser",
+        menu.addItem(withTitle: "About Keel",
                      action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
                      keyEquivalent: "")
         menu.addItem(withTitle: "Check for Updates…", action: #selector(AppDelegate.checkForUpdates(_:)), keyEquivalent: "")
@@ -76,7 +76,7 @@ enum MainMenu {
         menu.addItem(withTitle: "Settings…", action: #selector(AppDelegate.showSettings(_:)), keyEquivalent: ",")
         menu.addItem(withTitle: "Passwords…", action: #selector(AppDelegate.showPasswords(_:)), keyEquivalent: "")
         menu.addItem(.separator())
-        menu.addItem(withTitle: "Hide SimpleBrowser",
+        menu.addItem(withTitle: "Hide Keel",
                      action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
         let hideOthers = menu.addItem(withTitle: "Hide Others",
                                       action: #selector(NSApplication.hideOtherApplications(_:)),
@@ -85,7 +85,7 @@ enum MainMenu {
         menu.addItem(withTitle: "Show All",
                      action: #selector(NSApplication.unhideAllApplications(_:)), keyEquivalent: "")
         menu.addItem(.separator())
-        menu.addItem(withTitle: "Quit SimpleBrowser",
+        menu.addItem(withTitle: "Quit Keel",
                      action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         return wrap(menu)
     }

@@ -1,4 +1,4 @@
-// SimpleBrowser DevTools — Console panel: messages, filtering, the sidebar,
+// Keel DevTools — Console panel: messages, filtering, the sidebar,
 // settings and message actions. The prompt (editor, history, autocomplete,
 // eager evaluation) is in console-prompt.js; value rendering in
 // console-values.js.

@@ -11,7 +11,7 @@ import BrowserKit
 /// so it can be resumed after the app was quit.
 @MainActor
 final class DownloadManager: NSObject, WKDownloadDelegate {
-    static let didChange = Notification.Name("SimpleBrowser.downloadsDidChange")
+    static let didChange = Notification.Name("Keel.downloadsDidChange")
 
     private(set) var list = DownloadList()
     /// Where the list and resume data are kept; nil keeps them in memory
@@ -322,7 +322,7 @@ final class DownloadManager: NSObject, WKDownloadDelegate {
     static func quarantine(_ file: URL, from url: URL, page: URL?) {
         var properties: [String: Any] = [
             kLSQuarantineTypeKey as String: kLSQuarantineTypeWebDownload,
-            kLSQuarantineAgentNameKey as String: "SimpleBrowser",
+            kLSQuarantineAgentNameKey as String: "Keel",
             kLSQuarantineDataURLKey as String: url,
         ]
         if let page { properties[kLSQuarantineOriginURLKey as String] = page }

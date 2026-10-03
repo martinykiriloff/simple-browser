@@ -57,7 +57,7 @@ enum PasswordSelfTest {
             app.passwords.authenticator = authenticator
 
             // Scratch settings, as the UI self-test uses: never the user's own.
-            let suite = "SimpleBrowser.passwords-selftest"
+            let suite = "Keel.passwords-selftest"
             UserDefaults.standard.removePersistentDomain(forName: suite)
             if let scratch = UserDefaults(suiteName: suite) { BrowserSettings.store = scratch }
             check("the self-test has its own settings suite", BrowserSettings.store !== UserDefaults.standard)
@@ -466,7 +466,7 @@ enum PasswordSelfTest {
 
             // MARK: 16. Import and export
 
-            let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("SimpleBrowser-passwords-selftest-files-\(UUID().uuidString)")
+            let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("Keel-passwords-selftest-files-\(UUID().uuidString)")
             try? FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
             defer { try? FileManager.default.removeItem(at: scratch) }
             let chromeCSV = scratch.appendingPathComponent("Chrome Passwords.csv")
@@ -579,7 +579,7 @@ enum PasswordSelfTest {
             // MARK: 17. What is on disk
 
             let vaults = (try? FileManager.default.contentsOfDirectory(at: FileManager.default.temporaryDirectory, includingPropertiesForKeys: nil))?
-                .filter { $0.lastPathComponent.hasPrefix("SimpleBrowser-passwords-selftest-") && FileManager.default.fileExists(atPath: $0.appendingPathComponent("Passwords.sbvault").path) } ?? []
+                .filter { $0.lastPathComponent.hasPrefix("Keel-passwords-selftest-") && FileManager.default.fileExists(atPath: $0.appendingPathComponent("Passwords.sbvault").path) } ?? []
             if let vault = vaults.max(by: { ((try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast) < ((try? $1.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast) }),
                let raw = try? Data(contentsOf: vault.appendingPathComponent("Passwords.sbvault")) {
                 for needle in ["correct-horse", "example-secret", "ada", "example.com", "127.0.0.1"] {
@@ -587,7 +587,7 @@ enum PasswordSelfTest {
                 }
                 try? FileManager.default.removeItem(at: vault)
             } else { check("17. the scratch vault was found on disk", false) }
-            let realVault = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("SimpleBrowser/Profiles/\(browser.profile.id)/Passwords.sbvault")
+            let realVault = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Keel/Profiles/\(browser.profile.id)/Passwords.sbvault")
             report["realVaultExists"] = FileManager.default.fileExists(atPath: realVault.path)
 
             UserDefaults.standard.removePersistentDomain(forName: suite)

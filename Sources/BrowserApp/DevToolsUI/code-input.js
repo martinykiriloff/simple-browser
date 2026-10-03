@@ -1,4 +1,4 @@
-// SimpleBrowser DevTools — a syntax-highlighted code input (the console
+// Keel DevTools — a syntax-highlighted code input (the console
 // prompt, snippets) and the side-effect check behind eager evaluation and
 // autocomplete.
 //

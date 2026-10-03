@@ -18,7 +18,7 @@ cd "$ROOT"
 
 swift build 2>&1 | grep -E "error|Build complete" || true
 "$ROOT/.build/debug/TranslateKitChecks"
-APP="$ROOT/.build/debug/SimpleBrowser"
+APP="$ROOT/.build/debug/Keel"
 REPORT="${REPORT:-$(mktemp -t page-report).json}"
 
 if ! curl -s -m 2 -o /dev/null http://127.0.0.1:8767/; then

@@ -1,4 +1,4 @@
-// SimpleBrowser DevTools — the drawer: Chrome's bottom strip for tools that
+// Keel DevTools — the drawer: Chrome's bottom strip for tools that
 // sit beside whichever panel is showing (request blocking, overrides,
 // search, Rendering, Animations). Tools register a pane; the drawer owns
 // the tabs, the height and which one is showing.

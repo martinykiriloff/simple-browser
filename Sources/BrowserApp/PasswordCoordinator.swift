@@ -13,7 +13,7 @@ import PasswordKit
 /// re-checks, so a frame that navigated in the meantime gets nothing.
 @MainActor
 final class PasswordCoordinator: NSObject, WKScriptMessageHandler, NSPopoverDelegate {
-    static let worldName = "SimpleBrowserPasswords"
+    static let worldName = "KeelPasswords"
     static let handlerName = "passwords"
 
     struct Candidate {

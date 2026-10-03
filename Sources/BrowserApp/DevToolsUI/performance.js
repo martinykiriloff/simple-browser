@@ -1,4 +1,4 @@
-// SimpleBrowser DevTools — Performance panel: web vitals and a timeline of
+// Keel DevTools — Performance panel: web vitals and a timeline of
 // what the agent observed for the current document.
 "use strict";
 

@@ -55,7 +55,7 @@ enum DevExtension: String, CaseIterable {
         }
         if DevExtension.jsonViewer.isEnabled, let source = resource("json-viewer") {
             controller.addUserScript(WKUserScript(source: source, injectionTime: .atDocumentEnd, forMainFrameOnly: true,
-                                                  in: WKContentWorld.world(name: "SimpleBrowserJSONViewer")))
+                                                  in: WKContentWorld.world(name: "KeelJSONViewer")))
         }
     }
 

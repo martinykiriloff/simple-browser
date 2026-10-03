@@ -1,4 +1,4 @@
-// SimpleBrowser DevTools — PHP: the server side of each request, for Laravel
+// Keel DevTools — PHP: the server side of each request, for Laravel
 // and any PHP app with Clockwork or Laravel Debugbar installed (they mark
 // responses with X-Clockwork-Id / phpdebugbar-id; the profile is fetched by
 // the app, with the page's cookies). Overview, database queries with N+1

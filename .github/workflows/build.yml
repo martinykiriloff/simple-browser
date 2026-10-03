@@ -1,10 +1,10 @@
-# Builds SimpleBrowser on every push and pull request, and publishes a release
+# Builds Keel on every push and pull request, and publishes a release
 # for every version tag.
 #
 #   git tag v0.2.0 && git push origin v0.2.0
 #
 # builds the universal app, signs it with the Developer ID, notarizes and
-# staples the app and SimpleBrowser-0.2.0.dmg, signs the DMG for the in-app
+# staples the app and Keel-0.2.0.dmg, signs the DMG for the in-app
 # updater with the UPDATE_SIGNING_KEY secret, and creates the GitHub Release
 # the app's "Check for Updates" reads. Other builds upload the DMG as a
 # workflow artifact only.
@@ -137,20 +137,20 @@ jobs:
 
       - name: Check the update signature
         if: steps.version.outputs.release == 'true'
-        run: test -s "dist/SimpleBrowser-${{ steps.version.outputs.version }}.dmg.sig"
+        run: test -s "dist/Keel-${{ steps.version.outputs.version }}.dmg.sig"
 
       # As a downloaded copy will be judged: Gatekeeper, from the stapled ticket.
       - name: Check Gatekeeper
         if: steps.version.outputs.release == 'true' && env.NOTARY_KEY != ''
         run: |
-          dmg="dist/SimpleBrowser-${{ steps.version.outputs.version }}.dmg"
+          dmg="dist/Keel-${{ steps.version.outputs.version }}.dmg"
           xcrun stapler validate "$dmg"
           spctl --assess --type open --context context:primary-signature --verbose "$dmg"
-          spctl --assess --type execute --verbose dist/SimpleBrowser.app
+          spctl --assess --type execute --verbose dist/Keel.app
 
       - uses: actions/upload-artifact@v4
         with:
-          name: SimpleBrowser-${{ steps.version.outputs.version }}-${{ steps.version.outputs.build }}
+          name: Keel-${{ steps.version.outputs.version }}-${{ steps.version.outputs.build }}
           path: |
             dist/*.dmg
             dist/*.dmg.sig
@@ -176,5 +176,5 @@ jobs:
           ls -l dist
           gh release create "$TAG" dist/*.dmg dist/*.dmg.sig \
             --repo "$GITHUB_REPOSITORY" \
-            --title "SimpleBrowser ${TAG#v}" \
+            --title "Keel ${TAG#v}" \
             --generate-notes

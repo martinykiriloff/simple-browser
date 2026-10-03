@@ -4,8 +4,8 @@ import UpdateKit
 
 // Release signing, for CI and for a release made by hand.
 //
-//   UPDATE_SIGNING_KEY=<base64 private key> swift run SignUpdate dist/SimpleBrowser-0.2.0.dmg
-//     writes dist/SimpleBrowser-0.2.0.dmg.sig
+//   UPDATE_SIGNING_KEY=<base64 private key> swift run SignUpdate dist/Keel-0.2.0.dmg
+//     writes dist/Keel-0.2.0.dmg.sig
 //   swift run SignUpdate --generate-key
 //     prints a new key pair: the private key for the repository secret, the
 //     public key for Sources/BrowserApp/Updater.swift

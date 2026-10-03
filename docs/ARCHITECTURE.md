@@ -186,7 +186,7 @@ containers by their paragraphs, then **copies** the winner into a new
 document through an allow-list of elements and attributes; nothing is
 cleaned in place, so what the agent does not know about cannot survive.
 
-The article is served at `simplebrowser://reader/<token>?url=<article>` by
+The article is served at `keel://reader/<token>?url=<article>` by
 the same scheme handler as the start page, under a Content-Security-Policy
 of `default-src 'none'` plus images and inline style. The token names an
 article held in memory; a Reader address whose article is gone (a restored

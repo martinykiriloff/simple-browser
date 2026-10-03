@@ -16,10 +16,10 @@ cd "$ROOT"
 CONFIG=debug
 [ -n "${RELEASE:-}" ] && CONFIG=release
 swift build -c "$CONFIG" 2>&1 | grep -E "error|Build complete" || true
-APP="$ROOT/.build/$CONFIG/SimpleBrowser"
+APP="$ROOT/.build/$CONFIG/Keel"
 CHECKS="$ROOT/.build/$CONFIG/BrowserKitChecks"
 REPORT="${REPORT:-$(mktemp -t performance-report).json}"
-WORK="$(mktemp -d -t simplebrowser-performance)"
+WORK="$(mktemp -d -t keel-performance)"
 trap 'rm -rf "$WORK"; [ -n "${SERVER_PID:-}" ] && kill "$SERVER_PID" 2>/dev/null || true' EXIT
 
 if ! curl -s -m 2 -o /dev/null http://127.0.0.1:8767/; then
@@ -29,7 +29,7 @@ if ! curl -s -m 2 -o /dev/null http://127.0.0.1:8767/; then
 fi
 
 rm -f "$REPORT"
-"$APP" --quiet --performance "$REPORT" --performance-idle "${IDLE:-20}" --session-dir "$WORK/session" --downloads-dir "$WORK/downloads" simplebrowser://start >/dev/null 2>"$WORK/log" &
+"$APP" --quiet --performance "$REPORT" --performance-idle "${IDLE:-20}" --session-dir "$WORK/session" --downloads-dir "$WORK/downloads" keel://start >/dev/null 2>"$WORK/log" &
 APP_PID=$!
 for _ in $(seq 1 300); do
   [ -s "$REPORT" ] && break

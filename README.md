@@ -1,4 +1,4 @@
-# SimpleBrowser
+# Keel
 
 A native macOS browser. Swift above the engine, WebKit below it.
 
@@ -181,7 +181,7 @@ fifth of the hosts.
 ```sh
 swift run BlockKitChecks                 # the filter parser; exceptions across partitions
 ONLY=blocking scripts/test-features.sh   # against the fixture site's own lists (takes focus)
-.build/debug/SimpleBrowser --blocking-probe /tmp/probe.json about:blank   # the real lists, in a scratch folder
+.build/debug/Keel --blocking-probe /tmp/probe.json about:blank   # the real lists, in a scratch folder
 ```
 
 ## The right-click menu
@@ -244,7 +244,7 @@ scripts/test-page.sh                  # translation, the right-click menu, downl
 The first launch opens a welcome window: pick the browser you use now, and
 its bookmarks, history, open tabs and passwords come over from its own
 files, with nothing to export. It also offers the search engine and
-**Make SimpleBrowser the Default Browser** (macOS confirms in its own
+**Make Keel the Default Browser** (macOS confirms in its own
 dialog). **File → Import From…** does the same at any time; nothing is
 brought over twice.
 
@@ -259,8 +259,8 @@ go in *Imported from …* in the Bookmarks menu. History comes with its
 visit counts, so the start page's frequently visited sites are the same
 from the first day. Open tabs open in their windows, asleep until shown.
 Chromium browsers encrypt their passwords with a key in your Keychain
-("Chrome Safe Storage"): macOS asks you to allow SimpleBrowser to use it.
-Safari's files are kept from other apps until SimpleBrowser has Full Disk
+("Chrome Safe Storage"): macOS asks you to allow Keel to use it.
+Safari's files are kept from other apps until Keel has Full Disk
 Access, which the window explains, with a button to the right place in
 System Settings.
 
@@ -425,7 +425,7 @@ Mission Control, Force Quit…); `BrowserKitChecks` fails if two commands
 share a key, if one is the Mac's own, or if this table drifts from the
 catalogue, and the feature self-test fails if the menu bar drifts from it.
 
-| Command | SimpleBrowser | Safari | Chrome |
+| Command | Keel | Safari | Chrome |
 |---|---|---|---|
 | New Window | ⌘N | ⌘N | ⌘N |
 | New Private Window | ⇧⌘N | ⇧⌘N | ⇧⌘N |
@@ -741,7 +741,7 @@ other MCP client can drive it and see what DevTools sees. Turn it on in
 *Copy Claude Code Command*, which copies something like:
 
 ```sh
-claude mcp add --transport http simplebrowser http://127.0.0.1:9333/mcp \
+claude mcp add --transport http keel http://127.0.0.1:9333/mcp \
   --header "Authorization: Bearer <token>"
 ```
 
@@ -773,7 +773,7 @@ Targets are a `ref` from `snapshot`, a CSS `selector`, or the visible `text`
 agent's previous snapshot of that tab, which keeps long sessions cheap.
 
 **Prompts.** Clients that support MCP prompts offer these as commands (in
-Claude Code, `/mcp__simplebrowser__debug_page` and so on): `debug_page`,
+Claude Code, `/mcp__keel__debug_page` and so on): `debug_page`,
 `audit_page`, `fix_layout`, `test_flow` and `performance_review`. Each one
 walks the agent through the tools in the order that works.
 
@@ -796,7 +796,7 @@ menu that holds the main thread. HTML5 drag and drop needs a drag session
 
 ```sh
 scripts/test-agent.sh         # AgentKit's checks, then an MCP client drives the real app through every tool
-.build/debug/SimpleBrowser --mcp-port 9399 --mcp-token secret   # or --mcp-no-auth; overrides Settings for this run
+.build/debug/Keel --mcp-port 9399 --mcp-token secret   # or --mcp-no-auth; overrides Settings for this run
 ```
 
 ### Testing the DevTools
@@ -807,7 +807,7 @@ against a local fixture site, and writes a pass/fail report:
 
 ```sh
 python3 Tests/Fixtures/devtools/server.py &
-swift run SimpleBrowser --show-devtools \
+swift run Keel --show-devtools \
   --devtools-script Tests/Fixtures/devtools/drive-all.js \
   --devtools-out /tmp/devtools-report.json --devtools-delay 4 http://127.0.0.1:8765/
 cat /tmp/devtools-report.json     # "passed": true, "failures": []
@@ -816,9 +816,9 @@ cat /tmp/devtools-report.json     # "passed": true, "failures": []
 Launch flags for driving the app from a script:
 
 ```sh
-.build/debug/SimpleBrowser --show-devtools https://example.com
-.build/debug/SimpleBrowser --dump-recording /tmp/rec.json https://example.com
-.build/debug/SimpleBrowser --show-devtools --devtools-script drive.js --devtools-out out.json https://example.com
+.build/debug/Keel --show-devtools https://example.com
+.build/debug/Keel --dump-recording /tmp/rec.json https://example.com
+.build/debug/Keel --show-devtools --devtools-script drive.js --devtools-out out.json https://example.com
 ```
 
 ## Requirements
@@ -909,7 +909,7 @@ git tag v0.2.0 && git push origin v0.2.0
 ```
 
 That builds the universal app as version 0.2.0, packages
-`SimpleBrowser-0.2.0.dmg`, signs it for the updater, and creates the GitHub
+`Keel-0.2.0.dmg`, signs it for the updater, and creates the GitHub
 Release with the DMG and its `.sig` attached.
 
 **Opening with no warning.** A release is signed with the Developer ID and
@@ -924,7 +924,7 @@ repository variable `REQUIRE_NOTARIZED_RELEASE` to `true` to have such a
 build fail instead. By hand:
 
 ```sh
-CODESIGN_IDENTITY="Developer ID Application: …" NOTARY_KEYCHAIN_PROFILE=simplebrowser scripts/make-dmg.sh
+CODESIGN_IDENTITY="Developer ID Application: …" NOTARY_KEYCHAIN_PROFILE=keel scripts/make-dmg.sh
 ```
 
 The DMG's window shows the app and the Applications folder with an arrow
@@ -941,7 +941,7 @@ now). A newer version is offered with **Install Update**, **Remind Me Later**
 or **Skip This Version**. Installing downloads the DMG and verifies its
 Ed25519 signature against the public key compiled into the app
 (`Updater.publicKey`); a DMG that does not verify is never opened, whoever put
-it on the release page. It then checks the app inside is SimpleBrowser at the
+it on the release page. It then checks the app inside is Keel at the
 version offered with an intact code signature, and once the running copy has
 quit, swaps it in (putting the old copy back if that fails) and relaunches.
 A copy run from the build folder has nothing to replace; it offers the release

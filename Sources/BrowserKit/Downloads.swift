@@ -192,7 +192,7 @@ public struct DownloadList: Codable, Equatable, Sendable {
                 items[index].canResume = true
             } else {
                 items[index].state = .failed
-                items[index].failure = "SimpleBrowser quit while it was downloading"
+                items[index].failure = "Keel quit while it was downloading"
                 items[index].canResume = false
             }
         }

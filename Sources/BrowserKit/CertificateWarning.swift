@@ -82,7 +82,7 @@ public struct CertificateExceptions: Equatable, Sendable {
 
 /// The page shown instead of a site whose certificate cannot be trusted.
 public enum WarningPage {
-    public static let scheme = "simplebrowser"
+    public static let scheme = "keel"
     public static let host = "warning"
     public static let actionHost = "warning-action"
 
