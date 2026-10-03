@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Notifications — Team chat</title>
+<style>
+  body { font: 14px/1.5 system-ui, sans-serif; margin: 0 auto; max-width: 720px; padding: 16px; }
+  .panel { border: 1px solid #ddd; border-radius: 8px; padding: 12px; margin-top: 12px; }
+</style></head>
+<body>
+<header><strong>Team chat</strong> <nav aria-label="Main"><a href="#">Channels</a> <a href="#">Direct messages</a></nav></header>
+<h1>Notifications</h1>
+<button id="open">Open notifications</button>
+<button id="close">Close</button>
+<div id="panel" class="panel" hidden><h2>Recent</h2><ul id="items"></ul></div>
+<p id="status" role="status"></p>
+<script>
+// Each open creates a NotificationWidget that subscribes to window events and
+// keeps a 2,000-entry history in its closure. Bug: close never unsubscribes,
+// so every widget (and its history) stays reachable from window's listeners.
+class NotificationWidget {
+  constructor(n) {
+    this.history = Array.from({ length: 2000 }, (_, i) => ({ id: `${n}-${i}`, text: `message ${i}` }));
+    this.onResize = () => this.layout();
+    this.onKey = (event) => { if (event.key === 'Escape') this.hide(); };
+    window.addEventListener('resize', this.onResize);
+    window.addEventListener('keydown', this.onKey);
+  }
+  layout() { return this.history.length; }
+  hide() { document.getElementById('panel').hidden = true; }
+}
+let opened = 0;
+document.getElementById('open').addEventListener('click', () => {
+  const widget = new NotificationWidget(++opened);
+  document.getElementById('items').innerHTML = widget.history.slice(0, 3).map(m => `<li>${m.text}</li>`).join('');
+  document.getElementById('panel').hidden = false;
+  document.getElementById('status').textContent = `Opened ${opened} times`;
+});
+document.getElementById('close').addEventListener('click', () => { document.getElementById('panel').hidden = true; });
+</script>
+</body></html>
