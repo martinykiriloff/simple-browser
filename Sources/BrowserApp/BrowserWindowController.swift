@@ -277,6 +277,7 @@ final class BrowserWindowController: NSWindowController,
             defer: false
         )
         super.init(window: window)
+        WebMCPBridge.shared.install(into: configuration, tab: self)
 
         QuietMode.apply(to: window)
         window.title = "New Tab"
@@ -2257,6 +2258,7 @@ final class BrowserWindowController: NSWindowController,
         translator.uninstall()
         contextMenu.uninstall()
         bridge.uninstall()
+        WebMCPBridge.shared.tabClosed(self)
         onClose?()
     }
 
@@ -2513,6 +2515,7 @@ final class BrowserWindowController: NSWindowController,
         blocking.didCommit()
         passwordCoordinator.didCommitNavigation()
         translator.didCommitNavigation()
+        WebMCPBridge.shared.didCommitMainFrame(self)
         syncChrome()
     }
 

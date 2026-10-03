@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>WebMCP shop</title>
+</head>
+<body>
+<h1>WebMCP shop</h1>
+<p>Cart: <span id="cart">empty</span></p>
+<script>
+  const cart = [];
+  const show = () => { document.querySelector('#cart').textContent = cart.length ? cart.map(i => `${i.quantity}× ${i.sku}`).join(', ') : 'empty'; };
+  const context = document.modelContext || navigator.modelContext;
+  window.webmcpAvailable = !!context;
+  window.navigatorAlias = navigator.modelContext === document.modelContext;
+  if (context) {
+    context.registerTool({
+      name: 'get_cart',
+      description: 'Lists the items in the shopping cart.',
+      inputSchema: { type: 'object', properties: {} },
+      annotations: { readOnlyHint: true },
+      execute: async () => ({ items: cart.slice(), count: cart.length }),
+    });
+    context.registerTool({
+      name: 'add_to_cart',
+      description: 'Adds an item to the shopping cart.',
+      inputSchema: { type: 'object', properties: { sku: { type: 'string' }, quantity: { type: 'number' } }, required: ['sku'] },
+      annotations: { readOnlyHint: false, consequentialHint: true },
+      execute: async ({ sku, quantity = 1 }) => {
+        cart.push({ sku, quantity });
+        show();
+        return { content: [{ type: 'text', text: `Added ${quantity} × ${sku}. The cart has ${cart.length} line(s).` }] };
+      },
+    });
+    context.registerTool({
+      name: 'fails',
+      description: 'Always throws.',
+      annotations: { readOnlyHint: true },
+      execute: () => { throw new Error('out of stock'); },
+    });
+    // Registering a name twice is refused (current draft).
+    context.registerTool({ name: 'get_cart', description: 'dup', execute: () => 'dup' })
+      .then(() => { window.duplicateRefused = false; }, (e) => { window.duplicateRefused = e.name; });
+  }
+</script>
+</body>
+</html>

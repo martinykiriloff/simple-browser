@@ -86,6 +86,7 @@ final class AgentToolbox {
 
     init(recorder: InspectorRecorder) {
         self.recorder = recorder
+        webMCPCall = { try await WebMCPBridge.shared.call($0, $1, $2) }
     }
 
     func callUntrusted(_ name: String, _ arguments: JSONValue) async -> MCPToolResult {
