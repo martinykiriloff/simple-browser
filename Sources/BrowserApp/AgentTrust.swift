@@ -29,6 +29,10 @@ final class AgentTrust {
         var logRetentionDays = 30
     }
 
+    /// Whether pages may offer WebMCP tools: the setting, or `--agent-webmcp`
+    /// for a scripted run (never saved).
+    var webMCPEnabled: Bool { settings.webMCP || ProcessInfo.processInfo.arguments.contains("--agent-webmcp") }
+
     /// Scripted runs (`--agent-approve all|deny`): answer approvals without asking.
     var autoAnswer: String?
 

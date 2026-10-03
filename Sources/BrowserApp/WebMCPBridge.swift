@@ -51,7 +51,6 @@ final class WebMCPBridge: NSObject {
 
     private var handlers: [TabHandler] = []
     private var observer: NSObjectProtocol?
-    private var forced = false
 
     override private init() {
         super.init()
@@ -67,21 +66,7 @@ final class WebMCPBridge: NSObject {
     /// On when the person switched WebMCP on, or a scripted run asked for it.
     var enabled: Bool {
         guard let trust else { return false }
-        forceForScriptedRun(trust)
-        return trust.settings.webMCP
-    }
-
-    /// `--agent-webmcp`: on for this run only. The settings file is put back
-    /// as it was, so the person's own choice is not changed by a test.
-    private func forceForScriptedRun(_ trust: AgentTrust) {
-        guard !forced, ProcessInfo.processInfo.arguments.contains("--agent-webmcp") else { return }
-        forced = true
-        guard !trust.settings.webMCP else { return }
-        let file = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Keel/Agents/settings.json")
-        let saved = try? Data(contentsOf: file)
-        trust.settings.webMCP = true
-        if let saved { try? saved.write(to: file, options: [.atomic]) } else { try? FileManager.default.removeItem(at: file) }
+        return trust.webMCPEnabled
     }
 
     // MARK: - Installation

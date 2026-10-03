@@ -81,7 +81,7 @@ final class AgentServer {
     /// its session's pages when the person has WebMCP on.
     func dispatcher(for client: PairedClient, live: AgentTrust.Live?) -> MCPDispatcher {
         var tools = BrowserTools.tools(for: client.scope)
-        if trust.settings.webMCP, let live {
+        if trust.webMCPEnabled, let live {
             let pageTools = trust.webMCP.all(in: live.openTabs.map { $0.tab.rawValue.uuidString })
             tools += pageTools.filter { client.scope == .all || $0.readOnly }.map(\.mcpTool)
         } else {

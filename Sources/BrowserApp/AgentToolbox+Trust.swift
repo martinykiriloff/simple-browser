@@ -302,7 +302,7 @@ extension AgentToolbox {
     // MARK: - WebMCP
 
     func pageToolFor(_ name: String, live: AgentTrust.Live) -> (tab: BrowserWindowController, tool: PageTool)? {
-        guard let trust, trust.settings.webMCP else { return nil }
+        guard let trust, trust.webMCPEnabled else { return nil }
         let tabs = live.openTabs
         guard let found = trust.webMCP.find(name, in: tabs.map { $0.tab.rawValue.uuidString }),
               let tab = tabs.first(where: { $0.tab.rawValue.uuidString == found.tab }) else { return nil }
@@ -310,7 +310,7 @@ extension AgentToolbox {
     }
 
     private func pageTools(_ live: AgentTrust.Live) throws -> MCPToolResult {
-        guard let trust, trust.settings.webMCP else {
+        guard let trust, trust.webMCPEnabled else {
             throw AgentError(.unsupported, "WebMCP is off. The person can turn it on in Settings → Agents & permissions.")
         }
         var lines: [String] = []
