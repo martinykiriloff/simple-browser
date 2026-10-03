@@ -70,6 +70,10 @@ final class BrowserWindowController: NSWindowController,
     private let splitView = NSSplitView()
     let pageContainer = NSView()
     private var fillConstraints: [NSLayoutConstraint] = []
+    /// Keel's dark chrome (Design D) rather than the system's look; chosen
+    /// when the window is made, from `appearance.chrome`.
+    let usesKeelChrome: Bool
+    private var agentStatusObserver: NSObjectProtocol?
     private var deviceConstraints: [NSLayoutConstraint] = []
     /// Device-mode state as the DevTools UI sent it; nil when off.
     private(set) var emulation: [String: Any]?
@@ -81,7 +85,7 @@ final class BrowserWindowController: NSWindowController,
     /// What the agent endpoint knows about this tab while an agent drives it.
     var agentState: AgentTabState?
     /// The agent session that owns this tab, if any: it shows amber.
-    var agentSessionID: String? { didSet { if agentSessionID != oldValue { syncAgentChrome() } } }
+    var agentSessionID: String? { didSet { if agentSessionID != oldValue { syncAgentChrome(); syncAddressStatus() } } }
     /// The trust layer, for the chips and cards. Set by the app delegate.
     var agentTrust: (() -> AgentTrust?)?
     /// The views agent activity puts over the page.
@@ -213,6 +217,7 @@ final class BrowserWindowController: NSWindowController,
         self.extensions = extensions
         self.profile = profile
         self.privateSession = privateSession
+        self.usesKeelChrome = Keel.chromeEnabled
         // A private window's downloads are listed with the private session.
         self.downloads = DownloadController(manager: privateSession?.downloads ?? manager ?? DownloadManager(directory: nil))
         self.recorder = recorder
@@ -288,14 +293,18 @@ final class BrowserWindowController: NSWindowController,
         window.tabbingMode = .disallowed
         // Private tabs only ever join private windows, of the same profile.
         window.tabbingIdentifier = Self.tabbingIdentifier(for: profile) + (privateSession == nil ? "" : ".private")
-        if privateSession != nil {
-            // Dark chrome, so a private window is known at a glance. The
-            // page itself keeps following the system's appearance.
+        if privateSession != nil || usesKeelChrome {
+            // Dark chrome: Keel's own (Design D), and always for a private
+            // window, which is known at a glance by its badge. The page
+            // itself keeps following the system's appearance.
             window.appearance = NSAppearance(named: .darkAqua)
             webView.appearance = NSApp.effectiveAppearance
             appearanceObservation = NSApp.observe(\.effectiveAppearance) { [weak self] app, _ in
                 DispatchQueue.main.async { self?.webView.appearance = app.effectiveAppearance }
             }
+        }
+        if usesKeelChrome { applyKeelChrome(to: window) }
+        if privateSession != nil {
             passwordCoordinator.allowsSaving = false
             autofill.allowsSaving = false
         }
@@ -309,13 +318,9 @@ final class BrowserWindowController: NSWindowController,
         pageContainer.wantsLayer = true
         webView.translatesAutoresizingMaskIntoConstraints = false
         pageContainer.addSubview(webView)
-        fillConstraints = [
-            webView.leadingAnchor.constraint(equalTo: pageContainer.leadingAnchor),
-            webView.trailingAnchor.constraint(equalTo: pageContainer.trailingAnchor),
-            webView.topAnchor.constraint(equalTo: pageContainer.topAnchor),
-            webView.bottomAnchor.constraint(equalTo: pageContainer.bottomAnchor),
-        ]
+        fillConstraints = pageFill(webView)
         NSLayoutConstraint.activate(fillConstraints)
+        roundPageCorners(webView)
 
         splitView.isVertical = false
         splitView.dividerStyle = .thin
@@ -882,13 +887,9 @@ final class BrowserWindowController: NSWindowController,
         deviceConstraints = []
         pageContainer.replaceSubview(old, with: fresh)
         webView = fresh
-        fillConstraints = [
-            fresh.leadingAnchor.constraint(equalTo: pageContainer.leadingAnchor),
-            fresh.trailingAnchor.constraint(equalTo: pageContainer.trailingAnchor),
-            fresh.topAnchor.constraint(equalTo: pageContainer.topAnchor),
-            fresh.bottomAnchor.constraint(equalTo: pageContainer.bottomAnchor),
-        ]
+        fillConstraints = pageFill(fresh)
         NSLayoutConstraint.activate(fillConstraints)
+        roundPageCorners(fresh)
 
         contextMenu.webView = fresh
         permissions.webView = fresh
@@ -915,12 +916,8 @@ final class BrowserWindowController: NSWindowController,
         snapshotView.translatesAutoresizingMaskIntoConstraints = false
         if snapshotView.superview == nil {
             pageContainer.addSubview(snapshotView, positioned: .above, relativeTo: webView)
-            NSLayoutConstraint.activate([
-                snapshotView.leadingAnchor.constraint(equalTo: pageContainer.leadingAnchor),
-                snapshotView.trailingAnchor.constraint(equalTo: pageContainer.trailingAnchor),
-                snapshotView.topAnchor.constraint(equalTo: pageContainer.topAnchor),
-                snapshotView.bottomAnchor.constraint(equalTo: pageContainer.bottomAnchor),
-            ])
+            NSLayoutConstraint.activate(pageFill(snapshotView))
+            roundPageCorners(snapshotView)
         }
     }
 
@@ -2028,6 +2025,12 @@ final class BrowserWindowController: NSWindowController,
         addressField.action = #selector(navigate(_:))
         // Only navigate on Return, not when focus merely leaves the field.
         (addressField.cell as? NSTextFieldCell)?.sendsActionOnEndEditing = false
+        if usesKeelChrome {
+            addressField.applyKeelStyle()
+            agentStatusObserver = NotificationCenter.default.addObserver(forName: .agentTrustDidChange, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.syncAddressStatus() }
+            }
+        }
 
         addressField.translatesAutoresizingMaskIntoConstraints = false
         let preferredWidth = addressField.widthAnchor.constraint(equalToConstant: 720)
@@ -2088,6 +2091,7 @@ final class BrowserWindowController: NSWindowController,
         syncNavigationButtons()
         syncStar()
         syncSecurity()
+        syncAddressStatus()
         if !isEditingAddress {
             // The start page is the browser's own: the address bar stays
             // empty and ready for typing, as on a new tab everywhere.
@@ -2107,6 +2111,57 @@ final class BrowserWindowController: NSWindowController,
             extensions?.didChange(self)
         }
     }
+
+    // MARK: - Keel chrome (Design D)
+
+    /// Dark chrome, #0B0D11, behind the toolbar, the tab bar and around the page.
+    private func applyKeelChrome(to window: NSWindow) {
+        window.backgroundColor = Keel.chrome
+        window.titlebarAppearsTransparent = true
+        window.titlebarSeparatorStyle = .none
+    }
+
+    /// The page's margin from the window's sides in Keel's chrome: the page
+    /// is a light card on the dark chrome.
+    static let keelPageMargin: CGFloat = 14
+    private var pageMargin: CGFloat { usesKeelChrome ? Self.keelPageMargin : 0 }
+
+    /// Pins a view (the page, or its picture while asleep) to the page area.
+    private func pageFill(_ view: NSView) -> [NSLayoutConstraint] {
+        [
+            view.leadingAnchor.constraint(equalTo: pageContainer.leadingAnchor, constant: pageMargin),
+            view.trailingAnchor.constraint(equalTo: pageContainer.trailingAnchor, constant: -pageMargin),
+            view.topAnchor.constraint(equalTo: pageContainer.topAnchor),
+            view.bottomAnchor.constraint(equalTo: pageContainer.bottomAnchor),
+        ]
+    }
+
+    /// The card's 10 pt rounded top corners.
+    private func roundPageCorners(_ view: NSView) {
+        guard usesKeelChrome else { return }
+        view.wantsLayer = true
+        view.layer?.cornerRadius = 10
+        view.layer?.maskedCorners = view.isFlipped ? [.layerMinXMinYCorner, .layerMaxXMinYCorner] : [.layerMinXMaxYCorner, .layerMaxXMaxYCorner]
+        view.layer?.masksToBounds = true
+    }
+
+    /// The address bar's dot: green for a sandbox (an agent's, or a private
+    /// window), coral when an agent borrows the profile, grey otherwise.
+    func syncAddressStatus() {
+        guard usesKeelChrome else { return }
+        let status: AddressField.Status
+        if case .borrowed = agentTrust?()?.live(for: self)?.session.mode {
+            status = .borrowed
+        } else if privateSession != nil {
+            status = .sandbox
+        } else {
+            status = .personal
+        }
+        if addressField.status != status { addressField.setStatus(status) }
+    }
+
+    /// Developer aid: the address bar's status dot.
+    var addressStatus: AddressField.Status { addressField.status }
 
     // MARK: - Translate
 
@@ -2249,6 +2304,7 @@ final class BrowserWindowController: NSWindowController,
         blocking.tearDown()
         if let downloadsObserver { NotificationCenter.default.removeObserver(downloadsObserver) }
         if let sidebarObserver { NotificationCenter.default.removeObserver(sidebarObserver) }
+        if let agentStatusObserver { NotificationCenter.default.removeObserver(agentStatusObserver) }
         if let extensionsObserver { NotificationCenter.default.removeObserver(extensionsObserver) }
         extensions?.didClose(self)
         organizer?.changed()
@@ -2677,7 +2733,12 @@ final class BrowserWindowController: NSWindowController,
         let failedURLString = failedURL?.absoluteString ?? ""
         let explanation = ErrorPage.explanation(domain: nsError.domain, code: nsError.code, host: failedURL?.host(percentEncoded: false))
         errorPageURL = failedURL
-        webView.loadHTMLString(ErrorPage.html(explanation: explanation, url: failedURLString, detail: error.localizedDescription), baseURL: nil)
+        let identity = agentSessionID.map { "Agent \(privateSession != nil ? "sandbox" : "session") · session \($0)" }
+            ?? (isPrivate ? "Private" : profile.name)
+        webView.loadHTMLString(ErrorPage.html(explanation: explanation, url: failedURLString, detail: error.localizedDescription,
+                                              diagnostics: [("error", "\(nsError.domain) \(nsError.code)"),
+                                                            ("host", failedURL?.host(percentEncoded: false) ?? ""),
+                                                            ("profile", identity)]), baseURL: nil)
         syncChrome()
         if !isEditingAddress { addressField.stringValue = failedURLString }
     }

@@ -583,7 +583,7 @@ do {
     check("a port WebKit keeps closed is explained", ErrorPage.explanation(domain: "WebKitErrorDomain", code: 103, host: "127.0.0.1").title == "That address uses a port that is kept closed")
     let html = ErrorPage.html(explanation: refused, url: "http://example.com/<x>", detail: "Could not connect to the server.")
     check("the page follows light and dark", html.contains("color-scheme: light dark") && html.contains("prefers-color-scheme: dark"))
-    check("…the accent colour", html.contains("background: AccentColor"))
+    check("…a flat ink button, as Design D", html.contains("background: var(--button)") && !html.contains("gradient"))
     check("…and higher contrast", html.contains("prefers-contrast: more"))
     check("Try Again goes back to the address, escaped", html.contains("href=\"http://example.com/&lt;x&gt;\""))
     check("the system's own words are kept in Details", html.contains("<summary>Details</summary><p>Could not connect to the server.</p>"))

@@ -170,6 +170,8 @@ extension FeatureSelfTest {
         check("palette: with nothing typed it lists the open tabs", palette.results.allSatisfy { $0.item.kind == .tab } && palette.results.count >= 3,
               palette.results.map(\.item.title))
         check("palette: …each with its key", palette.results.allSatisfy { palette.keyText(for: $0, row: 0).contains("⌘") })
+        palette.type("a")
+        snapshot(palette.window, "palette")
         palette.type("gamm")
         check("palette: typing finds a tab", palette.results.first?.item.title == "Gamma", palette.results.map(\.item.title))
         palette.type("alph")

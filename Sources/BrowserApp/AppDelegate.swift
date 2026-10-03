@@ -221,6 +221,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Before any window: the rule lists compiled last time are looked
         // up while the first tab is being made.
         blocker.start()
+        configureRestyle()
         tabOrganizer.controllers = { [weak self] in self?.controllers ?? [] }
         mediaCenter.tabs = { [weak self] in self?.controllers ?? [] }
         tabOrganizer.openTabs = { [weak self] browser, urls in

@@ -3,9 +3,12 @@ import BrowserKit
 
 /// ⌘K: one box for open tabs, every menu command, saved groups, bookmarks
 /// and history, searched fuzzily and worked entirely from the keyboard.
-/// ↑ ↓ move, Return opens, ⌘1–⌘9 open the first nine results, Esc closes.
-/// With nothing typed each tab shows a hint: its letter, then ⌘ and its
-/// number, opens it.
+/// ↑ ↓ move, Return opens, ⌘1–⌘9 open the first nine results, ⇥ narrows
+/// to one group, Esc closes. With nothing typed each tab shows a hint: its
+/// letter, then ⌘ and its number, opens it.
+///
+/// Drawn as Design D's palette (G1-02): a flat #171B22 panel, results in
+/// groups (Tabs, Actions, Agents, …) under small uppercase labels.
 @MainActor
 final class CommandPaletteController: NSWindowController, NSTextFieldDelegate, NSTableViewDataSource, NSTableViewDelegate, NSWindowDelegate {
 
@@ -18,6 +21,28 @@ final class CommandPaletteController: NSWindowController, NSTextFieldDelegate, N
         let run: () -> Void
     }
 
+    /// The palette's sections, in the order they are offered.
+    enum Group: Int, CaseIterable {
+        case tabs, actions, agents, savedGroups, bookmarks, history
+
+        var title: String {
+            switch self {
+            case .tabs: return "Tabs"
+            case .actions: return "Actions"
+            case .agents: return "Agents"
+            case .savedGroups: return "Saved groups"
+            case .bookmarks: return "Bookmarks"
+            case .history: return "History"
+            }
+        }
+    }
+
+    /// The agent session a tab belongs to, by its palette id ("tab:…").
+    /// Set by the app (`configureRestyle`).
+    static var agentTabID: ((String) -> String?)?
+    /// How many agent sessions are running, for "Pause all agents".
+    static var runningAgents: (() -> Int)?
+
     /// Everything that can be offered for a query. Tabs and commands do not
     /// depend on it; bookmarks and history are searched with it.
     var source: ((String) -> [Entry])?
@@ -25,21 +50,28 @@ final class CommandPaletteController: NSWindowController, NSTextFieldDelegate, N
 
     let field = NSTextField()
     let table = NSTableView()
+    let countLabel = NSTextField(labelWithString: "")
     private(set) var results: [Entry] = []
     private(set) var hints: [String: CommandPalette.Hint] = [:]
     private var all: [Entry] = []
+    /// ⇥: only this group's results.
+    private(set) var filter: Group?
+    /// What the table shows: a group's label, or a result by its index.
+    private enum Row { case header(Group), entry(Int) }
+    private var rows: [Row] = []
+    private(set) var selectedIndex = 0
+
+    static let width: CGFloat = 680
+    static let height: CGFloat = 460
 
     init() {
-        let panel = PalettePanel(contentRect: NSRect(x: 0, y: 0, width: 620, height: 400),
-                                 styleMask: [.titled, .fullSizeContentView], backing: .buffered, defer: false)
-        panel.titleVisibility = .hidden
-        panel.titlebarAppearsTransparent = true
+        let panel = PalettePanel(contentRect: NSRect(x: 0, y: 0, width: Self.width, height: Self.height),
+                                 styleMask: [.borderless, .fullSizeContentView], backing: .buffered, defer: false)
         panel.isMovable = false
         panel.hidesOnDeactivate = true
         panel.becomesKeyOnlyIfNeeded = false
-        panel.standardWindowButton(.closeButton)?.isHidden = true
-        panel.standardWindowButton(.miniaturizeButton)?.isHidden = true
-        panel.standardWindowButton(.zoomButton)?.isHidden = true
+        panel.hasShadow = true
+        panel.appearance = Keel.darkAppearance
         panel.setAccessibilityLabel("Command palette")
         super.init(window: panel)
         QuietMode.apply(to: panel)
@@ -52,26 +84,35 @@ final class CommandPaletteController: NSWindowController, NSTextFieldDelegate, N
     required init?(coder: NSCoder) { fatalError("not supported") }
 
     private func build() {
-        let root = NSVisualEffectView()
-        root.material = .menu
-        root.state = .active
+        let root = KeelFill(fill: Keel.raised, border: Keel.menuBorder, radius: 14)
+        root.translatesAutoresizingMaskIntoConstraints = true
         root.wantsLayer = true
-        root.layer?.cornerRadius = 12
+        root.layer?.cornerRadius = 14
+        root.layer?.masksToBounds = true
 
-        field.placeholderString = "Search tabs, commands, bookmarks and history"
-        field.font = .systemFont(ofSize: 20)
+        // Header: ⌘K · the box · esc.
+        let placeholder = "Search tabs, actions, agents…"
+        field.placeholderAttributedString = NSAttributedString(string: placeholder, attributes: [.foregroundColor: Keel.dim, .font: Keel.font(15)])
+        field.font = Keel.font(15)
+        field.textColor = Keel.text
         field.isBordered = false
         field.drawsBackground = false
         field.focusRingType = .none
         field.delegate = self
-        field.setAccessibilityLabel("Search tabs, commands, bookmarks and history")
+        field.setAccessibilityLabel("Search tabs, commands, agents, bookmarks and history")
+        let header = NSStackView(views: [KeelKbd("⌘K"), field, KeelKbd("esc")])
+        header.spacing = 12
+        header.edgeInsets = NSEdgeInsets(top: 0, left: 18, bottom: 0, right: 18)
+        field.setContentHuggingPriority(.defaultLow, for: .horizontal)
 
         let column = NSTableColumn(identifier: .init("result"))
         table.addTableColumn(column)
         table.headerView = nil
-        table.rowHeight = 30
+        table.rowHeight = 34
         table.style = .plain
         table.backgroundColor = .clear
+        table.intercellSpacing = .zero
+        table.selectionHighlightStyle = .regular
         table.dataSource = self
         table.delegate = self
         table.target = self
@@ -83,24 +124,56 @@ final class CommandPaletteController: NSWindowController, NSTextFieldDelegate, N
         scroll.drawsBackground = false
         scroll.hasVerticalScroller = true
         scroll.autohidesScrollers = true
+        scroll.scrollerStyle = .overlay
 
-        let divider = NSBox()
-        divider.boxType = .separator
-        for view in [field, divider, scroll] {
+        // Footer: how to drive it, and how much it found.
+        let footer = KeelFill(fill: Keel.surface)
+        func hint(_ key: String, _ text: String) -> NSStackView {
+            let stack = NSStackView(views: [KeelKbd(key), Keel.label(text, size: 12, color: Keel.dim)])
+            stack.spacing = 6
+            return stack
+        }
+        countLabel.font = Keel.font(12)
+        countLabel.textColor = Keel.dim
+        let spacer = NSView()
+        spacer.setContentHuggingPriority(.init(1), for: .horizontal)
+        let footerStack = NSStackView(views: [hint("↑↓", "navigate"), hint("↵", "run"), hint("⇥", "filter group"), spacer, countLabel])
+        footerStack.spacing = 16
+        footerStack.edgeInsets = NSEdgeInsets(top: 0, left: 18, bottom: 0, right: 18)
+        footerStack.translatesAutoresizingMaskIntoConstraints = false
+        footer.addSubview(footerStack)
+
+        let topLine = KeelFill(fill: Keel.hairline)
+        let bottomLine = KeelFill(fill: Keel.hairline)
+        for view in [header, topLine, scroll, bottomLine, footer] {
             view.translatesAutoresizingMaskIntoConstraints = false
             root.addSubview(view)
         }
         NSLayoutConstraint.activate([
-            field.topAnchor.constraint(equalTo: root.topAnchor, constant: 16),
-            field.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 18),
-            field.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -18),
-            divider.topAnchor.constraint(equalTo: field.bottomAnchor, constant: 12),
-            divider.leadingAnchor.constraint(equalTo: root.leadingAnchor),
-            divider.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-            scroll.topAnchor.constraint(equalTo: divider.bottomAnchor, constant: 4),
-            scroll.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 6),
-            scroll.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -6),
-            scroll.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -6),
+            header.topAnchor.constraint(equalTo: root.topAnchor),
+            header.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            header.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            header.heightAnchor.constraint(equalToConstant: 52),
+            topLine.topAnchor.constraint(equalTo: header.bottomAnchor),
+            topLine.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            topLine.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            topLine.heightAnchor.constraint(equalToConstant: 1),
+            scroll.topAnchor.constraint(equalTo: topLine.bottomAnchor, constant: 2),
+            scroll.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 2),
+            scroll.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -2),
+            scroll.bottomAnchor.constraint(equalTo: bottomLine.topAnchor, constant: -8),
+            bottomLine.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            bottomLine.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            bottomLine.heightAnchor.constraint(equalToConstant: 1),
+            bottomLine.bottomAnchor.constraint(equalTo: footer.topAnchor),
+            footer.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 1),
+            footer.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -1),
+            footer.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -1),
+            footer.heightAnchor.constraint(equalToConstant: 35),
+            footerStack.leadingAnchor.constraint(equalTo: footer.leadingAnchor),
+            footerStack.trailingAnchor.constraint(equalTo: footer.trailingAnchor),
+            footerStack.topAnchor.constraint(equalTo: footer.topAnchor),
+            footerStack.bottomAnchor.constraint(equalTo: footer.bottomAnchor),
         ])
         window?.contentView = root
         window?.backgroundColor = .clear
@@ -114,10 +187,12 @@ final class CommandPaletteController: NSWindowController, NSTextFieldDelegate, N
         self.browser = browser
         guard let panel = window, let parent = browser.window else { return }
         field.stringValue = ""
+        filter = nil
         refresh()
         let frame = parent.frame
-        let width = min(620, frame.width - 40)
-        panel.setFrame(NSRect(x: frame.midX - width / 2, y: frame.maxY - 110 - 400, width: width, height: 400), display: false)
+        let width = min(Self.width, frame.width - 40)
+        let height = min(Self.height, max(240, frame.height - 140))
+        panel.setFrame(NSRect(x: frame.midX - width / 2, y: frame.maxY - 110 - height, width: width, height: height), display: false)
         if panel.parent !== parent {
             panel.parent?.removeChildWindow(panel)
             parent.addChildWindow(panel, ordered: .above)
@@ -142,15 +217,49 @@ final class CommandPaletteController: NSWindowController, NSTextFieldDelegate, N
 
     // MARK: - Searching
 
+    static func group(of item: CommandPalette.Item) -> Group {
+        switch item.kind {
+        case .tab: return .tabs
+        case .command: return item.detail == "Agent" || item.detail.hasPrefix("Agent ›") ? .agents : .actions
+        case .savedGroup: return .savedGroups
+        case .bookmark: return .bookmarks
+        case .history: return .history
+        }
+    }
+
     /// Asks for everything again and ranks it for what is typed.
     func refresh() {
         let query = field.stringValue
         all = source?(query) ?? []
         hints = CommandPalette.hints(all.map(\.item))
         let byID = Dictionary(all.map { ($0.item.id, $0) }, uniquingKeysWith: { first, _ in first })
-        results = CommandPalette.rank(query, all.map(\.item)).compactMap { byID[$0.id] }
+        let trimmed = query.trimmingCharacters(in: .whitespaces)
+        var ranked: [Entry]
+        if let filter, trimmed.isEmpty {
+            // A group on its own, with nothing typed: all of it.
+            ranked = all.filter { Self.group(of: $0.item) == filter }
+        } else {
+            ranked = CommandPalette.rank(query, all.map(\.item)).compactMap { byID[$0.id] }
+            if let filter { ranked = ranked.filter { Self.group(of: $0.item) == filter } }
+        }
+        // In groups, the group of the best match first. A single letter
+        // keeps the ranking's own order: it puts each tab at its hint's number.
+        if trimmed.count != 1 {
+            var order: [Group] = []
+            for entry in ranked where !order.contains(Self.group(of: entry.item)) { order.append(Self.group(of: entry.item)) }
+            ranked = order.flatMap { group in ranked.filter { Self.group(of: $0.item) == group } }
+        }
+        results = ranked
+        rows = []
+        var last: Group?
+        for (index, entry) in results.enumerated() {
+            let group = Self.group(of: entry.item)
+            if group != last { rows.append(.header(group)); last = group }
+            rows.append(.entry(index))
+        }
+        countLabel.stringValue = (filter.map { "\($0.title) · " } ?? "") + "\(results.count) of \(all.count) results"
         table.reloadData()
-        if !results.isEmpty { table.selectRowIndexes([0], byExtendingSelection: false) }
+        select(results.isEmpty ? nil : 0)
     }
 
     /// Types into the box, as a person would: for the self-test.
@@ -165,22 +274,53 @@ final class CommandPaletteController: NSWindowController, NSTextFieldDelegate, N
         switch selector {
         case #selector(NSResponder.moveDown(_:)): step(1)
         case #selector(NSResponder.moveUp(_:)): step(-1)
-        case #selector(NSResponder.insertNewline(_:)): open(at: max(0, table.selectedRow))
-        case #selector(NSResponder.cancelOperation(_:)): close(returningTo: browser)
+        case #selector(NSResponder.insertNewline(_:)): open(at: selectedIndex)
+        case #selector(NSResponder.cancelOperation(_:)):
+            if filter != nil { filter = nil; refresh() } else { close(returningTo: browser) }
+        case #selector(NSResponder.insertTab(_:)): cycleFilter(by: 1)
+        case #selector(NSResponder.insertBacktab(_:)): cycleFilter(by: -1)
         default: return false
         }
         return true
     }
 
+    /// ⇥: the next group that has anything for what is typed; past the last, all of them.
+    func cycleFilter(by step: Int) {
+        let saved = filter
+        filter = nil
+        let query = field.stringValue.trimmingCharacters(in: .whitespaces)
+        let candidates: [Entry] = query.isEmpty ? all : {
+            let byID = Dictionary(all.map { ($0.item.id, $0) }, uniquingKeysWith: { first, _ in first })
+            return CommandPalette.rank(query, all.map(\.item)).compactMap { byID[$0.id] }
+        }()
+        let present = Group.allCases.filter { group in candidates.contains { Self.group(of: $0.item) == group } }
+        let cycle: [Group?] = [nil] + present
+        let current = cycle.firstIndex { $0 == saved } ?? 0
+        filter = cycle[(current + step + cycle.count) % cycle.count]
+        refresh()
+    }
+
     private func step(_ by: Int) {
         guard !results.isEmpty else { return }
-        let row = min(max(0, table.selectedRow + by), results.count - 1)
+        select(min(max(0, selectedIndex + by), results.count - 1))
+    }
+
+    private func select(_ index: Int?) {
+        guard let index, let row = rows.firstIndex(where: { if case .entry(index) = $0 { return true } else { return false } }) else {
+            selectedIndex = 0
+            table.deselectAll(nil)
+            return
+        }
+        selectedIndex = index
         table.selectRowIndexes([row], byExtendingSelection: false)
         table.scrollRowToVisible(row)
+        // The group's label scrolls into view with its first result.
+        if row > 0, case .header = rows[row - 1] { table.scrollRowToVisible(row - 1) }
     }
 
     @objc private func openClicked(_ sender: Any?) {
-        if table.clickedRow >= 0 { open(at: table.clickedRow) }
+        guard rows.indices.contains(table.clickedRow), case .entry(let index) = rows[table.clickedRow] else { return }
+        open(at: index)
     }
 
     /// Runs a result, after the palette is gone and the browser window is key
@@ -194,36 +334,110 @@ final class CommandPaletteController: NSWindowController, NSTextFieldDelegate, N
 
     // MARK: - Rows
 
-    func numberOfRows(in tableView: NSTableView) -> Int { results.count }
+    func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
+
+    func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
+        guard rows.indices.contains(row), case .header = rows[row] else { return 34 }
+        return 30
+    }
+
+    func tableView(_ tableView: NSTableView, isGroupRow row: Int) -> Bool { false }
+
+    func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool {
+        guard rows.indices.contains(row), case .entry(let index) = rows[row] else { return false }
+        selectedIndex = index
+        return true
+    }
+
+    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
+        let view = KeelRowView()
+        view.inset = 8
+        return view
+    }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        let entry = results[row]
+        guard rows.indices.contains(row) else { return nil }
+        switch rows[row] {
+        case .header(let group):
+            let cell = NSTableCellView()
+            let label = Keel.sectionLabel(group.title)
+            label.translatesAutoresizingMaskIntoConstraints = false
+            cell.addSubview(label)
+            NSLayoutConstraint.activate([
+                label.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 18),
+                label.bottomAnchor.constraint(equalTo: cell.bottomAnchor, constant: -5),
+            ])
+            cell.setAccessibilityRole(.staticText)
+            cell.setAccessibilityLabel(group.title)
+            return cell
+        case .entry(let index):
+            return entryView(results[index], index: index)
+        }
+    }
+
+    private func entryView(_ entry: Entry, index: Int) -> NSView {
         let cell = NSTableCellView()
-        let icon = NSImageView(image: entry.icon ?? NSImage())
-        let title = NSTextField(labelWithString: entry.item.title)
+        let group = Self.group(of: entry.item)
+        let agent = entry.item.kind == .tab ? Self.agentTabID?(entry.item.id) : nil
+        let color: NSColor
+        switch group {
+        case .tabs: color = agent != nil ? Keel.amber : Keel.idle
+        case .agents: color = Keel.amber
+        case .actions: color = Keel.muted
+        case .savedGroups: color = Keel.dim
+        case .bookmarks, .history: color = Keel.idle
+        }
+        let square = Keel.square(color)
+        let title = Keel.label(entry.item.title, size: 13, color: Keel.text)
         title.lineBreakMode = .byTruncatingTail
         title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        let detail = NSTextField(labelWithString: Self.describe(entry.item))
-        detail.textColor = .secondaryLabelColor
-        detail.lineBreakMode = .byTruncatingMiddle
+        title.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+        let detail = Keel.monoLabel(secondary(entry, agent: agent), color: Keel.dim)
         detail.setContentCompressionResistancePriority(.defaultLow - 1, for: .horizontal)
-        let key = NSTextField(labelWithString: keyText(for: entry, row: row))
-        key.textColor = .tertiaryLabelColor
-        key.font = .monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
-        key.setContentCompressionResistancePriority(.required, for: .horizontal)
-        let stack = NSStackView(views: [icon, title, detail, NSView(), key])
-        stack.spacing = 8
+        detail.setContentHuggingPriority(.required, for: .horizontal)
+        let keys = NSStackView(views: chips(for: keyText(for: entry, row: index), shortcut: entry.shortcut))
+        keys.spacing = 4
+        keys.setContentCompressionResistancePriority(.required, for: .horizontal)
+        let spacer = NSView()
+        spacer.setContentHuggingPriority(.init(1), for: .horizontal)
+        spacer.setContentCompressionResistancePriority(.init(1), for: .horizontal)
+        let stack = NSStackView(views: [square, title, spacer, detail, keys])
+        stack.spacing = 10
+        stack.setCustomSpacing(12, after: detail)
         stack.translatesAutoresizingMaskIntoConstraints = false
-        icon.widthAnchor.constraint(equalToConstant: 16).isActive = true
-        icon.heightAnchor.constraint(equalToConstant: 16).isActive = true
         cell.addSubview(stack)
         NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 10),
-            stack.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -10),
+            stack.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 18),
+            stack.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -18),
             stack.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
         ])
-        cell.setAccessibilityLabel("\(entry.item.title), \(Self.describe(entry.item))")
+        cell.setAccessibilityLabel("\(entry.item.title), \(Self.describe(entry.item))" + (agent.map { ", agent \($0)" } ?? ""))
         return cell
+    }
+
+    /// The grey words after a title: a tab's address, "agent a91f", a
+    /// command's menu, "2 running".
+    private func secondary(_ entry: Entry, agent: String?) -> String {
+        if let agent { return "agent \(agent)" }
+        switch entry.item.kind {
+        case .tab, .bookmark, .history:
+            return CommandPalette.host(entry.item.detail)
+        case .savedGroup: return "Saved group"
+        case .command:
+            if Self.group(of: entry.item) == .agents {
+                let running = Self.runningAgents?() ?? 0
+                if entry.item.title.hasSuffix("All Agents") && entry.item.title.hasPrefix("Pause") { return "\(running) running" }
+                return ""
+            }
+            return entry.item.detail
+        }
+    }
+
+    /// "G ⌘3" as two chips; a command's "⇧⌘C" as three.
+    private func chips(for text: String, shortcut: String) -> [KeelKbd] {
+        guard !text.isEmpty else { return [] }
+        if text == shortcut { return KeelKbd.keys(text) }
+        return text.split(separator: " ").map { KeelKbd(String($0)) }
     }
 
     /// With nothing typed, a tab's hint; otherwise ⌘1–⌘9 for the first nine,

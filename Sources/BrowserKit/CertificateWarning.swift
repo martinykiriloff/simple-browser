@@ -148,37 +148,51 @@ public enum WarningPage {
             }.joined(separator: " ")
             rows.append(("SHA-256", grouped))
         }
-        let table = rows.map { "<tr><th>\(ReaderPage.escape($0.0))</th><td>\(ReaderPage.escape($0.1))</td></tr>" }.joined()
+        let table = rows.map { "<dt>\(ReaderPage.escape($0.0))</dt><dd>\(ReaderPage.escape($0.1))</dd>" }.joined()
         return """
         <!doctype html><html lang="en"><head><meta charset="utf-8">
         <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
         <meta name="color-scheme" content="light dark"><title>This Connection Is Not Private</title>
         <style>
-          :root { color-scheme: light dark; --bg: #fbfbfd; --text: #1d1d1f; --muted: #6e6e73; --card: #f0f0f3; --danger: #c9302c; }
-          @media (prefers-color-scheme: dark) { :root { --bg: #1e1e20; --text: #f5f5f7; --muted: #a1a1a6; --card: #2c2c2e; --danger: #ff6b63; } }
-          body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 -apple-system, system-ui; }
-          main { max-width: 600px; margin: 12vh auto; padding: 0 28px; }
-          h1 { font-size: 26px; margin: 0 0 12px; color: var(--danger); }
-          p { margin: 0 0 14px; }
+          :root { color-scheme: light dark; --page: #FFFFFF; --ink: #1B1D21; --muted: #5A606B; --line: #D7DAE0; --subtle: #F4F5F7;
+                  --danger: #C23B2E; --danger-soft: #FBEAE8; --button: #1B1D21; --on-button: #FFFFFF; }
+          @media (prefers-color-scheme: dark) { :root { --page: #12151B; --ink: #E6E8EC; --muted: #9AA1AD; --line: #262C36; --subtle: #171B22;
+                  --danger: #FF8A80; --danger-soft: #3A1717; --button: #E6E8EC; --on-button: #0B0D11; } }
+          @media (prefers-contrast: more) { :root { --muted: var(--ink); --line: currentColor; } }
+          * { box-sizing: border-box; }
+          body { margin: 0; background: var(--page); color: var(--ink); font: 15px/1.55 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+                 letter-spacing: -0.005em; }
+          main { max-width: 600px; margin: 0 auto; padding: 14vh 24px 48px; }
+          .mark { width: 44px; height: 44px; border-radius: 11px; background: var(--danger-soft); box-shadow: inset 0 0 0 1px var(--danger);
+                  display: grid; place-items: center; font-size: 20px; font-weight: 700; color: var(--danger); }
+          h1 { font-size: 28px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.2; margin: 22px 0 10px; color: var(--danger); }
+          p { margin: 0 0 10px; }
           .muted { color: var(--muted); }
-          .actions { display: flex; gap: 12px; align-items: center; margin: 26px 0; }
-          a.button { display: inline-block; padding: 8px 18px; border-radius: 8px; text-decoration: none; font-weight: 600; background: #0a62c9; color: white; }
-          a.proceed { color: var(--muted); font-size: 13px; }
-          details { background: var(--card); border-radius: 10px; padding: 12px 16px; }
-          summary { cursor: default; font-weight: 600; }
-          table { border-collapse: collapse; margin-top: 10px; font-size: 13px; }
-          th { text-align: left; vertical-align: top; padding: 3px 14px 3px 0; color: var(--muted); font-weight: 500; white-space: nowrap; }
-          td { padding: 3px 0; word-break: break-all; }
+          .actions { display: flex; gap: 10px; align-items: center; margin: 24px 0 28px; }
+          a.button { display: inline-flex; align-items: center; height: 36px; padding: 0 18px; border-radius: 8px; text-decoration: none;
+                     font-weight: 600; font-size: 14px; background: var(--button); color: var(--on-button); }
+          a.button:focus-visible, a.proceed:focus-visible { outline: 3px solid color-mix(in srgb, var(--ink) 35%, transparent); outline-offset: 2px; }
+          a.proceed { display: inline-flex; align-items: center; height: 36px; padding: 0 16px; border-radius: 8px; box-shadow: inset 0 0 0 1px var(--line);
+                      color: var(--danger); font-weight: 600; font-size: 14px; text-decoration: none; }
+          details { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+          summary { height: 40px; display: flex; align-items: center; gap: 8px; padding: 0 14px; background: var(--subtle); font-weight: 600; font-size: 13px; cursor: default; }
+          summary::-webkit-details-marker { display: none; }
+          summary::before { content: "▸"; font-size: 10px; color: var(--muted); }
+          details[open] summary::before { content: "▾"; }
+          dl { margin: 0; padding: 12px 14px; border-top: 1px solid var(--line); display: grid; grid-template-columns: max-content 1fr; gap: 0 18px;
+               font: 12px/1.7 ui-monospace, "SF Mono", Menlo, monospace; }
+          dt { color: var(--muted); } dd { margin: 0; word-break: break-all; }
         </style></head><body><main>
+        <div class="mark" aria-hidden="true">!</div>
         <h1 id="warning-title">This Connection Is Not Private</h1>
         <p id="warning-site">This page says it is <b>\(site)</b>, but that could not be verified.</p>
-        <p id="warning-why">\(ReaderPage.escape(problem.kind.explanation(site: problem.host)))</p>
+        <p id="warning-why" class="muted">\(ReaderPage.escape(problem.kind.explanation(site: problem.host)))</p>
         <p class="muted">Someone on the network may be pretending to be the site to read what you send it: passwords, messages, card numbers.</p>
         <div class="actions">
           <a class="button" id="warning-back" href="\(scheme)://\(actionHost)/back">Go Back</a>
           <a class="proceed" id="warning-proceed" href="\(scheme)://\(actionHost)/proceed?token=\(ReaderPage.escape(token))">Visit this website anyway</a>
         </div>
-        <details><summary>The certificate</summary><table>\(table)</table></details>
+        <details><summary>The certificate</summary><dl>\(table)</dl></details>
         </main></body></html>
         """
     }

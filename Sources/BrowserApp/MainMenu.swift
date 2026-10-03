@@ -68,7 +68,7 @@ enum MainMenu {
     }
 
     private static func appMenuItem() -> NSMenuItem {
-        let menu = NSMenu()
+        let menu = NSMenu(title: "Keel")
         menu.addItem(withTitle: "About Keel",
                      action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
                      keyEquivalent: "")

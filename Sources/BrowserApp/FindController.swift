@@ -83,6 +83,20 @@ final class FindController: NSObject, NSSearchFieldDelegate {
         doneButton.target = self
         doneButton.action = #selector(done(_:))
 
+        if Keel.chromeEnabled {
+            // Design D (G1-05): a flat #171B22 bar with a 1 pt ring.
+            bar.appearance = Keel.darkAppearance
+            let flat = KeelFill(fill: Keel.raised, border: Keel.menuBorder, radius: 10)
+            bar.addSubview(flat)
+            NSLayoutConstraint.activate([
+                flat.leadingAnchor.constraint(equalTo: bar.leadingAnchor),
+                flat.trailingAnchor.constraint(equalTo: bar.trailingAnchor),
+                flat.topAnchor.constraint(equalTo: bar.topAnchor),
+                flat.bottomAnchor.constraint(equalTo: bar.bottomAnchor),
+            ])
+            countLabel.font = Keel.font(12).withMonospacedDigits
+            countLabel.textColor = Keel.muted
+        }
         let stack = NSStackView(views: [field, countLabel, previousButton, nextButton, doneButton])
         stack.spacing = 6
         stack.edgeInsets = NSEdgeInsets(top: 7, left: 10, bottom: 7, right: 8)
@@ -112,7 +126,9 @@ final class FindController: NSObject, NSSearchFieldDelegate {
         if !isVisible {
             container.addSubview(bar, positioned: .above, relativeTo: nil)
             NSLayoutConstraint.activate([
-                bar.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -16),
+                // In Keel's chrome the page is inset from the container's sides.
+                bar.trailingAnchor.constraint(equalTo: container.trailingAnchor,
+                                              constant: -12 - (Keel.chromeEnabled ? BrowserWindowController.keelPageMargin : 4)),
                 bar.topAnchor.constraint(equalTo: container.topAnchor, constant: 10),
             ])
             isVisible = true

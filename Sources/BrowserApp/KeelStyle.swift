@@ -1043,3 +1043,144 @@ enum KeelSettings {
         return stack
     }
 }
+
+// MARK: - Restyle additions (chrome, palette, pages)
+
+extension Keel {
+    // The page (light web content) palette, for the browser's own pages.
+    static let pageInk = hex(0x1B1D21)
+    static let pageBorder = hex(0xD7DAE0)
+    static let pageSubtle = hex(0xF4F5F7)
+    static let pageMuted = hex(0x5A606B)
+    /// The selected row of a menu or list.
+    static let selection = hex(0x232831)
+    static let addressText = hex(0xC9CED6)
+
+    /// Whether windows wear the dark Keel chrome (`appearance.chrome`), or
+    /// the system's own look.
+    static var chromeEnabled: Bool { BrowserSettings.chromeStyle == .keel }
+
+    static let darkAppearance = NSAppearance(named: .darkAqua)
+
+    /// A 14 pt square, the house icon: grey for pages, amber for agents.
+    static func square(_ color: NSColor, size: CGFloat = 14, radius: CGFloat = 3) -> NSView {
+        let view = NSView()
+        view.wantsLayer = true
+        view.layer?.backgroundColor = color.cgColor
+        view.layer?.cornerRadius = radius
+        view.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([view.widthAnchor.constraint(equalToConstant: size), view.heightAnchor.constraint(equalToConstant: size)])
+        view.setAccessibilityElement(false)
+        return view
+    }
+
+    /// A 7 pt status dot.
+    static func dot(_ color: NSColor, size: CGFloat = 7) -> NSView { square(color, size: size, radius: size / 2) }
+
+    /// The colour of a page's square: amber for an agent's tab.
+    static func pageColor(agent: Bool, borrowed: Bool = false) -> NSColor { agent ? amber : borrowed ? coral : idle }
+
+    /// The same palette as CSS, for the browser's own pages.
+    static let pageCSS = """
+    --ink: #1B1D21; --muted: #5A606B; --line: #D7DAE0; --subtle: #F4F5F7; --page: #FFFFFF;
+    --amber: #F2A93B; --green: #4CC38A; --coral: #E2704A; --red: #C23B2E; --idle: #5B6472;
+    --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+    """
+}
+
+/// A keyboard hint: "⌘K", mono 11 pt in a 1 pt bordered 5 pt chip.
+final class KeelKbd: NSView {
+    private let label = NSTextField(labelWithString: "")
+
+    init(_ text: String, light: Bool = false) {
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = 5
+        layer?.borderWidth = 1
+        layer?.borderColor = (light ? Keel.pageBorder : Keel.menuBorder).cgColor
+        translatesAutoresizingMaskIntoConstraints = false
+        label.font = Keel.mono
+        label.textColor = light ? Keel.pageMuted : Keel.muted
+        label.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(label)
+        NSLayoutConstraint.activate([
+            heightAnchor.constraint(equalToConstant: 18),
+            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
+            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
+            label.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+        self.text = text
+        setAccessibilityElement(false)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    var text: String {
+        get { label.stringValue }
+        set { label.stringValue = newValue }
+    }
+
+    /// "⇧⌘C" as three chips, as the palette shows a shortcut.
+    static func keys(_ shortcut: String) -> [KeelKbd] {
+        var parts: [String] = []
+        var rest = Substring(shortcut)
+        while let first = rest.first, "⌃⌥⇧⌘".contains(first) {
+            parts.append(String(first))
+            rest = rest.dropFirst()
+        }
+        if !rest.isEmpty { parts.append(String(rest)) }
+        return parts.map { KeelKbd($0) }
+    }
+}
+
+/// A flat view that fills itself and draws a 1 pt border, with the
+/// colours resolved at draw time (so it works in a picture of the window).
+class KeelFill: NSView {
+    var fill: NSColor? { didSet { needsDisplay = true } }
+    var border: NSColor? { didSet { needsDisplay = true } }
+    var radius: CGFloat = 0 { didSet { needsDisplay = true } }
+    var borderWidth: CGFloat = 1 { didSet { needsDisplay = true } }
+
+    convenience init(fill: NSColor?, border: NSColor? = nil, radius: CGFloat = 0) {
+        self.init(frame: .zero)
+        self.fill = fill
+        self.border = border
+        self.radius = radius
+        translatesAutoresizingMaskIntoConstraints = false
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let inset = border == nil ? 0 : borderWidth / 2
+        let path = NSBezierPath(roundedRect: bounds.insetBy(dx: inset, dy: inset), xRadius: radius, yRadius: radius)
+        if let fill { fill.setFill(); path.fill() }
+        if let border { border.setStroke(); path.lineWidth = borderWidth; path.stroke() }
+    }
+}
+
+/// A list row that shows its selection as Design D's menus do: a flat
+/// #232831 fill with a 7 pt radius, inset from the list's edges.
+final class KeelRowView: NSTableRowView {
+    var inset: CGFloat = 6
+
+    override func drawSelection(in dirtyRect: NSRect) {
+        guard selectionHighlightStyle != .none else { return }
+        Keel.selection.setFill()
+        NSBezierPath(roundedRect: bounds.insetBy(dx: inset, dy: 0), xRadius: 7, yRadius: 7).fill()
+    }
+
+    override var isEmphasized: Bool {
+        get { false }
+        set {}
+    }
+
+    /// Text stays light on the flat selection, never inverted.
+    override var interiorBackgroundStyle: NSView.BackgroundStyle { .normal }
+}
+
+extension NSFont {
+    /// The same font with digits of one width, for counts that change.
+    var withMonospacedDigits: NSFont {
+        NSFont.monospacedDigitSystemFont(ofSize: pointSize, weight: .regular)
+    }
+}
