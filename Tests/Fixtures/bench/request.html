@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Orders — Shop admin</title>
+<style>
+  body { font: 14px/1.5 system-ui, sans-serif; margin: 0; }
+  header { padding: 12px 24px; border-bottom: 1px solid #ddd; }
+  main { padding: 24px; max-width: 900px; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #eee; }
+  .empty { color: #888; padding: 24px; text-align: center; }
+  .error { color: #b00020; }
+</style></head>
+<body>
+<header><strong>Shop admin</strong> <nav aria-label="Main"><a href="#">Dashboard</a> <a href="#" aria-current="page">Orders</a> <a href="#">Customers</a></nav></header>
+<main>
+  <h1>Orders</h1>
+  <form role="search" onsubmit="event.preventDefault(); load()">
+    <label>Status <select id="status"><option>All</option><option>Paid</option><option>Refunded</option></select></label>
+    <label>Search <input id="q" type="search" placeholder="Order # or email"></label>
+    <button>Filter</button>
+  </form>
+  <table aria-label="Orders">
+    <thead><tr><th>Order</th><th>Customer</th><th>Total</th><th>Status</th></tr></thead>
+    <tbody id="rows"><tr><td colspan="4" class="empty">Loading orders…</td></tr></tbody>
+  </table>
+  <p id="message" role="status"></p>
+</main>
+<script>
+async function load() {
+  const rows = document.getElementById('rows');
+  try {
+    const response = await fetch('/api/orders?status=' + encodeURIComponent(document.getElementById('status').value));
+    const orders = await response.json();
+    // Bug: the status is never checked, so the error body is treated as a list.
+    rows.innerHTML = orders.map(o => `<tr><td>${o.id}</td><td>${o.email}</td><td>${o.total}</td><td>${o.status}</td></tr>`).join('');
+  } catch (error) {
+    console.error('Could not render orders:', error.message);
+    rows.innerHTML = '<tr><td colspan="4" class="empty">No orders yet.</td></tr>';
+  }
+}
+load();
+</script>
+</body></html>

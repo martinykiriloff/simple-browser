@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Project settings — Acme Console</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.5 -apple-system, system-ui, sans-serif; color: #1d1d1f; }
+  .shell { max-width: 720px; margin: 0 auto; padding: 0 16px; }
+  header.topbar { border-bottom: 1px solid #e5e5ea; padding: 12px 0; }
+  .brand { font-weight: 600; }
+  /* Bug: the action row never wraps and its children refuse to shrink. */
+  .toolbar { display: flex; flex-wrap: nowrap; gap: 8px; padding: 8px 0; }
+  .toolbar > * { flex: 0 0 auto; }
+  .toolbar .path { white-space: nowrap; font-family: ui-monospace, monospace; background: #f2f2f7; padding: 4px 8px; border-radius: 6px; }
+  .btn { border: 1px solid #c7c7cc; background: #fff; border-radius: 6px; padding: 4px 12px; font: inherit; }
+  .btn.primary { background: #0a64c8; border-color: #0a64c8; color: #fff; }
+  .card { border: 1px solid #e5e5ea; border-radius: 10px; padding: 16px; margin: 16px 0; }
+  label { display: block; margin: 8px 0 4px; font-weight: 500; }
+  input, select { width: 100%; padding: 6px 8px; font: inherit; }
+</style></head>
+<body>
+<header class="topbar"><div class="shell"><span class="brand">Acme Console</span>
+  <nav aria-label="Main"><a href="#">Projects</a> · <a href="#">Billing</a> · <a href="#">Team</a></nav></div></header>
+<main class="shell">
+  <h1>Project settings</h1>
+  <div class="toolbar" id="toolbar" role="toolbar" aria-label="Project actions">
+    <span class="path">acme-production-eu-west-1/storefront-web/settings/deployments/environment-variables</span>
+    <button class="btn">Duplicate</button>
+    <button class="btn">Transfer ownership</button>
+    <button class="btn">Archive project</button>
+    <button class="btn primary">Save changes</button>
+  </div>
+  <section class="card">
+    <h2>General</h2>
+    <label for="name">Project name</label><input id="name" value="storefront-web">
+    <label for="region">Region</label>
+    <select id="region"><option>eu-west-1</option><option>us-east-1</option><option>ap-southeast-2</option></select>
+    <label for="branch">Production branch</label><input id="branch" value="main">
+  </section>
+  <section class="card">
+    <h2>Danger zone</h2>
+    <p>Deleting a project removes its deployments, domains and environment variables.</p>
+    <button class="btn">Delete project</button>
+  </section>
+</main>
+</body></html>

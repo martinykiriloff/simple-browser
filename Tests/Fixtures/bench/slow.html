@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Product search — Outdoor Store</title>
+<style>
+  body { font: 14px/1.5 system-ui, sans-serif; margin: 0 auto; max-width: 900px; padding: 16px; }
+  .filters { display: flex; gap: 12px; align-items: end; flex-wrap: wrap; }
+  ul.results { list-style: none; padding: 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  ul.results li { border: 1px solid #ddd; border-radius: 8px; padding: 12px; }
+</style></head>
+<body>
+<header><strong>Outdoor Store</strong> <nav aria-label="Main"><a href="#">Tents</a> <a href="#">Packs</a> <a href="#">Footwear</a></nav></header>
+<h1>Tents</h1>
+<div class="filters">
+  <label>Capacity <select id="capacity"><option value="0">Any</option><option value="1">1+</option><option value="2">2+</option><option value="4">4+</option></select></label>
+  <label>Max weight (kg) <input id="weight" type="number" value="3"></label>
+  <label><input id="instock" type="checkbox" checked> In stock</label>
+  <button id="apply">Apply filters</button>
+</div>
+<p id="count" role="status"></p>
+<ul class="results" id="results"></ul>
+<script>
+const products = Array.from({ length: 24 }, (_, i) => ({ name: `Trail tent ${i + 1}`, capacity: 1 + (i % 4), weight: 1.2 + (i % 5) * 0.6, stock: i % 3 !== 0 }));
+function render(list) {
+  document.getElementById('results').innerHTML = list.map((p, i) => `
+    <li class="product-grid__item product-card product-card--${p.stock ? 'in-stock' : 'sold-out'}" data-sku="TT-${1000 + i}" data-category="tents" data-position="${i + 1}">
+      <a class="product-card__link" href="/p/trail-tent-${i + 1}" data-track="product_click" data-track-position="${i + 1}">
+        <div class="product-card__media"><img class="product-card__image" src="/img/tt-${i + 1}-400.jpg" srcset="/img/tt-${i + 1}-400.jpg 400w, /img/tt-${i + 1}-800.jpg 800w" sizes="(min-width: 900px) 300px, 50vw" width="300" height="300" loading="lazy" decoding="async" alt="${p.name}"></div>
+        <h3 class="product-card__title">${p.name}</h3>
+      </a>
+      <p class="product-card__meta"><span class="product-card__capacity">${p.capacity} person</span> · <span class="product-card__weight">${p.weight.toFixed(1)} kg</span></p>
+      <div class="product-card__footer"><span class="price price--regular" data-currency="EUR">€${(149 + i * 10).toFixed(2)}</span>
+        <button class="btn btn--icon product-card__wishlist" type="button" aria-label="Save ${p.name}"><svg class="icon icon--heart" width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-7-4.4-9.5-9C.6 8.4 2.7 4 6.6 4c2.1 0 3.6 1.2 4.4 2.5C11.8 5.2 13.3 4 15.4 4c3.9 0 6 4.4 4.1 8-2.5 4.6-9.5 9-9.5 9z" fill="none" stroke="currentColor" stroke-width="2"/></svg></button></div>
+    </li>`).join('');
+  document.getElementById('count').textContent = `${list.length} tents`;
+}
+function scoreRelevance() {
+  // Bug: a synchronous "relevance" pass that blocks the main thread ~300 ms.
+  const end = performance.now() + 300;
+  let x = 0;
+  while (performance.now() < end) x += Math.sqrt(x + 1);
+  return x;
+}
+document.getElementById('apply').addEventListener('click', () => {
+  scoreRelevance();
+  const cap = +document.getElementById('capacity').value, max = +document.getElementById('weight').value, stock = document.getElementById('instock').checked;
+  render(products.filter(p => p.capacity >= cap && p.weight <= max && (!stock || p.stock)));
+});
+render(products);
+</script>
+</body></html>
