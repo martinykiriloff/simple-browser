@@ -231,7 +231,9 @@ final class FeatureSelfTest {
         browser.load(StartPageSchemeHandler.url)
         _ = await waitFor { StartPageSchemeHandler.isStartPage(browser.pageWebView.url) && !browser.pageWebView.isLoading }
         check("address bar: the browser's own page shows no indicator", await waitFor { browser.securityLabel.isEmpty }, browser.securityLabel)
-        check("address bar: …and leaves no gap for one", browser.addressTextStart < 12, browser.addressTextStart)
+        // In Keel's chrome the text starts after the status dot, wherever there is no indicator.
+        let start = browser.usesKeelChrome ? AddressField.statusInset : 0
+        check("address bar: …and leaves no gap for one", browser.addressTextStart < start + 12, browser.addressTextStart)
         let placeholder = await js("return document.querySelector('input[name=q]').placeholder", in: browser) as? String
         check("start page: the search box names the engine", placeholder == "Search DuckDuckGo or enter an address", placeholder as Any)
         _ = await js("const q = document.querySelector('input[name=q]'); q.value = '\(site)/second'; q.form.submit()", in: browser)

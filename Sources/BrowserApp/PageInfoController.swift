@@ -48,6 +48,10 @@ final class PageInfoController: NSViewController {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("not supported") }
 
+    /// Design D's site info (G1-04): the site, the connection in green (or
+    /// red), mono details, small uppercase headings.
+    private let keel = Keel.chromeEnabled
+
     override func loadView() {
         titleLabel.stringValue = content.summary
         titleLabel.font = .boldSystemFont(ofSize: NSFont.systemFontSize)
@@ -56,6 +60,17 @@ final class PageInfoController: NSViewController {
         explanationLabel.textColor = .secondaryLabelColor
         explanationLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         var rows: [NSView] = [titleLabel, explanationLabel]
+        if keel {
+            let trouble = content.security.label != nil
+            titleLabel.font = Keel.font(13, .medium)
+            titleLabel.textColor = trouble ? Keel.dangerText : Keel.greenText
+            explanationLabel.textColor = Keel.muted
+            let site = Keel.label(content.name.isEmpty ? "This page" : content.name, size: 15, weight: .semibold, color: Keel.text)
+            site.lineBreakMode = .byTruncatingMiddle
+            let header = NSStackView(views: [Keel.square(trouble ? Keel.dangerText : Keel.green, size: 16, radius: 4), site])
+            header.spacing = 10
+            rows.insert(header, at: 0)
+        }
 
         if let certificate = content.certificate, !certificate.fingerprint.isEmpty {
             var lines = ["Certificate issued to \(certificate.subject.isEmpty ? "an unnamed subject" : certificate.subject)"]
@@ -67,8 +82,8 @@ final class PageInfoController: NSViewController {
                 lines.append((expires < Date() ? "expired " : "valid until ") + formatter.string(from: expires))
             }
             certificateLabel.stringValue = lines.joined(separator: ", ") + "."
-            certificateLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
-            certificateLabel.textColor = .secondaryLabelColor
+            certificateLabel.font = keel ? Keel.mono : .systemFont(ofSize: NSFont.smallSystemFontSize)
+            certificateLabel.textColor = keel ? Keel.dim : .secondaryLabelColor
             rows.append(certificateLabel)
         }
 
@@ -100,8 +115,8 @@ final class PageInfoController: NSViewController {
         if host != nil {
             rows.append(separator())
             rows.append(heading("Stored on this Mac by this site"))
-            dataLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
-            dataLabel.textColor = .secondaryLabelColor
+            dataLabel.font = keel ? Keel.mono : .systemFont(ofSize: NSFont.smallSystemFontSize)
+            dataLabel.textColor = keel ? Keel.muted : .secondaryLabelColor
             clearButton.controlSize = .small
             clearButton.target = self
             clearButton.action = #selector(clear(_:))
@@ -114,7 +129,7 @@ final class PageInfoController: NSViewController {
         if content.site != nil {
             rows.append(separator())
             blockedLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
-            blockedLabel.textColor = .secondaryLabelColor
+            blockedLabel.textColor = keel ? (content.blockingOn ? Keel.greenText : Keel.muted) : .secondaryLabelColor
             blockedLabel.stringValue = !content.blockingOn ? "Ads and trackers are not being blocked on this page."
                 : content.blocked == 0 ? "No ads or trackers were blocked on this page."
                 : content.blocked == 1 ? "1 ad or tracker was blocked on this page." : "\(content.blocked) ads and trackers were blocked on this page."
@@ -126,9 +141,14 @@ final class PageInfoController: NSViewController {
         stack.alignment = .leading
         stack.spacing = 8
         stack.setCustomSpacing(4, after: titleLabel)
+        if keel, let header = rows.first, header !== titleLabel { stack.setCustomSpacing(6, after: header) }
         stack.edgeInsets = NSEdgeInsets(top: 14, left: 16, bottom: 14, right: 16)
         stack.translatesAutoresizingMaskIntoConstraints = false
-        let root = NSView()
+        let root: NSView = keel ? KeelFill(fill: Keel.raised) : NSView()
+        if keel {
+            root.appearance = Keel.darkAppearance
+            root.translatesAutoresizingMaskIntoConstraints = true
+        }
         root.addSubview(stack)
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(equalTo: root.leadingAnchor),
@@ -143,12 +163,18 @@ final class PageInfoController: NSViewController {
     }
 
     private func heading(_ text: String) -> NSTextField {
+        if keel { return Keel.sectionLabel(text) }
         let label = NSTextField(labelWithString: text)
         label.font = .systemFont(ofSize: NSFont.smallSystemFontSize, weight: .semibold)
         return label
     }
 
-    private func separator() -> NSBox {
+    private func separator() -> NSView {
+        if keel {
+            let line = KeelFill(fill: Keel.hairline)
+            line.heightAnchor.constraint(equalToConstant: 1).isActive = true
+            return line
+        }
         let box = NSBox()
         box.boxType = .separator
         return box

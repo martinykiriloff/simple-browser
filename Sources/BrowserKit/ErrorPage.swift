@@ -1,7 +1,7 @@
 import Foundation
 
 /// The page shown when a load fails: what went wrong in plain words, in the
-/// system's light or dark look and its accent colour, with a way to try again.
+/// system's light or dark look, with a way to try again.
 public enum ErrorPage {
     public struct Explanation: Equatable, Sendable {
         public var title: String
@@ -34,30 +34,54 @@ public enum ErrorPage {
         }
     }
 
-    /// The whole page. `detail` is the system's own wording, kept small.
-    public static func html(explanation: Explanation, url: String, detail: String) -> String {
-        """
+    /// The whole page (Design D, G4-07): a light page in the system's light
+    /// look (and a dark one for a person who keeps the system dark), the
+    /// title, what it means, Try again, and the details for a developer.
+    /// `detail` is the system's own wording, kept in Details.
+    public static func html(explanation: Explanation, url: String, detail: String, diagnostics: [(String, String)] = []) -> String {
+        let rows = ([("url", url)] + diagnostics).filter { !$0.1.isEmpty }
+            .map { "<dt>\(escape($0.0))</dt><dd>\(escape($0.1))</dd>" }.joined()
+        return """
         <!doctype html><html><head><meta charset="utf-8"><title>\(escape(explanation.title))</title>
         <meta name="color-scheme" content="light dark">
         <style>
-          :root { color-scheme: light dark; --bg: #f5f5f7; --card: #ffffff; --text: #1d1d1f; --muted: #6e6e73; --line: rgba(128,128,128,.3); }
-          @media (prefers-color-scheme: dark) { :root { --bg: #1e1e20; --card: #2c2c2e; --text: #f5f5f7; --muted: #98989d; } }
-          @media (prefers-contrast: more) { :root { --muted: var(--text); --line: currentColor; } }
-          @media (prefers-reduced-motion: no-preference) { a.try { transition: background .15s; } }
-          body { margin: 0; background: var(--bg); color: var(--text); font: 15px -apple-system, system-ui; }
-          main { max-width: 34em; margin: 18vh auto; padding: 0 24px; }
-          h1 { font-size: 1.5em; margin: 0 0 8px; }
-          p { margin: 0 0 12px; color: var(--muted); }
-          code { word-break: break-all; color: var(--muted); font-size: .9em; }
-          a.try { display: inline-block; margin-top: 16px; padding: 8px 18px; border-radius: 8px; border: 1px solid var(--line);
-                  background: AccentColor; color: AccentColorText; text-decoration: none; font-weight: 600; }
-          a.try:focus-visible { outline: 3px solid color-mix(in srgb, AccentColor 45%, transparent); outline-offset: 2px; }
-          details { margin-top: 20px; color: var(--muted); }
+          :root { color-scheme: light dark; --page: #FFFFFF; --ink: #1B1D21; --muted: #5A606B; --line: #D7DAE0; --subtle: #F4F5F7;
+                  --button: #1B1D21; --on-button: #FFFFFF; }
+          @media (prefers-color-scheme: dark) { :root { --page: #12151B; --ink: #E6E8EC; --muted: #9AA1AD; --line: #262C36; --subtle: #171B22;
+                  --button: #E6E8EC; --on-button: #0B0D11; } }
+          @media (prefers-contrast: more) { :root { --muted: var(--ink); --line: currentColor; } }
+          @media (prefers-reduced-motion: no-preference) { a.try { transition: opacity .15s; } }
+          * { box-sizing: border-box; }
+          body { margin: 0; background: var(--page); color: var(--ink); font: 15px/1.55 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+                 letter-spacing: -0.005em; }
+          main { max-width: 600px; margin: 0 auto; padding: 14vh 24px 48px; }
+          .mark { width: 44px; height: 44px; border-radius: 11px; background: var(--subtle); box-shadow: inset 0 0 0 1px var(--line);
+                  display: grid; place-items: center; font-size: 20px; font-weight: 700; color: var(--muted); }
+          h1 { font-size: 28px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.2; margin: 22px 0 10px; }
+          p { margin: 0; color: var(--muted); }
+          .actions { display: flex; align-items: center; gap: 10px; margin-top: 24px; }
+          .actions .space { flex: 1; }
+          a.try { display: inline-flex; align-items: center; height: 36px; padding: 0 18px; border-radius: 8px; background: var(--button);
+                  color: var(--on-button); font-weight: 600; font-size: 14px; text-decoration: none; }
+          a.try:hover { opacity: .88; }
+          a.try:focus-visible { outline: 3px solid color-mix(in srgb, var(--ink) 35%, transparent); outline-offset: 2px; }
+          .kbd { font: 11px ui-monospace, "SF Mono", Menlo, monospace; color: var(--muted); border: 1px solid var(--line); border-radius: 5px; padding: 1px 6px; }
+          details { margin-top: 28px; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+          summary { height: 40px; display: flex; align-items: center; gap: 8px; padding: 0 14px; background: var(--subtle); font-weight: 600; font-size: 13px; cursor: default; }
+          summary::-webkit-details-marker { display: none; }
+          summary::before { content: "▸"; font-size: 10px; color: var(--muted); }
+          details[open] summary::before { content: "▾"; }
+          details > p { padding: 12px 14px 0; border-top: 1px solid var(--line); font-size: 13px; }
+          dl { margin: 0; padding: 8px 14px 12px; display: grid; grid-template-columns: max-content 1fr; gap: 0 18px;
+               font: 12px/1.7 ui-monospace, "SF Mono", Menlo, monospace; }
+          dt { color: var(--muted); } dd { margin: 0; word-break: break-all; }
+          code { word-break: break-all; }
         </style></head><body><main>
+        <div class="mark" aria-hidden="true">!</div>
         <h1>\(escape(explanation.title))</h1>
         <p>\(escape(explanation.advice))</p>
-        <a class="try" href="\(escape(url))">Try Again</a>
-        <details><summary>Details</summary><p>\(escape(detail))</p><code>\(escape(url))</code></details>
+        <div class="actions"><a class="try" href="\(escape(url))">Try Again</a><span class="space"></span><span class="kbd" title="Reload">⌘R</span></div>
+        <details><summary>Details</summary><p>\(escape(detail))</p><dl>\(rows)</dl></details>
         </main></body></html>
         """
     }

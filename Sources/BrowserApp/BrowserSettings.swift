@@ -218,6 +218,21 @@ enum BrowserSettings {
         set { store.set(newValue, forKey: favoritesBarKey) }
     }
 
+    // MARK: Appearance
+
+    /// The window chrome: Keel's dark chrome around the page, or the
+    /// system's own light or dark look. New windows follow it.
+    enum ChromeStyle: String, CaseIterable {
+        case keel, system
+    }
+
+    static let chromeStyleKey = "appearance.chrome"
+
+    static var chromeStyle: ChromeStyle {
+        get { store.string(forKey: chromeStyleKey).flatMap(ChromeStyle.init(rawValue:)) ?? .keel }
+        set { store.set(newValue.rawValue, forKey: chromeStyleKey) }
+    }
+
     // MARK: First launch
 
     /// The welcome window has been shown, or there was no need: someone

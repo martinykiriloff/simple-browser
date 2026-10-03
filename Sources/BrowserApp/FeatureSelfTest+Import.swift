@@ -78,13 +78,13 @@ extension FeatureSelfTest {
         BrowserSettings.newWindowContent = .startPage
         let fresh = app.newTab(beside: browser, inFront: false)
         _ = await waitFor { StartPageSchemeHandler.isStartPage(fresh.currentURL ?? URL(string: "x:")!) && !fresh.pageWebView.isLoading }
-        func tiles(_ heading: String) async -> [String] {
+        // Top sites: favorites, then the most visited (Design D's start page).
+        func tiles(_ kind: String) async -> [String] {
             await js("""
-                const heading = Array.from(document.querySelectorAll('h2')).find(h => h.textContent === '\(heading)');
-                return heading ? Array.from(heading.parentElement.querySelectorAll('.tiles a')).map(a => a.href) : [];
+                return Array.from(document.querySelectorAll('.tiles a[data-kind=\(kind)]')).map(a => a.href);
                 """, in: fresh) as? [String] ?? []
         }
-        let favorites = await tiles("Favorites"), frequent = await tiles("Frequently Visited")
+        let favorites = await tiles("favorite"), frequent = await tiles("frequent")
         // The start page leaves out of Frequently Visited what is a favorite already.
         check("import: Chrome's top sites are on the start page", favorites.contains(BrowserImportFixture.chromeTopSite.absoluteString)
               && frequent.prefix(2) == ["https://news.ycombinator.com/", "https://mail.google.com/mail/u/0/"], (favorites, frequent))
