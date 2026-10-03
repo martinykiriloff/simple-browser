@@ -829,8 +829,8 @@ mark { background: #f8d84a; color: #000; border-radius: 2px; }
 .agent-tool { color: var(--accent); font-weight: 600; min-width: 110px; }
 .agent-args { color: var(--text-soft); overflow: hidden; text-overflow: ellipsis; max-width: 40%; }
 .agent-summary { flex: 1; overflow: hidden; text-overflow: ellipsis; color: var(--text); }
-.agent-ms { color: var(--text-muted); }
-.agent-error .agent-summary, .agent-error .agent-tool { color: #d93025; }
+.agent-ms { color: var(--text-muted); min-width: 52px; text-align: right; }
+.agent-error .agent-summary, .agent-error .agent-tool { color: var(--k-danger); }
 .agent-detail { padding: 4px 28px 10px; }
 .agent-label { color: var(--text-muted); font-family: var(--font); margin: 6px 0 2px; text-transform: uppercase; font-size: 10px; letter-spacing: .04em; }
 .agent-detail pre { margin: 0; max-height: 360px; overflow: auto; white-space: pre-wrap; background: var(--toolbar-bg); padding: 6px 8px; border-radius: 4px; }
@@ -1375,3 +1375,98 @@ textarea.react-input { min-height: 120px; resize: vertical; }
 .ext-color-values { display: flex; flex-direction: column; gap: 2px; }
 .ext-color-value { background: none; border: 0; text-align: left; color: var(--text); padding: 1px 4px; border-radius: 3px; cursor: pointer; font-size: 11px; }
 .ext-color-value:hover { background: var(--hover); }
+
+/* ---- agent-native: actor tags, Snapshot, Agent session, storage compare -------------------------
+   Colours from Design D: agent = amber, sandbox = green, borrowed = coral,
+   danger = red, "you" = the dev-tools blue. Light values are the same hues
+   darkened for a white background. */
+:root {
+  --k-agent: #9a5b00; --k-agent-bg: #fdf0d9; --k-agent-strong: #F2A93B;
+  --k-you: #1a5fd0; --k-you-bg: #e3edff;
+  --k-ok: #1f8f5a; --k-ok-bg: #dcf3e8;
+  --k-coral: #b4471f; --k-coral-bg: #fbe3d9;
+  --k-danger: #c23b2e; --k-danger-bg: #fdecea;
+  --k-idle: #8a929e;
+  --k-mono: ui-monospace, "SF Mono", Menlo, monospace;
+}
+:root[data-theme="dark"] {
+  --k-agent: #F2A93B; --k-agent-bg: #3A2A0E; --k-you: #6EA0FF; --k-you-bg: #172742;
+  --k-ok: #4CC38A; --k-ok-bg: #12281F; --k-coral: #F2A58A; --k-coral-bg: #33180F;
+  --k-danger: #FF8A80; --k-danger-bg: #3A1717; --k-idle: #5B6472;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --k-agent: #F2A93B; --k-agent-bg: #3A2A0E; --k-you: #6EA0FF; --k-you-bg: #172742;
+    --k-ok: #4CC38A; --k-ok-bg: #12281F; --k-coral: #F2A58A; --k-coral-bg: #33180F;
+    --k-danger: #FF8A80; --k-danger-bg: #3A1717; --k-idle: #5B6472;
+  }
+}
+
+/* Actor tags (console messages, network names) */
+.actor-tag { flex: none; display: inline-flex; align-items: center; height: 15px; padding: 0 5px; border-radius: 4px;
+  font: 700 10px/1 var(--font); letter-spacing: 0; white-space: nowrap; align-self: flex-start; margin-top: 1px; }
+.actor-tag:empty { display: none; }
+.actor-tag.actor-agent { background: var(--k-agent-bg); color: var(--k-agent); }
+.actor-tag.actor-human { background: var(--k-you-bg); color: var(--k-you); }
+.name-cell .actor-tag { align-self: center; margin-top: 0; }
+#console-actor, #network-actor { min-width: 0; }
+
+/* Status dots (Agent timeline, session header) */
+.agent-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--k-idle); align-self: center; }
+.agent-dot.done { background: var(--k-ok); }
+.agent-dot.waiting { background: var(--k-agent-strong); box-shadow: 0 0 0 3px var(--k-agent-bg); }
+.agent-dot.failed { background: var(--k-danger); }
+.agent-head .agent-dot { align-self: center; }
+.agent-tokens { color: var(--text-muted); min-width: 74px; text-align: right; }
+.agent-session-bar { display: flex; align-items: center; gap: 8px; height: 28px; flex: none; padding: 0 10px;
+  border-bottom: 1px solid var(--border-soft); font-size: 12px; }
+.agent-session-id { font-family: var(--k-mono); font-weight: 600; }
+.agent-chip { display: inline-flex; align-items: center; height: 18px; padding: 0 8px; border-radius: 9px; font-size: 11px; font-weight: 600; }
+.agent-chip.sandbox { background: var(--k-ok-bg); color: var(--k-ok); }
+.agent-chip.borrowed { background: var(--k-coral-bg); color: var(--k-coral); }
+.agent-waiting { display: flex; gap: 8px; align-items: baseline; padding: 3px 8px; white-space: nowrap; background: var(--k-agent-bg); border-bottom: 1px solid var(--border-soft); }
+.agent-waiting .agent-tool, .agent-waiting .agent-summary { color: var(--k-agent); }
+.agent-waiting .agent-summary { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+
+/* Snapshot panel */
+.snap-stats { display: flex; align-items: center; gap: 14px; flex: none; min-height: 30px; padding: 4px 10px; flex-wrap: wrap;
+  border-bottom: 1px solid var(--border-soft); font-size: 12px; }
+.snap-stats:empty { display: none; }
+.snap-tokens { font-weight: 700; font-size: 13px; color: var(--k-agent); }
+.snap-vs { color: var(--k-ok); font-weight: 600; }
+.snap-budget { display: inline-flex; align-items: center; gap: 6px; color: var(--text-soft); }
+.snap-budget.over { color: var(--k-danger); }
+.snap-meter { width: 70px; height: 5px; border-radius: 3px; background: var(--border-soft); overflow: hidden; }
+.snap-meter i { display: block; height: 100%; background: var(--k-agent-strong); }
+.snap-budget.over .snap-meter i { background: var(--k-danger); }
+.snap-stale { color: var(--k-agent); font-weight: 600; }
+.snap-body { flex: 1; min-height: 0; display: flex; }
+.snap-text { font-family: var(--k-mono); font-size: 11.5px; line-height: 18px; padding: 4px 0; -webkit-user-select: text; user-select: text; }
+.snap-line { display: flex; white-space: pre; padding-right: 12px; }
+.snap-line.has-ref { cursor: pointer; }
+.snap-line.has-ref:hover { background: var(--hover); }
+.snap-line.selected { background: var(--k-agent-bg); }
+.snap-no { flex: none; width: 44px; padding-right: 10px; text-align: right; color: var(--text-muted); -webkit-user-select: none; user-select: none; }
+.snap-ref { color: var(--k-agent); font-family: var(--k-mono); }
+.snap-side { flex: none; width: 280px; display: flex; flex-direction: column; border-left: 1px solid var(--border-soft); }
+.snap-side input[type="search"] { flex: 1 1 auto; min-width: 0; }
+.snap-refrow { display: flex; gap: 8px; align-items: baseline; padding: 2px 10px; white-space: nowrap; cursor: pointer; font-size: 11.5px; }
+.snap-refrow:hover { background: var(--hover); }
+.snap-refrow.selected { background: var(--k-agent-bg); }
+.snap-refrow .snap-ref { flex: none; width: 40px; }
+.snap-role { flex: none; color: var(--text-soft); font-family: var(--k-mono); }
+.snap-refrow:not(.interactive) .snap-role { color: var(--text-muted); }
+.snap-name { overflow: hidden; text-overflow: ellipsis; }
+
+/* Storage: Compare with… */
+.cmp-head { display: flex; align-items: center; gap: 10px; padding: 6px 10px; border-bottom: 1px solid var(--border-soft); font-size: 12px; }
+.cmp-count { font-family: var(--k-mono); font-weight: 700; }
+.cmp-count.added, .cmp-added .cmp-mark { color: var(--k-ok); }
+.cmp-count.removed, .cmp-removed .cmp-mark { color: var(--k-danger); }
+.cmp-count.changed, .cmp-changed .cmp-mark { color: var(--k-agent); }
+.cmp-note { padding: 6px 10px; color: var(--text-soft); border-bottom: 1px solid var(--border-soft); background: var(--toolbar-bg); }
+.cmp-table .cmp-mark { width: 22px; text-align: center; font-weight: 700; }
+.cmp-table tr.cmp-added td { background: var(--k-ok-bg); }
+.cmp-table tr.cmp-removed td { background: var(--k-danger-bg); }
+.cmp-table tr.cmp-changed td { background: var(--k-agent-bg); }
+.cmp-table tr.cmp-same td { color: var(--text-soft); }

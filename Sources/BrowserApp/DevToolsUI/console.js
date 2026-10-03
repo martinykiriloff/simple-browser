@@ -25,6 +25,7 @@
     prompt: null,
     filterText: "",
     level: "all",
+    actor: "all",
     preserve: false,
     timestamps: false,
     groupStack: [],
@@ -46,6 +47,12 @@
       this.loadLive();
       $("#console-filter").addEventListener("input", debounce(() => { this.filterText = $("#console-filter").value.toLowerCase(); this.applyFilter(); }, 100));
       $("#console-levels").addEventListener("change", () => { this.level = $("#console-levels").value; this.applyFilter(); });
+      $("#console-actor").addEventListener("change", () => { this.actor = $("#console-actor").value; this.applyFilter(); });
+      if (window.Actors) Actors.onChange((from) => {
+        for (const item of this.entries) {
+          if (this.timeOf(item.entry) >= from - 1000 && this.setActor(item)) this.applyFilterTo(item);
+        }
+      });
       $("#console-preserve").addEventListener("change", (e) => { this.preserve = e.target.checked; this.setSetting("preserve", this.preserve); });
       $("#console-timestamps").addEventListener("change", (e) => { this.setTimestamps(e.target.checked); this.setSetting("timestamps", this.timestamps); });
       $("#console-sidebar-toggle").addEventListener("click", () => this.setSetting("sidebar", !this.settings.sidebar));
@@ -404,6 +411,9 @@
         body.appendChild(frames);
       }
       el.appendChild(body);
+      item.actorEl = h("span", { class: "actor-tag" });
+      el.appendChild(item.actorEl);
+      this.setActor(item);
 
       const where = this.entryLocation(item);
       if (where && where.url) {
@@ -411,6 +421,21 @@
         el.appendChild(h("span", { class: "location", title: where.url, onclick: (ev) => { ev.stopPropagation(); DevTools.openSource(where.url, where.line, where.column); } }, label));
       }
       return el;
+    },
+
+    // Who caused it: an agent's tool call, the person, or the page itself.
+    // True when the tag changed.
+    setActor(item) {
+      const e = item.entry;
+      const actor = e.type === "command" || e.type === "result" || !window.Actors ? "page" : Actors.of(this.timeOf(e));
+      if (item.actor === actor) return false;
+      item.actor = actor;
+      if (item.actorEl) {
+        item.actorEl.className = "actor-tag actor-" + actor;
+        item.actorEl.textContent = Actors.LABELS[actor] || "";
+        item.actorEl.title = Actors.TITLES[actor] || "";
+      }
+      return true;
     },
 
     timeOf(e) {
@@ -700,6 +725,7 @@
         visible = e.level === this.level || (this.level === "info" && (e.level === "info" || e.level === "trace"));
       }
       if (visible && this.settings.hideNetwork && item.source === "network") visible = false;
+      if (visible && this.actor !== "all" && !always) visible = (item.actor || "page") === this.actor;
       if (visible && !always && (this.side.category !== "all" || this.side.url)) {
         visible = this.categoriesOf(item).includes(this.side.category);
         if (visible && this.side.url != null) {

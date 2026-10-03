@@ -28,6 +28,7 @@
     <button class="tab" data-panel="performance">Performance</button>
     <button class="tab" data-panel="memory">Memory</button>
     <button class="tab" data-panel="application">Application</button>
+    <button class="tab" data-panel="snapshot" title="The exact snapshot an AI agent receives for this tab, and what it costs in tokens">Snapshot</button>
     <button class="tab" data-panel="agent" hidden title="What an AI agent connected over MCP is doing in this tab">Agent</button>
     <button class="tab" data-panel="audits">Audits</button>
     <button class="tab" data-panel="components" hidden title="React Developer Tools: the component tree, props, hooks and state">Components</button>
@@ -128,6 +129,12 @@
         <option value="warn">Warnings</option>
         <option value="info">Info</option>
         <option value="debug">Verbose</option>
+      </select>
+      <select id="console-actor" title="Who caused it: an AI agent's tool call, you (within a second of your input in the page), or the page on its own">
+        <option value="all">All actors</option>
+        <option value="agent">Agent</option>
+        <option value="human">You</option>
+        <option value="page">Page</option>
       </select>
       <label class="check"><input type="checkbox" id="console-preserve"> Preserve log</label>
       <label class="check"><input type="checkbox" id="console-timestamps"> Timestamps</label>
@@ -253,6 +260,12 @@
       <label class="check" title="Show the requests the filter does not match"><input type="checkbox" id="network-invert"> Invert</label>
       <label class="check"><input type="checkbox" id="network-preserve"> Preserve log</label>
       <label class="check" title="Disable the cache while DevTools is open"><input type="checkbox" id="network-disable-cache"> Disable cache</label>
+      <select id="network-actor" title="Who caused it: an AI agent's tool call, you (within a second of your input in the page), or the page on its own">
+        <option value="all">All actors</option>
+        <option value="agent">Agent</option>
+        <option value="human">You</option>
+        <option value="page">Page</option>
+      </select>
       <span class="toolbar-spacer"></span>
       <button class="text-button" id="network-import" title="Open a HAR file as a read-only log (or drop one on the panel)">Import HAR…</button>
       <button class="text-button" id="network-har" title="Export HAR">Export HAR…</button>
@@ -369,10 +382,33 @@
       <label class="check"><input type="checkbox" id="agent-errors"> Errors only</label>
       <span class="muted" id="agent-client"></span>
       <span class="toolbar-spacer"></span>
-      <button class="text-button" id="agent-copy" title="Copy the whole session as Markdown">Copy session</button>
+      <button class="text-button" id="agent-copy" title="Copy the whole session as Markdown, ready to paste to an AI">Copy for AI</button>
       <button class="text-button" id="agent-save" title="Save the session as Markdown">Export…</button>
     </div>
+    <div class="agent-session-bar" id="agent-session" hidden></div>
     <div class="scroll" id="agent-list"></div>
+  </section>
+
+  <!-- Snapshot: what an agent's `snapshot` tool returns for this tab -->
+  <section class="panel" id="panel-snapshot">
+    <div class="toolbar">
+      <button class="icon-button" id="snapshot-refresh" title="Take the snapshot again">&#8635;</button>
+      <label class="check" title="Only interactive elements and headings, as with interactiveOnly: true"><input type="checkbox" id="snapshot-interactive"> Interactive only</label>
+      <span class="muted" id="snapshot-status"></span>
+      <span class="toolbar-spacer"></span>
+      <button class="text-button" id="snapshot-copy" title="Copy the snapshot as Markdown, with its token count, ready to paste to an AI">Copy for AI</button>
+    </div>
+    <div class="snap-stats" id="snapshot-stats"></div>
+    <div class="snap-body">
+      <div class="scroll snap-text" id="snapshot-text"></div>
+      <div class="snap-side">
+        <div class="toolbar">
+          <input type="search" id="snapshot-ref-filter" placeholder="Filter refs">
+          <span class="muted" id="snapshot-ref-count"></span>
+        </div>
+        <div class="scroll" id="snapshot-refs"></div>
+      </div>
+    </div>
   </section>
 
   <!-- Components: React Developer Tools -->
@@ -527,6 +563,9 @@
         <div class="toolbar" id="application-toolbar">
           <span id="application-title"></span>
           <span class="toolbar-spacer"></span>
+          <select id="application-compare" title="Compare this tab's cookies and localStorage with another profile or an agent's sandbox" hidden>
+            <option value="">Compare with…</option>
+          </select>
           <input type="search" id="application-filter" placeholder="Filter">
           <button class="icon-button" id="application-refresh" title="Refresh">&#8635;</button>
           <button class="icon-button" id="application-delete" title="Delete selected">&#10005;</button>
@@ -634,6 +673,7 @@
 </div>
 
 <script src="core.js"></script>
+<script src="actors.js"></script>
 <script src="elements.js"></script>
 <script src="console.js"></script>
 <script src="code-input.js"></script>
@@ -658,6 +698,7 @@
 <script src="memory.js"></script>
 <script src="audits.js"></script>
 <script src="agent-panel.js"></script>
+<script src="snapshot.js"></script>
 <script src="drawer.js"></script>
 <script src="markdown.js"></script>
 <script src="network-preview.js"></script>

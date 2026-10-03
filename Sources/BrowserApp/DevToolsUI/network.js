@@ -188,6 +188,7 @@
     invert: false,
     explain: false,
     type: "all",
+    actor: "all",
     preserve: false,
     recording: true,
     sort: { key: null, desc: false },
@@ -219,6 +220,8 @@
       $("#network-har").addEventListener("click", () => this.exportHAR());
       $("#network-import").addEventListener("click", () => this.importHARFromDisk());
       $("#network-explain").addEventListener("click", () => this.setExplain(!this.explain));
+      $("#network-actor").addEventListener("change", (e) => { this.actor = e.target.value; this.renderAll(); });
+      if (window.Actors) Actors.onChange(debounce(() => { if (!this.session) this.renderAll(); }, 150));
       for (const chip of $$("#network-types .chip[data-type]")) {
         chip.addEventListener("click", () => {
           for (const c of $$("#network-types .chip[data-type]")) c.classList.toggle("active", c === chip);
@@ -428,12 +431,18 @@
       const group = TYPE_GROUPS[this.type];
       if (group) list = list.filter((r) => group.has(r.resourceType));
       list = list.filter((r) => this.passesText(r));
+      if (this.actor !== "all") list = list.filter((r) => this.actorOf(r) === this.actor);
       if (this.explain) list = list.filter((r) => SBNet.issues(r).some((i) => i.failure));
       if (this.sort.key) {
         const key = this.sort.key;
         list.sort((a, b) => { const va = this.sortValue(a, key), vb = this.sortValue(b, key); return (va < vb ? -1 : va > vb ? 1 : 0) * (this.sort.desc ? -1 : 1); });
       }
       return list;
+    },
+
+    // Who caused the request (actors.js); an imported HAR has no actors.
+    actorOf(r) {
+      return this.session || !window.Actors ? "page" : Actors.of(r.startedAt);
     },
 
     sortValue(r, key) {
@@ -595,6 +604,8 @@
           case "name": {
             content = h("div", { class: "name-cell", title: r.url + "\nObserved by: " + (r.sources || []).join(", ") }, h("span", { class: "nv-name" }, fileName(r.url)));
             if (r.sources && r.sources.length === 1 && r.sources[0] === "pageWorld") content.appendChild(h("span", { class: "src page", title: "Seen only by page-world hooks, which page script could tamper with" }, "page"));
+            const actor = this.actorOf(r);
+            if (actor !== "page") content.appendChild(Actors.badge(actor));
             if (this.explain) {
               const reason = issues.filter((i) => i.failure).map((i) => i.text).join(" · ");
               if (reason) content = h("div", { class: "nv-name-wrap" }, content, h("div", { class: "nv-reason", title: reason }, reason));
