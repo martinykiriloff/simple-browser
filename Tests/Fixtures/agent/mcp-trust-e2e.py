@@ -78,7 +78,7 @@ if MODE == "budget":
 
 # --- isolation
 err, text, _ = call("list_tabs")
-check("the person's tabs are not visible to the agent", "Second page" not in text and "page2.html" not in text, text)
+check("the person's tabs are not visible to the agent", "Second page" not in text and "person.html" not in text, text)
 err, text, structured = call("snapshot")
 check("with no tab of its own, the agent is told to open one", err and code(structured) in ("no_tab", "internal") and "new_tab" in text, (text, structured))
 err, text, structured = call("session_info")
@@ -86,7 +86,8 @@ check("session_info: a sandbox", not err and structured.get("mode") == "sandbox"
 
 err, text, structured = call("new_tab", url=SITE + "/checkout.html")
 check("new_tab opens in the sandbox", not err and structured.get("ok") is True and structured.get("tabId"), (text, structured))
-check("the sandbox has none of the person's cookies", page_value("document.cookie") == "", page_value("document.cookie"))
+check("the sandbox has none of the person's cookies", "secret-cookie" not in page_value("document.cookie"), page_value("document.cookie"))
+check("…nor their local storage, on the same origin", page_value("String(localStorage.getItem('person_token'))") == "null", page_value("String(localStorage.getItem('person_token'))"))
 
 err, snap, structured = call("snapshot")
 check("page content is marked untrusted", not err and "<untrusted-page-content origin=\"127.0.0.1:" in snap and snap.rstrip().endswith("</untrusted-page-content>"), snap[:300])

@@ -29,7 +29,7 @@ run() { # mode, extra app flags...
   local mode="$1"; shift
   local token="test-$(uuidgen)"
   local dir; dir="$(mktemp -d -t keel-agents)"
-  KEEL_AGENT_DIR="$dir" "$APP" --quiet --mcp-port "$PORT" --mcp-token "$token" "$@" "$SITE/page2.html" >/dev/null 2>&1 &
+  KEEL_AGENT_DIR="$dir" "$APP" --quiet --mcp-port "$PORT" --mcp-token "$token" "$@" "$SITE/person.html" >/dev/null 2>&1 &
   APP_PID=$!
   for _ in $(seq 1 60); do curl -s -m 1 -o /dev/null "http://127.0.0.1:$PORT/" && break; sleep 0.5; done
   local status=0

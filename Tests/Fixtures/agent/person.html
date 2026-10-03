@@ -1,0 +1,9 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Second page · signed in</title></head>
+<body>
+  <h1>Signed in as the person</h1>
+  <script>
+    document.cookie = "person_session=secret-cookie; path=/; max-age=3600";
+    localStorage.setItem("person_token", "secret-storage");
+  </script>
+</body></html>
