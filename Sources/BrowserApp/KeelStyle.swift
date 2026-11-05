@@ -276,9 +276,7 @@ extension Keel {
 
     /// A 24 pt toolbar button ("Export JSON", "Copy").
     static func miniButton(_ title: String, kind: KeelButton.Kind = .neutral, handler: @escaping () -> Void) -> NSButton {
-        let button = KeelMiniButton(title: title, kind: kind)
-        KeelButtonActions.attach(button, handler)
-        return button
+        KeelMiniButton(title: title, kind: kind, handler: handler)
     }
 
     /// A text field in the design's rounded input box.
@@ -343,14 +341,33 @@ final class KeelDialogWindow: NSWindow {
     }
 }
 
-/// A 24 pt flat button, for toolbars and Copy.
-final class KeelMiniButton: NSButton {
-    private let kind: KeelButton.Kind
+/// A plain button that keeps its own closure. AppKit holds a control's
+/// `target` weakly, so the closure has to be owned by the button itself: it
+/// then dies with the button, which matters because the Keel controls rebuild
+/// their buttons constantly (a segment each, a chip each, two to a stepper).
+class KeelActionButton: NSButton {
+    private let handler: () -> Void
 
-    init(title: String, kind: KeelButton.Kind) {
-        self.kind = kind
+    init(title: String, handler: @escaping () -> Void) {
+        self.handler = handler
         super.init(frame: .zero)
         self.title = title
+        target = self
+        action = #selector(fire(_:))
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    @objc private func fire(_ sender: Any?) { handler() }
+}
+
+/// A 24 pt flat button, for toolbars and Copy.
+final class KeelMiniButton: KeelActionButton {
+    private let kind: KeelButton.Kind
+
+    init(title: String, kind: KeelButton.Kind, handler: @escaping () -> Void) {
+        self.kind = kind
+        super.init(title: title, handler: handler)
         isBordered = false
         wantsLayer = true
         layer?.cornerRadius = 6
@@ -543,18 +560,17 @@ final class KeelSegmented: NSView {
         stack.edgeInsets = NSEdgeInsets(top: 3, left: 3, bottom: 3, right: 3)
         stack.translatesAutoresizingMaskIntoConstraints = false
         for (index, title) in titles.enumerated() {
-            let button = NSButton(title: title, target: nil, action: nil)
+            let button = KeelActionButton(title: title) { [weak self] in
+                guard let self else { return }
+                self.selectedIndex = index
+                self.onChange?(index)
+            }
             button.isBordered = false
             button.wantsLayer = true
             button.layer?.cornerRadius = 7
             button.setButtonType(.momentaryChange)
             button.translatesAutoresizingMaskIntoConstraints = false
             button.heightAnchor.constraint(equalToConstant: 30).isActive = true
-            KeelButtonActions.attach(button) { [weak self] in
-                guard let self else { return }
-                self.selectedIndex = index
-                self.onChange?(index)
-            }
             buttons.append(button)
             stack.addArrangedSubview(button)
         }
@@ -597,7 +613,7 @@ final class KeelStepper: NSView {
         layer?.borderWidth = 1
         translatesAutoresizingMaskIntoConstraints = false
         func step(_ glyph: String, _ delta: Int, _ name: String) -> NSButton {
-            let button = NSButton(title: glyph, target: nil, action: nil)
+            let button = KeelActionButton(title: glyph) { [weak self] in self?.onStep?(delta) }
             button.isBordered = false
             button.wantsLayer = true
             button.layer?.cornerRadius = 6
@@ -606,7 +622,6 @@ final class KeelStepper: NSView {
             button.translatesAutoresizingMaskIntoConstraints = false
             NSLayoutConstraint.activate([button.widthAnchor.constraint(equalToConstant: 28), button.heightAnchor.constraint(equalToConstant: 28)])
             button.setAccessibilityLabel("\(name) \(label)")
-            KeelButtonActions.attach(button) { [weak self] in self?.onStep?(delta) }
             return button
         }
         value.alignment = .center
@@ -698,11 +713,10 @@ final class KeelTokenChip: KeelPanel {
         super.init(fill: Keel.raised, border: Keel.menuBorder, radius: 13)
         let label = Keel.monoLabel(text, color: Keel.text)
         label.font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
-        let remove = NSButton(title: "×", target: nil, action: nil)
+        let remove = KeelActionButton(title: "×", handler: onRemove)
         remove.isBordered = false
         remove.attributedTitle = NSAttributedString(string: "×", attributes: [.font: Keel.font(13), .foregroundColor: Keel.dim])
         remove.setAccessibilityLabel("Remove \(text)")
-        KeelButtonActions.attach(remove, onRemove)
         let stack = NSStackView(views: [label, remove])
         stack.spacing = 6
         stack.edgeInsets = NSEdgeInsets(top: 0, left: 10, bottom: 0, right: 8)

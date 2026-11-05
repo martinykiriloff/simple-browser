@@ -433,20 +433,23 @@ final class CommandPaletteController: NSWindowController, NSTextFieldDelegate, N
         }
     }
 
-    /// "G ⌘3" as two chips; a command's "⇧⌘C" as three.
+    /// "⌘1" or a hint's "G" as one chip; a command's "⇧⌘C" as three.
     private func chips(for text: String, shortcut: String) -> [KeelKbd] {
         guard !text.isEmpty else { return [] }
         if text == shortcut { return KeelKbd.keys(text) }
         return text.split(separator: " ").map { KeelKbd(String($0)) }
     }
 
-    /// With nothing typed, a tab's hint; otherwise ⌘1–⌘9 for the first nine,
-    /// then a command's own shortcut.
+    /// The keys that work from where the person is now: ⌘1–⌘9 open the first
+    /// nine results, whatever is typed. A tab further down the list, with
+    /// nothing typed, shows its hint letter instead — the letter brings it
+    /// into the nine, and ⌘ and its number are then its row's. (The hint's
+    /// own number is counted within its letter, so showing it here would
+    /// name a row the person has not narrowed to yet.) Then a command's own
+    /// shortcut.
     func keyText(for entry: Entry, row: Int) -> String {
-        if field.stringValue.isEmpty, let hint = hints[entry.item.id] {
-            return "\(String(hint.letter).uppercased()) ⌘\(hint.number)"
-        }
         if row < CommandPalette.numberedResults { return "⌘\(row + 1)" }
+        if field.stringValue.isEmpty, let hint = hints[entry.item.id] { return String(hint.letter).uppercased() }
         return entry.shortcut
     }
 

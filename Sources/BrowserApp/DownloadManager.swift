@@ -37,6 +37,9 @@ final class DownloadManager: NSObject, WKDownloadDelegate {
     /// Being paused or cancelled by the person: WebKit's report that the
     /// download "failed" is that, not a failure.
     private var stopping: Set<UUID> = []
+    /// Whose file carries the quarantine mark already, so it is put on once
+    /// and as soon as there is a file to put it on.
+    private var quarantined: Set<UUID> = []
     private var resumeDataInMemory: [UUID: Data] = [:]
     private var lastSave = Date.distantPast
 
@@ -124,6 +127,10 @@ final class DownloadManager: NSObject, WKDownloadDelegate {
 
     private func progressed(_ id: UUID, received: Int64, total: Int64) {
         guard list[id]?.state == .downloading else { return }
+        // WebKit makes the file itself, so the earliest moment there is one
+        // to mark is the first sign of bytes in it -- long before the file
+        // is whole, and so before it could be opened.
+        markQuarantine(id)
         list.update(id) { item in
             item.received = max(item.received, received)
             if total > 0 { item.total = total }
@@ -142,7 +149,17 @@ final class DownloadManager: NSObject, WKDownloadDelegate {
             item.canResume = false
         }
         removeResumeData(id)
-        Self.quarantine(URL(fileURLWithPath: item.path), from: item.url, page: item.page)
+        // Nothing arrived to mark earlier if the file was empty until now.
+        markQuarantine(id)
+        let file = URL(fileURLWithPath: item.path)
+        if !Self.isQuarantined(file), !Self.quarantine(file, from: item.url, page: item.page) {
+            // Said out loud rather than swallowed: macOS will not check a
+            // file it was never told came from the web, and the browser
+            // will not open it either.
+            let why = "macOS could not be told this file came from the web, so it is not opened from here"
+            list.update(id) { $0.failure = why }
+            FileHandle.standardError.write(Data("[downloads] \(item.fileName): \(why)\n".utf8))
+        }
         // What Safari posts: the Downloads stack in the Dock bounces.
         DistributedNotificationCenter.default().post(name: .init("com.apple.DownloadFileFinished"), object: item.path)
         changed(save: true)
@@ -153,6 +170,10 @@ final class DownloadManager: NSObject, WKDownloadDelegate {
             pending[ObjectIdentifier(download)] = nil
             return
         }
+        // Part of a file is still a file from the web: what was written
+        // before it stopped is marked too, so it is checked if it is ever
+        // opened or taken up again.
+        markQuarantine(id)
         if stopping.contains(id) { return }      // paused or cancelled; its own code finishes the job
         if let resumeData { storeResumeData(resumeData, for: id) }
         list.update(id) { item in
@@ -175,7 +196,9 @@ final class DownloadManager: NSObject, WKDownloadDelegate {
     // MARK: - Pause, resume, cancel
 
     func pause(_ id: UUID) async {
-        guard let download = live[id], list[id]?.state == .downloading else { return }
+        // `stopping` is taken before the await below, so a second click
+        // while WebKit is still stopping the first one does nothing.
+        guard let download = live[id], list[id]?.state == .downloading, !stopping.contains(id) else { return }
         stopping.insert(id)
         let data = await download.cancel()
         forget(download)
@@ -192,6 +215,14 @@ final class DownloadManager: NSObject, WKDownloadDelegate {
     /// or from the start if nothing was kept to go on from.
     func resume(_ id: UUID, in webView: WKWebView) async {
         guard let item = list[id], item.state == .paused || item.state == .failed else { return }
+        // Going again is written down before asking WebKit, which takes a
+        // turn of the loop: two quick clicks on Resume would otherwise both
+        // pass the guard and set two downloads writing the same file.
+        list.update(id) { item in
+            item.state = .downloading
+            item.failure = nil
+        }
+        changed(save: true)
         guard let data = resumeData(for: id) else {
             retry(id, in: webView)
             return
@@ -200,10 +231,6 @@ final class DownloadManager: NSObject, WKDownloadDelegate {
         download.delegate = self
         pending[ObjectIdentifier(download)] = Pending(page: item.page, askWhere: false, resuming: id)
         track(download, as: id)
-        list.update(id) { item in
-            item.state = .downloading
-            item.failure = nil
-        }
         changed(save: true)
     }
 
@@ -212,6 +239,7 @@ final class DownloadManager: NSObject, WKDownloadDelegate {
         guard let item = list[id] else { return }
         try? FileManager.default.removeItem(atPath: item.path)
         removeResumeData(id)
+        quarantined.remove(id)
         list.remove(id)
         let destination = URL(fileURLWithPath: item.path)
         start(item.url, in: webView, page: item.page, askWhere: false, folder: destination.deletingLastPathComponent())
@@ -220,7 +248,9 @@ final class DownloadManager: NSObject, WKDownloadDelegate {
 
     /// Stops it and removes what was saved of it.
     func cancel(_ id: UUID) async {
-        guard let item = list[id] else { return }
+        // As with pause: the second of two quick clicks finds it already
+        // being stopped and leaves it alone.
+        guard let item = list[id], item.state != .cancelled, !stopping.contains(id) else { return }
         if let download = live[id] {
             stopping.insert(id)
             _ = await download.cancel()
@@ -228,7 +258,10 @@ final class DownloadManager: NSObject, WKDownloadDelegate {
             stopping.remove(id)
         }
         removeResumeData(id)
-        if item.state != .finished { try? FileManager.default.removeItem(atPath: item.path) }
+        if item.state != .finished {
+            try? FileManager.default.removeItem(atPath: item.path)
+            quarantined.remove(id)
+        }
         list.update(id) { item in
             item.state = .cancelled
             item.canResume = false
@@ -240,6 +273,7 @@ final class DownloadManager: NSObject, WKDownloadDelegate {
     func remove(_ id: UUID) async {
         if list[id]?.isActive == true || list[id]?.state == .paused { await cancel(id) }
         removeResumeData(id)
+        quarantined.remove(id)
         list.remove(id)
         changed(save: true)
     }
@@ -274,6 +308,18 @@ final class DownloadManager: NSObject, WKDownloadDelegate {
             changed(save: true)
             return
         }
+        // Gatekeeper's one chance. A file macOS was never told came from the
+        // web runs unchecked, so one that cannot be marked is not opened
+        // from here at all.
+        let file = URL(fileURLWithPath: item.path)
+        if !Self.isQuarantined(file), !Self.quarantine(file, from: item.url, page: item.page) {
+            let why = "macOS could not be told this file came from the web, so it cannot be opened from here"
+            list.update(id) { $0.failure = why }
+            changed(save: true)
+            FileHandle.standardError.write(Data("[downloads] \(item.fileName): \(why)\n".utf8))
+            await tellAboutUncheckedFile(item, window: window)
+            return
+        }
         if item.needsConfirmation {
             let keep = await (confirm ?? { [weak self] in await self?.askAboutRisk($0, window: window) ?? false })(item)
             guard keep else { return }
@@ -293,10 +339,30 @@ final class DownloadManager: NSObject, WKDownloadDelegate {
         alert.alertStyle = .warning
         alert.messageText = "“\(item.fileName)” can run on your Mac"
         alert.informativeText = "It was downloaded from \(item.source). Open it only if you trust where it came from."
-        alert.addButton(withTitle: "Open")
+        // Cancel first, so Return -- and Escape -- do the safe thing. This
+        // warning is the only gate before the file runs; a stray keystroke
+        // must not open it.
         alert.addButton(withTitle: "Cancel")
-        if let window { return await alert.beginSheetModal(for: window) == .alertFirstButtonReturn }
-        return alert.runModal() == .alertFirstButtonReturn
+        alert.addButton(withTitle: "Open")
+        alert.buttons[0].keyEquivalent = "\r"
+        alert.buttons[1].keyEquivalent = ""
+        alert.buttons[1].hasDestructiveAction = true
+        if let window { return await alert.beginSheetModal(for: window) == .alertSecondButtonReturn }
+        return alert.runModal() == .alertSecondButtonReturn
+    }
+
+    /// Said once, where it matters: the file is on disk, but the browser
+    /// will not hand it to macOS unchecked.
+    private func tellAboutUncheckedFile(_ item: DownloadItem, window: NSWindow?) async {
+        // The self-test turns opening off; it must not be stopped by a sheet.
+        guard openFiles else { return }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "“\(item.fileName)” cannot be opened from here"
+        alert.informativeText = "macOS could not be told that it was downloaded from \(item.source), so it would run without being checked. "
+            + "It is still in your downloads folder: show it in the Finder to decide for yourself."
+        alert.addButton(withTitle: "OK")
+        if let window { _ = await alert.beginSheetModal(for: window) } else { alert.runModal() }
     }
 
     func reveal(_ id: UUID) {
@@ -318,8 +384,12 @@ final class DownloadManager: NSObject, WKDownloadDelegate {
     }
 
     /// Marks the file as downloaded from the web, as Safari does, so macOS
-    /// checks it and asks before it first runs.
-    static func quarantine(_ file: URL, from url: URL, page: URL?) {
+    /// checks it and asks before it first runs. True when the mark is on
+    /// the file afterwards: a volume that keeps no such mark, or a file
+    /// that is not there, is a no, not a shrug.
+    @discardableResult
+    static func quarantine(_ file: URL, from url: URL, page: URL?) -> Bool {
+        guard FileManager.default.fileExists(atPath: file.path) else { return false }
         var properties: [String: Any] = [
             kLSQuarantineTypeKey as String: kLSQuarantineTypeWebDownload,
             kLSQuarantineAgentNameKey as String: "Keel",
@@ -329,7 +399,25 @@ final class DownloadManager: NSObject, WKDownloadDelegate {
         var values = URLResourceValues()
         values.quarantineProperties = properties
         var file = file
-        try? file.setResourceValues(values)
+        do { try file.setResourceValues(values) } catch { return false }
+        return isQuarantined(file)
+    }
+
+    /// Whether the mark is really on the file. Setting it can fail quietly,
+    /// so what is opened is decided by reading it back.
+    static func isQuarantined(_ file: URL) -> Bool {
+        guard let properties = (try? file.resourceValues(forKeys: [.quarantinePropertiesKey]))?.quarantineProperties else { return false }
+        return properties[kLSQuarantineTypeKey as String] != nil
+    }
+
+    /// Puts the mark on as soon as there is a file to put it on. Tried once
+    /// as the bytes start arriving; whether it took is read back from the
+    /// file itself at the end, and again before anything is opened.
+    private func markQuarantine(_ id: UUID) {
+        guard !quarantined.contains(id), let item = list[id],
+              FileManager.default.fileExists(atPath: item.path) else { return }
+        quarantined.insert(id)
+        Self.quarantine(URL(fileURLWithPath: item.path), from: item.url, page: item.page)
     }
 
     /// A name that is safe as a file name: no path separators, no control

@@ -17,11 +17,79 @@
     return tag === "input" && !SKIP.has((el.type || "text").toLowerCase());
   }
 
+  // Is this field one the person can actually see and type into?
+  //
+  // The test is deliberately mean, because the alternative is a trap: a page
+  // shows one innocuous "Email" box, keeps a block of address and card fields
+  // beside it moved off to the left, faded to nothing or laid under something
+  // else, and reads back whatever we filled in. A field this cannot prove
+  // visible is treated as hidden, and hidden fields are never filled.
   function visible(el) {
-    const style = getComputedStyle(el);
-    if (style.display === "none" || style.visibility === "hidden") return false;
+    if (!el || !el.isConnected) return false;
+    // WebKit's own answer first: it knows about display, visibility,
+    // content-visibility and opacity, this element's and its ancestors'.
+    if (typeof el.checkVisibility === "function"
+        && !el.checkVisibility({ contentVisibilityAuto: true, opacityProperty: true, visibilityProperty: true })) return false;
+    const own = getComputedStyle(el);
+    if (own.display === "none" || own.visibility !== "visible") return false;
     const r = el.getBoundingClientRect();
-    return r.width > 0 && r.height > 0;
+    // A real field is not three pixels across. This also catches everything
+    // inside a `display: none` subtree, and anything scaled to nothing.
+    if (r.width < 6 || r.height < 6) return false;
+
+    // Faded out, or clipped out: opacity multiplies down the tree, and the
+    // old way of hiding something that must stay focusable is to clip it to
+    // an empty rectangle -- so every ancestor has a say.
+    for (let node = el; node && node.nodeType === 1; node = node.parentElement) {
+      const style = getComputedStyle(node);
+      if (parseFloat(style.opacity) < 0.1) return false;
+      if (style.contentVisibility === "hidden") return false;
+      if (style.clip && style.clip !== "auto") {
+        const sides = (style.clip.match(/-?[\d.]+/g) || []).map(Number);   // rect(top, right, bottom, left)
+        if (sides.length === 4 && (sides[2] - sides[0] < 1 || sides[1] - sides[3] < 1)) return false;
+      }
+      const path = style.clipPath || "";
+      if (/inset\(\s*(100%|9\d(\.\d+)?%)/.test(path) || /circle\(\s*0/.test(path)) return false;
+    }
+
+    // Pushed outside the page: `left: -10000px`, or a long way past its end.
+    // Measured against the document, not the viewport, so a field below the
+    // fold -- which the person need only scroll to -- still counts.
+    const docX = r.left + window.scrollX, docY = r.top + window.scrollY;
+    const width = Math.max(document.documentElement.scrollWidth, window.innerWidth);
+    const height = Math.max(document.documentElement.scrollHeight, window.innerHeight);
+    if (docX + r.width <= 1 || docY + r.height <= 1 || docX >= width || docY >= height) return false;
+
+    // Inside a box that shows none of it: `height: 0; overflow: hidden` keeps
+    // a field in the document and out of sight. A box that can be scrolled to
+    // reveal it is left alone -- that is an ordinary long form in a panel.
+    for (let node = el.parentElement; node && node !== document.body && node !== document.documentElement; node = node.parentElement) {
+      const style = getComputedStyle(node);
+      if (style.overflow === "visible" && style.overflowX === "visible" && style.overflowY === "visible") continue;
+      const box = node.getBoundingClientRect();
+      if (box.width < 2 || box.height < 2) return false;
+      const outside = r.right <= box.left || r.left >= box.right || r.bottom <= box.top || r.top >= box.bottom;
+      const scrollable = node.scrollHeight > node.clientHeight + 1 || node.scrollWidth > node.clientWidth + 1;
+      if (outside && !scrollable) return false;
+    }
+
+    // Finally, what is at the middle of it? Something else there -- a sheet
+    // over the form, a label covering the box -- means that whatever this
+    // field is, it is not the one the person is typing into. Only asked
+    // inside the viewport: `elementFromPoint` knows nothing of the rest.
+    const x = r.left + r.width / 2, y = r.top + r.height / 2;
+    if (x >= 0 && y >= 0 && x <= window.innerWidth && y <= window.innerHeight) {
+      let hit = document.elementFromPoint(x, y);
+      // A custom element answers for the field in its shadow root.
+      while (hit && hit.shadowRoot && hit.shadowRoot.elementFromPoint) {
+        const inner = hit.shadowRoot.elementFromPoint(x, y);
+        if (!inner || inner === hit) break;
+        hit = inner;
+      }
+      if (!hit) return false;
+      if (hit !== el && !el.contains(hit) && !hit.contains(el)) return false;
+    }
+    return true;
   }
 
   function labelOf(el) {
@@ -35,10 +103,31 @@
     return "";
   }
 
-  // The fields of the form around `el`, or of the page when it has none.
+  const GROUPS = "form, fieldset, section, dialog, [role=form], [role=group]";
+
+  // What counts as "this field's form" when the page has no `<form>`, as
+  // one-page checkouts often do not: the nearest element above the field that
+  // groups it with other fields the person can see. Never the whole document
+  // -- a page with one visible box and a block of card fields hidden
+  // somewhere else in it would otherwise have us fill the lot.
+  function groupAround(el) {
+    if (el.form) return el.form;
+    let fallback = null;
+    for (let node = el.parentElement; node && node !== document.body && node !== document.documentElement; node = node.parentElement) {
+      const fields = Array.from(node.querySelectorAll("input, select, textarea")).filter((f) => isField(f) && (f === el || visible(f)));
+      if (fields.length < 2) continue;
+      if (node.matches(GROUPS)) return node;
+      if (!fallback) fallback = node;
+    }
+    // Nothing above it groups it with anything: this field on its own, then.
+    return fallback || el;
+  }
+
+  // The fields of the form around `el`, hidden ones left out.
   function fieldsAround(el) {
-    const scope = el.form || document;
-    return Array.from(scope.querySelectorAll("input, select, textarea")).filter((f) => isField(f) && (f === el || visible(f)));
+    const scope = groupAround(el);
+    const fields = Array.from(scope.querySelectorAll("input, select, textarea")).filter((f) => isField(f) && (f === el || visible(f)));
+    return fields.includes(el) ? fields : [el].concat(fields);
   }
 
   function describe(f) {
@@ -58,6 +147,10 @@
   document.addEventListener("focusin", (event) => {
     const el = event.target;
     if (!isField(el)) return;
+    // A field the person cannot see can still be focused -- by the page's own
+    // script, which is how a trap would open the list over nothing. Nothing
+    // is offered for it, and the list that was up goes away.
+    if (!visible(el)) { current = []; post({ kind: "dismiss" }); return; }
     current = fieldsAround(el);
     post({ kind: "focus", fields: current.map(describe), focused: current.indexOf(el), rect: rectOf(el), empty: !el.value });
   }, true);
@@ -66,9 +159,11 @@
     if (isField(event.target) && event.isTrusted) post({ kind: "input" });
   }, true);
 
-  // What was sent, so the app can offer to save an address or a card.
+  // What was sent, so the app can offer to save an address or a card. Only
+  // what the person could see: a hidden field the page filled in itself is
+  // not something they typed, and not something to offer to keep.
   function reportSubmit(form) {
-    const fields = Array.from(form.querySelectorAll("input, select, textarea")).filter(isField);
+    const fields = Array.from(form.querySelectorAll("input, select, textarea")).filter((f) => isField(f) && visible(f));
     if (fields.length) post({ kind: "submit", fields: fields.map(describe) });
   }
   document.addEventListener("submit", (event) => reportSubmit(event.target), true);
@@ -109,11 +204,21 @@
   }
 
   window.__simpleBrowserAutofill = {
-    fill(values) {
-      let filled = 0;
-      for (const [index, value] of Object.entries(values)) {
+    // `origin` is the origin the app meant to fill. Confirming a card can
+    // take a while, and this document may have been replaced in the meantime
+    // -- by the page itself, or by a frame navigating somewhere else -- so
+    // the address and the card go nowhere unless this is still that page.
+    // `location` is read in the agent's world, where page script cannot have
+    // redefined it. This is the same rule the password agent keeps.
+    fill(request) {
+      if (!request || typeof request.origin !== "string" || location.origin !== request.origin) return { filled: 0, refused: 0, reason: "wrong document" };
+      let filled = 0, refused = 0;
+      for (const [index, value] of Object.entries(request.values || {})) {
         const el = current[Number(index)];
         if (!el) continue;
+        // Asked again here, not only when the form was described: a page can
+        // hide a field, or lay something over it, the moment the list opens.
+        if (!visible(el)) { refused += 1; continue; }
         if (el.tagName === "SELECT") {
           const option = optionFor(el, value);
           if (!option) continue;
@@ -123,13 +228,7 @@
         }
         filled += 1;
       }
-      return filled;
-    },
-    fillFocused(value) {
-      const el = document.activeElement;
-      if (!isField(el)) return false;
-      setValue(el, value);
-      return true;
+      return { filled, refused };
     },
   };
 })();

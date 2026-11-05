@@ -132,7 +132,15 @@ final class AutofillSettingsPane: NSViewController, NSTableViewDataSource, NSTab
         passkeyLabel.stringValue = PasskeyAccess.status
         passkeyButton.isHidden = !PasskeyAccess.hasEntitlement || PasskeyAccess.state != .notDetermined
         Task { @MainActor in
-            contents = (try? await service()?.autofill?.contents()) ?? .init()
+            do {
+                contents = try await service()?.autofill?.contents() ?? .init()
+            } catch {
+                // An empty pair of lists would say "you have saved nothing",
+                // and adding anything here would then write over a file that
+                // is only unreadable. Say what happened instead.
+                contents = .init()
+                statusLabel.stringValue = "Your saved addresses and cards could not be read: \(PasswordCoordinator.describe(error))"
+            }
             addresses.reloadData()
             cards.reloadData()
         }

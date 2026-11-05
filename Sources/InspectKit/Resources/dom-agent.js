@@ -20,18 +20,76 @@
   };
 
   // ---- node registry -------------------------------------------------------
+  //
+  // `idsByNode` is the identity map and holds nothing: a node the page has
+  // dropped can be collected with its entry. `nodesById` is the way back from
+  // an id the UI is holding, and it is a cache, not a record -- a strong entry
+  // for every node the tools have ever touched (a DOM.search alone names up to
+  // 500) would pin detached subtrees for the document's lifetime and show up
+  // in the Memory panel and in heap-snapshot deltas as the page's own
+  // retention. In a tool for finding leaks, that is the worst possible lie.
+  // So the cache is bounded, the least recently used entry goes first, and
+  // detached nodes go before anything that is still in the document.
   const idsByNode = new WeakMap();
   const nodesById = new Map();
   let nextId = 1;
 
+  const MAX_NODES = 4000;
+  const KEEP_NODES = 3000;
+
+  // Nodes we took out of the document ourselves and must be able to put back:
+  // Delete node and Edit as HTML are undoable. Bounded like the UI's undo
+  // stack, so holding one of these is never for ever either.
+  const keepAlive = new Set();
+  const MAX_KEEP_ALIVE = 200;
+  function keepForUndo(node) {
+    keepAlive.add(node);
+    while (keepAlive.size > MAX_KEEP_ALIVE) keepAlive.delete(keepAlive.values().next().value);
+  }
+
+  // Can we still act on this node? In the document, or inside a template's
+  // content, which is a fragment and so never "connected".
+  function isLive(node) {
+    if (!node) return false;
+    if (node.isConnected) return true;
+    const root = node.getRootNode ? node.getRootNode() : null;
+    return !!root && root.nodeType === 11;
+  }
+
+  function prune() {
+    if (nodesById.size <= MAX_NODES) return;
+    for (const [id, node] of nodesById) if (!isLive(node) && !keepAlive.has(node)) nodesById.delete(id);
+    // Still over: the least recently used ids go. An id the UI asks about
+    // afterwards reports itself stale and the panel fetches the node again.
+    for (const [id, node] of nodesById) {
+      if (nodesById.size <= KEEP_NODES) break;
+      if (node === document || keepAlive.has(node)) continue;
+      nodesById.delete(id);
+    }
+  }
+
   function nodeId(node) {
     let id = idsByNode.get(node);
-    if (!id) { id = nextId++; idsByNode.set(node, id); nodesById.set(id, node); }
+    if (!id) { id = nextId++; idsByNode.set(node, id); }
+    // Re-entered at the end, so the Map's own order is least-recently-used
+    // first; a node whose cached entry was pruned simply gets it back.
+    nodesById.delete(id);
+    nodesById.set(id, node);
+    prune();
     return id;
   }
   function nodeFor(id) {
-    const node = nodesById.get(Number(id));
-    if (!node) throw new Error("Node " + id + " no longer exists");
+    const key = Number(id);
+    const node = nodesById.get(key);
+    if (!node) throw new Error("Node " + id + " is no longer in the inspector's registry; reload the panel");
+    if (!isLive(node) && !keepAlive.has(node)) {
+      // Detached: whatever this was, nobody can see it any more, and an edit
+      // applied to it would simply be lost. Say so, and let it go.
+      nodesById.delete(key);
+      throw new Error("Node " + id + " is no longer in the document");
+    }
+    nodesById.delete(key);
+    nodesById.set(key, node);
     return node;
   }
   function elementFor(id) {
@@ -769,7 +827,14 @@
     "DOM.setAttributesAsText": setAttributesAsText,
     "DOM.removeAttribute": ({ nodeId: id, name }) => { elementFor(id).removeAttribute(name); return describe(nodeFor(id), 0); },
     "DOM.setNodeValue": ({ nodeId: id, value }) => { nodeFor(id).nodeValue = value; return true; },
-    "DOM.removeNode": ({ nodeId: id }) => { const n = nodeFor(id); const parent = n.parentNode; n.remove(); return parent ? nodeId(parent) : null; },
+    // Kept after it leaves the document: Delete node is undoable.
+    "DOM.removeNode": ({ nodeId: id }) => {
+      const n = nodeFor(id);
+      const parent = n.parentNode;
+      keepForUndo(n);
+      n.remove();
+      return parent ? nodeId(parent) : null;
+    },
     "DOM.performSearch": performSearch,
     "DOM.getNodePath": ({ nodeId: id }) => {
       const path = []; let n = nodeFor(id);
@@ -828,6 +893,7 @@
       const tpl = document.createElement("template");
       tpl.innerHTML = outerHTML;
       const fresh = Array.from(tpl.content.childNodes);
+      keepForUndo(n);
       parent.replaceChild(tpl.content, n);
       return { parentId: nodeId(parent), newIds: fresh.map(nodeId) };
     },

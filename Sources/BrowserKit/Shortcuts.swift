@@ -56,10 +56,21 @@ public struct ShortcutCommand: Hashable, Sendable {
     public var chrome: String
     /// Handled by the window itself rather than the menu; not changeable.
     public var fixed: Bool
+    /// A second way of typing another command's key, by that command's id:
+    /// ⌘= is Zoom In's ⌘+ without Shift, which is how most keyboards write
+    /// it. An alias is not changeable on its own — it lives only while its
+    /// command keeps the key the catalogue gave it — but it is part of the
+    /// audit, so no other command can be given the same key behind its back.
+    public var aliasOf: String?
 
-    public init(_ id: String, _ title: String, menu: String, _ shortcut: KeyShortcut?, safari: String, chrome: String, fixed: Bool = false) {
+    public init(_ id: String, _ title: String, menu: String, _ shortcut: KeyShortcut?, safari: String, chrome: String, fixed: Bool = false,
+                aliasOf: String? = nil) {
         self.id = id; self.title = title; self.menu = menu; self.shortcut = shortcut; self.safari = safari; self.chrome = chrome; self.fixed = fixed
+        self.aliasOf = aliasOf
     }
+
+    /// A key that is another command's second spelling, not a command of its own.
+    public var isAlias: Bool { aliasOf != nil }
 }
 
 /// Every keyboard shortcut in the app, checked against each other and against
@@ -142,6 +153,8 @@ public enum Shortcuts {
         ShortcutCommand("stopLoading:", "Stop", menu: "View", KeyShortcut("."), safari: "⌘.", chrome: "⌘. / Esc"),
         ShortcutCommand("zoomReset:", "Actual Size", menu: "View", KeyShortcut("0"), safari: "⌘0", chrome: "⌘0"),
         ShortcutCommand("zoomIn:", "Zoom In", menu: "View", KeyShortcut("+"), safari: "⌘+", chrome: "⌘+"),
+        // The View menu carries a hidden twin of Zoom In for it: see MainMenu.
+        ShortcutCommand("zoomIn:unshifted", "Zoom In", menu: "View", KeyShortcut("="), safari: "⌘=", chrome: "⌘=", fixed: true, aliasOf: "zoomIn:"),
         ShortcutCommand("zoomOut:", "Zoom Out", menu: "View", KeyShortcut("-"), safari: "⌘-", chrome: "⌘-"),
         ShortcutCommand("toggleReader:", "Show Reader", menu: "View", KeyShortcut("r", [.command, .shift]), safari: "⇧⌘R", chrome: "—"),
         ShortcutCommand("translatePageTo:", "Translate Page", menu: "View", KeyShortcut("t", [.command, .option]), safari: "—", chrome: "—"),
@@ -181,8 +194,14 @@ public enum Shortcuts {
     /// change to nil takes the key away.
     public static func effective(overrides: [String: KeyShortcut?]) -> [String: KeyShortcut?] {
         var result: [String: KeyShortcut?] = [:]
-        for command in commands {
+        for command in commands where !command.isAlias {
             result[command.id] = command.fixed || standard.contains(command.id) ? command.shortcut : (overrides[command.id] ?? command.shortcut)
+        }
+        // A second spelling of another command's key goes when that key does:
+        // give Zoom In ⌘J, or take its key away, and ⌘= stops zooming too.
+        for alias in commands where alias.isAlias {
+            guard let primary = alias.aliasOf else { continue }
+            result[alias.id] = (result[primary] ?? nil) == command(primary)?.shortcut ? alias.shortcut : nil
         }
         return result
     }
@@ -221,7 +240,8 @@ public enum Shortcuts {
     /// The README's table, so the two cannot drift apart.
     public static func readmeTable() -> String {
         var lines = ["| Command | Keel | Safari | Chrome |", "|---|---|---|---|"]
-        for command in commands where !standard.contains(command.id) {
+        // An alias shares its command's row: ⌘= is not a command of its own.
+        for command in commands where !standard.contains(command.id) && !command.isAlias {
             let ours = command.id == "tab.select" ? "⌘1–⌘9" : command.id == "openProfileWindow:" ? "⌥⇧⌘1–9" : (command.shortcut?.display ?? "—")
             lines.append("| \(command.title) | \(ours) | \(command.safari) | \(command.chrome) |")
         }

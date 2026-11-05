@@ -178,6 +178,11 @@ final class AgentTrust {
 
     // MARK: - Files
 
+    /// Where the trust layer's own files live: clients.json, rules.json,
+    /// settings.json and the session logs. Nothing an agent writes may land
+    /// inside it.
+    var stateDirectory: URL { directory }
+
     private var clientsFile: URL { directory.appendingPathComponent("clients.json") }
     private var rulesFile: URL { directory.appendingPathComponent("rules.json") }
     private var settingsFile: URL { directory.appendingPathComponent("settings.json") }
@@ -314,16 +319,33 @@ final class AgentTrust {
 
     /// The live session of a client, begun on its first call.
     func session(for client: PairedClient, transport: String?) -> Live {
+        // An Mcp-Session-Id is not a credential: a client presenting another
+        // client's id gets its own session, never that one's tabs, borrowed
+        // identity, budgets and standing approvals.
         if let transport, let live = sessions.values.first(where: { $0.transportIDs.contains(transport) }),
-           live.session.state != .stopped {
+           live.session.clientID == client.id, live.session.state != .stopped {
             return live
         }
         if let live = sessions.values.first(where: { $0.session.clientID == client.id && $0.session.state != .stopped }) {
             if let transport { live.transportIDs.insert(transport) }
             return live
         }
-        var session = AgentSession(clientID: client.id, clientName: AgentServer.friendlyName(client.name), mode: .sandbox,
+        // The identity the pairing dialog and Settings chose for this client.
+        // Borrowed means "the person's profile, on the origins they named",
+        // so a client with no allowlist — or whose origins are never
+        // lendable — begins in the sandbox rather than borrowing everything.
+        var mode = SessionMode.sandbox
+        if client.defaultMode == .borrowed {
+            let lendable = client.allowedOrigins.map(Origin.normalize).filter { !NeverLendable.contains($0) && rules.rule(for: $0) != .never }
+            if !lendable.isEmpty { mode = .borrowed(origins: lendable, expires: nil) }
+        }
+        var session = AgentSession(clientID: client.id, clientName: AgentServer.friendlyName(client.name), mode: mode,
                                    policy: client.approvalPolicy, budgets: client.budgets, allowedOrigins: client.allowedOrigins)
+        // Only a scripted run (`--agent-approve`, which answers its own
+        // cards) drives a fixture site on this Mac; a session the person
+        // paired reaches loopback and the local network only where they
+        // lent or allowlisted the origin.
+        session.allowsLocalNetwork = autoAnswer != nil
         while sessions[session.id] != nil { session.id = AgentSession.makeID() }
         if client.paused { session.state = .paused }
         let live = Live(session: session)
@@ -333,7 +355,7 @@ final class AgentTrust {
             live.session.mode = .borrowed(origins: [origin], expires: nil)
             live.adopt(tab)
         }
-        history.insert(SessionRecord(id: session.id, client: session.clientName, mode: "sandbox", started: session.started, ended: nil,
+        history.insert(SessionRecord(id: session.id, client: session.clientName, mode: session.mode.kind.rawValue, started: session.started, ended: nil,
                                      actions: 0, lastSummary: "Connected", outcome: "running", logFile: logFile(for: session).lastPathComponent), at: 0)
         saveHistory()
         changed()
@@ -357,10 +379,13 @@ final class AgentTrust {
     /// Appends to the session's log and its file, which only ever grows.
     @discardableResult
     func audit(_ live: Live, tool: String, arguments: JSONValue, url: URL?, outcome: AuditEntry.Outcome, errorCode: String? = nil,
-               summary: String? = nil, milliseconds: Int = 0, resultTokens: Int = 0) -> AuditEntry {
-        let entry = live.log.append(sessionID: live.session.id, clientName: live.session.clientName, tool: tool, arguments: Self.redact(arguments),
+               summary: String? = nil, milliseconds: Int = 0, resultTokens: Int = 0, holdsSecret: Bool = false) -> AuditEntry {
+        // The summary is built from the redacted arguments too: it names the
+        // target, and for a `type_text` the text typed is the target.
+        let safe = Self.redact(arguments, secret: holdsSecret)
+        let entry = live.log.append(sessionID: live.session.id, clientName: live.session.clientName, tool: tool, arguments: safe,
                                     url: url?.absoluteString, outcome: outcome, errorCode: errorCode,
-                                    summary: summary ?? AuditSummary.describe(tool: tool, arguments: arguments),
+                                    summary: summary ?? AuditSummary.describe(tool: tool, arguments: safe),
                                     milliseconds: milliseconds, resultTokens: resultTokens)
         let file = logFile(for: live.session)
         if let handle = try? FileHandle(forWritingTo: file) {
@@ -384,14 +409,18 @@ final class AgentTrust {
         return entry
     }
 
-    /// Passwords and card numbers an agent typed are not written to disk.
-    static func redact(_ arguments: JSONValue) -> JSONValue {
+    /// Passwords and card numbers an agent typed are not written to disk. A
+    /// card number gives itself away by its shape; a password looks like any
+    /// other word, so `secret` carries the classifier's verdict on the field
+    /// itself — the same signal that raised the `.credential` card — and the
+    /// value goes whatever it looks like.
+    static func redact(_ arguments: JSONValue, secret: Bool = false) -> JSONValue {
         guard var object = arguments.object else { return arguments }
         for key in ["value", "text"] {
-            if let value = object[key]?.string, ActionClassifier.looksLikeSecret(value) { object[key] = "••••" }
+            if let value = object[key]?.string, secret || ActionClassifier.looksLikeSecret(value) { object[key] = "••••" }
         }
         if let fields = object["fields"]?.array {
-            object["fields"] = .array(fields.map { redact($0) })
+            object["fields"] = .array(fields.map { redact($0, secret: secret) })
         }
         return .object(object)
     }

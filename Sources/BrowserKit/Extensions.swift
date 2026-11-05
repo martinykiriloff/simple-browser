@@ -82,8 +82,21 @@ public enum ExtensionSiteAccess: Codable, Equatable, Sendable {
         case .allRequested: return requested
         case .onClick: return []
         case .sites(let hosts):
-            return Set(hosts.flatMap { host in ["*://\(host)/*", "*://*.\(host)/*"] })
+            // Narrowing only: a host typed in Settings can take reach away
+            // from an extension, never give it reach its manifest never
+            // asked for and the prompt never named.
+            let asked = requested.compactMap(ExtensionPermissionWording.host(of:))
+            return Set(hosts.filter { host in asked.contains { Self.covers($0, host) } }
+                .flatMap { host in ["*://\(host)/*", "*://*.\(host)/*"] })
         }
+    }
+
+    /// Whether a host an extension asked for takes in a host chosen for it:
+    /// "*" takes in every site, and a site takes in its own subdomains.
+    private static func covers(_ asked: String, _ chosen: String) -> Bool {
+        let asked = asked.lowercased(), chosen = chosen.lowercased()
+        if asked == "*" { return true }
+        return asked == chosen || chosen.hasSuffix("." + asked)
     }
 }
 

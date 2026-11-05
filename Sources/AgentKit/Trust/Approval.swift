@@ -85,12 +85,27 @@ public enum ActionClassifier {
             if mode == .borrowed, action != "list", action != "get" {
                 return .consequential(.delete, reason: "Changes cookies or storage of your signed-in session.")
             }
+            // Reading them changes nothing, but a signed-in session's
+            // cookies are the sign-in: whoever holds them is the person
+            // until they expire. Handing them to an agent asks, every time.
+            if mode == .borrowed, arguments["area"]?.string == "cookies" {
+                return .consequential(.credential, reason: "Reads the cookies of your signed-in session, HttpOnly ones included, which are as good as your password.")
+            }
             return .safe
         case "evaluate":
             return mode == .borrowed
                 ? .consequential(.script, reason: "Runs JavaScript inside your signed-in session, where it can do anything you can.")
                 : .safe
         case "mock_network":
+            // An override answers the page's own requests with a status,
+            // headers and a body of the agent's choosing, and may reload the
+            // page onto them; a block decides what the page may not load. In
+            // a borrowed session that is `evaluate` by another name, so it
+            // asks the same way. Listing and clearing only report or undo.
+            let action = arguments["action"]?.string ?? "list"
+            if mode == .borrowed, action != "list", action != "clear" {
+                return .consequential(.script, reason: "Serves content you choose into your signed-in session, where it runs with everything the real site has.")
+            }
             return .safe
         default:
             return .safe

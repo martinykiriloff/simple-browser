@@ -74,13 +74,36 @@ public struct SessionSnapshot: Codable, Equatable, Sendable {
 
     /// Windows whose profile still exists, with tabs that show something,
     /// and a selection that points at one of them.
+    ///
+    /// Dropping a tab moves every tab after it one place forward, so the
+    /// indices that point at tabs are remapped rather than clamped: clamping
+    /// brings back the wrong tab in front, and leaves a tab shown beside the
+    /// one before it in a split beside whichever tab has taken that place —
+    /// two pages that were never side by side.
     public func restorable(profiles: Set<ProfileID>) -> [Window] {
         windows.compactMap { window in
             guard profiles.contains(window.profileID) else { return nil }
+            var kept: [Tab] = []
+            /// Where each tab that is kept ended up, by the index it had.
+            var moved: [Int: Int] = [:]
+            for (index, tab) in window.tabs.enumerated() where tab.url != nil || tab.state != nil {
+                moved[index] = kept.count
+                kept.append(tab)
+            }
+            guard !kept.isEmpty else { return nil }
+            // A split whose other side is gone comes back as an ordinary
+            // tab: the pair is only rebuilt when both tabs are still here,
+            // and still next to each other.
+            for (index, tab) in window.tabs.enumerated() {
+                guard tab.besidePrevious, let now = moved[index] else { continue }
+                if now == 0 || index == 0 || moved[index - 1] != now - 1 { kept[now].besidePrevious = false }
+            }
             var copy = window
-            copy.tabs = window.tabs.filter { $0.url != nil || $0.state != nil }
-            guard !copy.tabs.isEmpty else { return nil }
-            copy.selected = min(max(0, window.selected), copy.tabs.count - 1)
+            copy.tabs = kept
+            // The tab that was in front, where it is now; dropped, the first
+            // tab after it that was kept, and failing that the last of them.
+            let before = window.tabs.prefix(max(0, window.selected)).filter { $0.url != nil || $0.state != nil }.count
+            copy.selected = min(before, kept.count - 1)
             return copy
         }
     }

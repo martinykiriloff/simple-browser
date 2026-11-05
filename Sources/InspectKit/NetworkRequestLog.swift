@@ -169,6 +169,11 @@ public final class NetworkRequestLog {
     private var indexByID: [UUID: Int] = [:]
     /// How far apart two observations of one request may start.
     public var mergeWindow: TimeInterval = 5
+    /// The most rows we keep. A row can hold a whole response body -- up to a
+    /// 40MB data URL -- so a long-lived page that polls would otherwise grow
+    /// the log until the app runs out of memory. The oldest rows go first,
+    /// as in Chrome's own capped network log.
+    public var limit = 1000
 
     public init() {}
 
@@ -187,7 +192,20 @@ public final class NetworkRequestLog {
         let request = NetworkRequest(event: event)
         requests.append(request)
         indexByID[event.id] = requests.count - 1
+        trim()
         return .added(request)
+    }
+
+    /// Drops the oldest rows once the log is over its limit. Every index in
+    /// `indexByID` shifts, so the map is rebuilt from the rows themselves --
+    /// each row answers to the id of every event that was merged into it.
+    private func trim() {
+        guard limit > 0, requests.count > limit else { return }
+        requests.removeFirst(requests.count - limit)
+        indexByID.removeAll(keepingCapacity: true)
+        for (index, request) in requests.enumerated() {
+            for eventID in request.eventIDs { indexByID[eventID] = index }
+        }
     }
 
     public func request(id: UUID) -> NetworkRequest? {

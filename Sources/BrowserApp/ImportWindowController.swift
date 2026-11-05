@@ -80,6 +80,9 @@ final class ImportWindowController: NSWindowController {
         spinner.isDisplayedWhenStopped = false
         resultLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         enginePopUp.addItems(withTitles: SearchEngine.all.map(\.name))
+        // The rows are filled again in `show`, which may add one the person
+        // cannot choose; the menu must not enable it again behind our back.
+        enginePopUp.menu?.autoenablesItems = false
         enginePopUp.target = self
         enginePopUp.action = #selector(engineChanged(_:))
         enginePopUp.setAccessibilityLabel("Search engine")
@@ -167,8 +170,22 @@ final class ImportWindowController: NSWindowController {
             : "Bookmarks, history, open tabs and passwords, straight from the other browser’s files. Nothing already here is duplicated."
         for view in firstRunRows { view.isHidden = !firstRun }
         doneButton.title = firstRun ? "Start Browsing" : "Done"
+        // An engine of the person's own (Settings → General) is none of the
+        // built-in rows, so it gets a row of its own, named after its site:
+        // without it the pop-up would say DuckDuckGo while the setting said
+        // otherwise. The row is not chooseable here — only Settings has the
+        // box to type the address in — but picking a built-in engine still
+        // replaces it.
         let current = BrowserSettings.searchEngine
-        enginePopUp.selectItem(at: SearchEngine.all.firstIndex { $0.id == current.id } ?? 0)
+        enginePopUp.removeAllItems()
+        enginePopUp.addItems(withTitles: SearchEngine.all.map(\.name))
+        if let index = SearchEngine.all.firstIndex(where: { $0.id == current.id }) {
+            enginePopUp.selectItem(at: index)
+        } else {
+            enginePopUp.addItem(withTitle: "Custom — \(current.name)")
+            enginePopUp.lastItem?.isEnabled = false
+            enginePopUp.selectItem(at: enginePopUp.numberOfItems - 1)
+        }
         syncDefault()
         resultLabel.stringValue = ""
         lastResult = nil

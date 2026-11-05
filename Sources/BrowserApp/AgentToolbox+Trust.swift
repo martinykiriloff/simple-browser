@@ -43,11 +43,21 @@ extension AgentToolbox {
         var destination: URL?
         if name == "navigate", (a["action"]?.string ?? "goto") == "goto", let text = a["url"]?.string { destination = BrowserSettings.destination(for: text) }
         if name == "new_tab", let text = a["url"]?.string, !text.isEmpty { destination = BrowserSettings.destination(for: text) }
+        // Back and forward name no URL, so the origin checks and the
+        // navigation budget would never see them; the history item does.
+        if name == "navigate", let action = a["action"]?.string, action == "back" || action == "forward" {
+            let history = target?.pageWebView.backForwardList
+            destination = action == "back" ? history?.backItem?.url : history?.forwardItem?.url
+        }
+
+        // Set by the approval step when the target turned out to be a
+        // password or a card field: the log keeps the value out either way.
+        var holdsSecret = false
 
         func finish(_ result: MCPToolResult, outcome: AuditEntry.Outcome, code: String? = nil, summary: String? = nil) -> MCPToolResult {
             let ms = Int(Date().timeIntervalSince(started) * 1000)
             trust.audit(live, tool: name, arguments: a, url: target?.currentURL ?? destination, outcome: outcome, errorCode: code,
-                        summary: summary, milliseconds: ms, resultTokens: TokenEstimate.count(result.text))
+                        summary: summary, milliseconds: ms, resultTokens: TokenEstimate.count(result.text), holdsSecret: holdsSecret)
             onActivity?("\(live.session.clientName) · \(name)\(result.isError ? " ✗" : "") · \(ms) ms")
             return result
         }
@@ -63,9 +73,13 @@ extension AgentToolbox {
         }
 
         // Consequential? Decide with what the page says about the target.
-        if !readOnly, let decision = await approve(name, a, live: live, tab: target, pageTool: pageTool?.tool) {
-            return finish(decision.result, outcome: decision.code == .approvalDenied || decision.code == .approvalTimeout ? .denied : .blocked,
-                          code: decision.code.rawValue)
+        if !readOnly {
+            let gate = await approve(name, a, live: live, tab: target, pageTool: pageTool?.tool)
+            holdsSecret = gate.holdsSecret
+            if let refused = gate.refusal {
+                return finish(refused.result, outcome: refused.code == .approvalDenied || refused.code == .approvalTimeout ? .denied : .blocked,
+                              code: refused.code.rawValue)
+            }
         }
 
         // Run it.
@@ -97,9 +111,18 @@ extension AgentToolbox {
 
     // MARK: - Approval
 
-    /// Nil when the call may go ahead; else the refusal the agent gets.
-    private func approve(_ name: String, _ a: JSONValue, live: AgentTrust.Live, tab: BrowserWindowController?, pageTool: PageTool?) async -> AgentError? {
-        guard let trust else { return nil }
+    /// What the approval step decided: the refusal the agent gets, if any,
+    /// and whether the call’s arguments hold a secret, so that the log keeps
+    /// none of it even when the value looks like nothing in particular.
+    struct ApprovalOutcome {
+        var refusal: AgentError?
+        var holdsSecret = false
+    }
+
+    /// Nothing set when the call may go ahead; else the refusal the agent gets.
+    private func approve(_ name: String, _ a: JSONValue, live: AgentTrust.Live, tab: BrowserWindowController?, pageTool: PageTool?) async -> ApprovalOutcome {
+        var gate = ApprovalOutcome()
+        guard let trust else { return gate }
         var risk = ActionClassifier.risk(tool: name, arguments: a, mode: live.session.mode.kind)
         var targetText = ""
         var ref = a["ref"]?.string
@@ -109,14 +132,28 @@ extension AgentToolbox {
         }
         if let tab, Self.elementTools.contains(name) {
             if name == "fill_form" {
+                var last: ElementFacts?
                 for field in a["fields"]?.array ?? [] {
                     guard let facts = try? await elementFacts(tab, field) else { continue }
+                    last = facts
                     let fieldRisk = ActionClassifier.risk(tool: "fill", element: facts, typedText: field["value"]?.string)
                     if fieldRisk != .safe { risk = fieldRisk; targetText = "“\(facts.name)” [ref=\(facts.ref ?? "?")]"; ref = facts.ref; break }
                 }
+                // submit presses Enter in the last field, which submits its
+                // form: the same card the single-field branch below shows,
+                // decided from that field’s form rather than from the typing.
+                if risk == .safe, a["submit"]?.bool == true, let facts = last {
+                    let submitRisk = ActionClassifier.risk(tool: "click", element: ElementFacts(role: "button", name: "submit", type: "submit",
+                                                                                                formMethod: facts.formMethod, formFields: facts.formFields))
+                    if submitRisk != .safe {
+                        risk = submitRisk
+                        targetText = "submitting the form of “\(facts.name)” [ref=\(facts.ref ?? "?")]"
+                        ref = facts.ref
+                    }
+                }
             } else {
                 // A target that cannot be found fails on its own, with its own error.
-                guard let facts = try? await elementFacts(tab, Self.hasTarget(a) ? a : [:]) else { return nil }
+                guard let facts = try? await elementFacts(tab, Self.hasTarget(a, tool: name) ? a : [:]) else { return gate }
                 let typed = a["value"]?.string ?? a["text"]?.string ?? a["key"]?.string
                 let elementRisk = ActionClassifier.risk(tool: name, element: facts, typedText: typed)
                 if elementRisk != .safe { risk = elementRisk }
@@ -129,41 +166,71 @@ extension AgentToolbox {
                     if submitRisk != .safe { risk = submitRisk }
                 }
             }
+            // A password or a card number is in the arguments of the tool
+            // that types it, and nowhere else: on a click, `text` is the name
+            // of the button, which the log should keep.
+            if ["fill", "fill_form", "type_text"].contains(name), risk.kind == .credential || risk.kind == .payment {
+                gate.holdsSecret = true
+            }
         }
         if name == "handle_dialog", let tab, let dialog = tab.pageDialog, a["accept"]?.bool ?? true {
             let dialogRisk = ActionClassifier.risk(tool: "click", element: ElementFacts(role: "button", name: dialog.message))
             if dialogRisk != .safe { risk = dialogRisk; targetText = "OK in the dialog “\(dialog.message.prefix(80))”" }
         }
-        if name == "upload_files" { targetText = (a["paths"]?.array?.compactMap(\.string).map { ($0 as NSString).lastPathComponent }.joined(separator: ", ")).map { "\($0)" } ?? "files" }
+        // The whole path, not the file’s name: "report.pdf" says nothing
+        // about which report, or that it came from ~/Documents/Tax.
+        if name == "upload_files" {
+            let paths = a["paths"]?.array?.compactMap(\.string).map { ($0 as NSString).expandingTildeInPath } ?? []
+            targetText = paths.isEmpty ? "files" : paths.joined(separator: ", ")
+        }
         if name == "evaluate" { targetText = "JavaScript on the page" }
         if name == "storage" { targetText = "cookies or storage" }
+        if name == "mock_network" { targetText = "the page’s own requests" }
 
         // Text on the page addressed to agents makes any acting step ask.
         let instruction = tab?.agentState?.injection
         if risk == .safe, instruction != nil, trust.settings.pageInstructionsAlwaysAsk, Self.elementTools.contains(name) {
             risk = .consequential(.send, reason: "This page contains text that tries to instruct AI agents, so every action on it asks first.")
         }
-        guard risk != .safe else { return nil }
+        guard risk != .safe else { return gate }
         let origin = tab?.currentURL.flatMap(Origin.of)
-        if let refusal = live.session.refusal(risk, origin: origin, rules: trust.rules) { return refusal }
-        guard live.session.needsApproval(risk, origin: origin, rules: trust.rules) else { return nil }
+        if let refusal = live.session.refusal(risk, origin: origin, rules: trust.rules) {
+            gate.refusal = refusal
+            return gate
+        }
+        guard live.session.needsApproval(risk, origin: origin, rules: trust.rules) else { return gate }
         if targetText.isEmpty { targetText = AuditSummary.describe(tool: name, arguments: a).lowercased() }
 
-        if let tab, ref != nil || Self.hasTarget(a) {
-            _ = try? await automation(tab, "spotlight", .object(Self.targetParams(a).object!.merging(["label": .string("\(ref ?? "") · \(live.session.clientName)"), "waiting": true]) { x, _ in x }))
+        if let tab, ref != nil || Self.hasTarget(a, tool: name) {
+            _ = try? await automation(tab, "spotlight", .object(Self.targetParams(a, tool: name).object!.merging(["label": .string("\(ref ?? "") · \(live.session.clientName)"), "waiting": true]) { x, _ in x }))
         }
         let decision = await trust.requestApproval(live, tool: name, risk: risk, origin: origin, target: targetText, ref: ref, tab: tab, pageInstruction: instruction)
         if let tab { _ = try? await automation(tab, "clearSpotlight") }
         switch decision {
         case .allowOnce, .allowOnOrigin:
-            trust.audit(live, tool: name, arguments: a, url: tab?.currentURL, outcome: .approved, summary: "You allowed: \(targetText)")
-            return nil
+            // The card named one page, and answering it may take as long as
+            // the approval timeout. A script, a redirect or the person can
+            // move the tab on in the meantime, and the answer does not
+            // travel with it: the action is dropped and has to be asked for
+            // again where it would now land.
+            let landing = tab?.currentURL.flatMap(Origin.of)
+            if tab != nil, landing != origin {
+                trust.audit(live, tool: name, arguments: a, url: tab?.currentURL, outcome: .blocked,
+                            summary: "Allowed on \(origin ?? "the page") but the tab had moved to \(landing ?? "another page"): not taken", holdsSecret: gate.holdsSecret)
+                gate.refusal = AgentError(.originBlocked, "The tab moved from \(origin ?? "the page the person was asked about") to \(landing ?? "another page") while they were answering, so the action was not taken. Snapshot the page and ask again if it still applies.")
+                return gate
+            }
+            trust.audit(live, tool: name, arguments: a, url: tab?.currentURL, outcome: .approved, summary: "You allowed: \(targetText)", holdsSecret: gate.holdsSecret)
+            return gate
         case .deny:
-            return AgentError(.approvalDenied, "The person denied this action (\(risk.kind?.label ?? "a consequential action")). Do not retry it; tell them what you were trying to do, or continue another way.")
+            gate.refusal = AgentError(.approvalDenied, "The person denied this action (\(risk.kind?.label ?? "a consequential action")). Do not retry it; tell them what you were trying to do, or continue another way.")
+            return gate
         case .timedOut:
-            return AgentError(.approvalTimeout, "The person did not answer within \(trust.settings.approvalTimeoutSeconds) s, so the action was not taken. The tab stays paused at this step.")
+            gate.refusal = AgentError(.approvalTimeout, "The person did not answer within \(trust.settings.approvalTimeoutSeconds) s, so the action was not taken. The tab stays paused at this step.")
+            return gate
         case .stop:
-            return AgentError(.sessionStopped, "The person stopped this agent and revoked its access.")
+            gate.refusal = AgentError(.sessionStopped, "The person stopped this agent and revoked its access.")
+            return gate
         }
     }
 

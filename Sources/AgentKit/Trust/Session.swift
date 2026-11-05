@@ -90,6 +90,11 @@ public struct AgentSession: Sendable, Equatable, Identifiable {
     /// Strict mode (T3): navigation only to these origins. Empty: anywhere
     /// (a borrowed session is always limited to its origins).
     public var allowedOrigins: [String]
+    /// Whether this session may reach this Mac and its local network without
+    /// the person naming the origin. Only a scripted self-test run
+    /// (`--agent-approve`) sets it: it drives a fixture site on 127.0.0.1 in
+    /// a plain sandbox session. Nothing the person can switch on does.
+    public var allowsLocalNetwork = false
     public var started: Date
     public var state: State = .running
     public private(set) var actions = 0
@@ -148,9 +153,7 @@ public struct AgentSession: Sendable, Equatable, Identifiable {
                               : "The session reached its \(budgets.timeLimitMinutes)-minute limit.")
         }
         if let destination = call.destination, let problem = originProblem(destination) { return problem }
-        if let page = call.pageURL, page.scheme?.hasPrefix("http") == true, mode.kind == .borrowed, !Origin.matches(page, any: mode.origins) {
-            return AgentError(.originBlocked, "\(Origin.of(page) ?? page.absoluteString) is not one of the origins lent to this session.")
-        }
+        if let page = call.pageURL, page.scheme?.hasPrefix("http") == true, let problem = pageProblem(page) { return problem }
         if call.readOnly { return nil }
         guard actions < budgets.maxActions else {
             return AgentError(.budgetExhausted, "This session used all \(budgets.maxActions) actions. Ask the person to raise the budget or start a new session.")
@@ -178,7 +181,53 @@ public struct AgentSession: Sendable, Equatable, Identifiable {
         if !allowedOrigins.isEmpty, !Origin.matches(destination, any: allowedOrigins) {
             return AgentError(.originBlocked, "\(Origin.of(destination) ?? destination.absoluteString) is not on this agent's allowlist. Navigation was blocked and logged.")
         }
+        let named = isNamed(destination)
+        if !named, let problem = localNetworkProblem(destination) { return problem }
+        // Origins are kept and compared without their scheme, which is how
+        // the rules are persisted, so an origin lent from an https page
+        // matches plain http on the same host just as well: the person's
+        // cookies in clear, and anyone on the way able to answer for the
+        // site. Until the stored form carries its scheme, a session limited
+        // to named origins refuses http on a host out on the internet. This
+        // Mac and the local network are unaffected, so a lent
+        // http://localhost:3000 still works for development.
+        if named, scheme == "http", !LocalNetwork.contains(destination) {
+            return AgentError(.originBlocked, "\(Origin.of(destination) ?? destination.absoluteString) over plain http is not the origin that was lent or allowlisted, which was https. Use https.")
+        }
         return nil
+    }
+
+    /// The page a call acts on or reads. Checked for every call, whatever the
+    /// mode: a redirect, a meta refresh or a script moves the tab between
+    /// calls, and the destination check never sees where it ended up.
+    public func pageProblem(_ page: URL) -> AgentError? {
+        if mode.kind == .borrowed, !Origin.matches(page, any: mode.origins) {
+            return AgentError(.originBlocked, "\(Origin.of(page) ?? page.absoluteString) is not one of the origins lent to this session.")
+        }
+        if !allowedOrigins.isEmpty, !Origin.matches(page, any: allowedOrigins) {
+            return AgentError(.originBlocked, "\(Origin.of(page) ?? page.absoluteString) is not on this agent's allowlist, so the page the tab is on is out of reach. Navigate back to an allowed origin.")
+        }
+        if !isNamed(page), let problem = localNetworkProblem(page) { return problem }
+        return nil
+    }
+
+    /// Whether the person named this origin for this session: lent it, or put
+    /// it on the allowlist.
+    func isNamed(_ url: URL) -> Bool {
+        (!mode.origins.isEmpty && Origin.matches(url, any: mode.origins))
+            || (!allowedOrigins.isEmpty && Origin.matches(url, any: allowedOrigins))
+    }
+
+    /// This Mac's own services, the network it is on, and the link-local
+    /// range that holds the cloud metadata endpoints: an agent reaches none
+    /// of them unless the person named the origin. Otherwise a page that
+    /// misled the agent turns it into a way into a development server, a
+    /// router's admin page or 169.254.169.254, none of which asks who is
+    /// calling.
+    func localNetworkProblem(_ url: URL) -> AgentError? {
+        guard !allowsLocalNetwork, LocalNetwork.contains(url) else { return nil }
+        let host = url.host(percentEncoded: false) ?? url.absoluteString
+        return AgentError(.originBlocked, "\(host) is on this Mac or its local network. An agent may only reach it when the person lends or allowlists that origin.")
     }
 
     // MARK: Approval
@@ -186,7 +235,11 @@ public struct AgentSession: Sendable, Equatable, Identifiable {
     /// Whether an action of this risk needs the person's OK now.
     public func needsApproval(_ risk: ActionRisk, origin: String?, rules: OriginRules = OriginRules(), now: Date = Date()) -> Bool {
         guard case .consequential(let kind, _) = risk else { return false }
-        if kind == .crossProfile { return true }
+        // Reaching another profile, and sending files off this Mac into a
+        // page, are never waved through by a policy or an origin rule: a
+        // sandbox is no protection when the file comes from outside it, and
+        // "allow" on an origin was never a promise about the person's disk.
+        if kind == .crossProfile || kind == .upload { return true }
         if let origin, let rule = rules.rule(for: origin, now: now) {
             switch rule {
             case .never: return true   // `refusal` refuses it before it gets here
@@ -235,6 +288,58 @@ public struct AgentSession: Sendable, Equatable, Identifiable {
     }
 
     static func key(_ kind: ActionRisk.Kind, _ origin: String) -> String { "\(kind.rawValue)@\(origin)" }
+}
+
+/// Hosts that are not out on the internet: this Mac, the network it is on,
+/// and the link-local range. A page can point an agent at them — a link, a
+/// redirect, text that reads like an instruction — to have it read a
+/// development server, a NAS, a router or a cloud metadata endpoint, which
+/// answer whoever asks because they expect to be asked only from here.
+public enum LocalNetwork {
+    public static func contains(_ url: URL) -> Bool {
+        guard let host = url.host(percentEncoded: false) else { return false }
+        return contains(host)
+    }
+
+    public static func contains(_ host: String) -> Bool {
+        var host = host.lowercased()
+        if host.hasPrefix("["), host.hasSuffix("]") { host = String(host.dropFirst().dropLast()) }
+        guard !host.isEmpty else { return false }
+        if host == "localhost" || host.hasSuffix(".localhost") { return true }
+        // mDNS: the names the local network answers for itself.
+        if host == "local" || host.hasSuffix(".local") { return true }
+        if let address = octets(of: host) { return isPrivate(address) }
+        if host.contains(":") { return isPrivateIPv6(host) }
+        return false
+    }
+
+    static func octets(of host: String) -> [Int]? {
+        let parts = host.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 4 else { return nil }
+        let numbers = parts.compactMap { Int($0) }
+        guard numbers.count == 4, numbers.allSatisfy({ (0...255).contains($0) }) else { return nil }
+        return numbers
+    }
+
+    /// Loopback and "this host", the three RFC1918 ranges, carrier-grade NAT,
+    /// and link-local (169.254.0.0/16, which is where 169.254.169.254 lives).
+    static func isPrivate(_ address: [Int]) -> Bool {
+        switch (address[0], address[1]) {
+        case (0, _), (127, _), (10, _), (169, 254), (192, 168): return true
+        case (172, 16...31), (100, 64...127): return true
+        default: return false
+        }
+    }
+
+    /// ::1 and ::, unique-local (fc00::/7), link-local (fe80::/10), and an
+    /// IPv4 address written as ::ffff:127.0.0.1.
+    static func isPrivateIPv6(_ host: String) -> Bool {
+        if host == "::1" || host == "::" { return true }
+        let groups = host.split(separator: ":").map(String.init)
+        if let mapped = groups.last, let address = octets(of: mapped) { return isPrivate(address) }
+        guard let first = groups.first, let group = Int(first, radix: 16) else { return false }
+        return group & 0xfe00 == 0xfc00 || group & 0xffc0 == 0xfe80
+    }
 }
 
 /// Origins as the trust layer compares them: scheme-less host[:port],

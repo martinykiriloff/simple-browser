@@ -1,13 +1,6 @@
 import AppKit
 import WebKit
 
-/// Replies the developer-extension panels need from the app: things a page
-/// cannot do (sample the screen, reach a Node inspector port, read a PHP
-/// profiler's data without CORS, call Claude with a key the page never sees)
-/// and calls into the page-world hooks for React and the dataLayer.
-@MainActor
-private var claudeStreams: [String: any ClaudeAnswer] = [:]
-
 /// An answer being streamed in, by either backend.
 protocol ClaudeAnswer: AnyObject { func cancel() }
 extension ClaudeStream: ClaudeAnswer {}
@@ -28,6 +21,10 @@ enum ClaudeBackend: String {
     }
 }
 
+/// Replies the developer-extension panels need from the app: things a page
+/// cannot do (sample the screen, reach a Node inspector port, read a PHP
+/// profiler's data without CORS, call Claude with a key the page never sees)
+/// and calls into the page-world hooks for React and the dataLayer.
 extension DevToolsController {
 
     static func isExtensionMethod(_ method: String) -> Bool {
@@ -80,9 +77,12 @@ extension DevToolsController {
                 let box = SendablePayload(payload)
                 Task { @MainActor in
                     self?.emit("Claude.event", ["id": id, "kind": kind, "payload": box.value])
-                    if kind == "done" || kind == "error" { claudeStreams[id] = nil }
+                    if kind == "done" || kind == "error" { self?.claudeStreams[id] = nil }
                 }
             }
+            // The ids come from the UI's clock; never leave a subprocess
+            // running because a new answer took its id.
+            claudeStreams[id]?.cancel()
             claudeStreams[id] = stream
             try stream.start(path: path, system: params["system"] as? String ?? "", messages: params["messages"] as? [[String: Any]] ?? [],
                              effort: params["effort"] as? String ?? "medium")
@@ -94,20 +94,32 @@ extension DevToolsController {
                 let box = SendablePayload(payload)
                 Task { @MainActor in
                     self?.emit("Claude.event", ["id": id, "kind": kind, "payload": box.value])
-                    if kind == "done" || kind == "error" { claudeStreams[id] = nil }
+                    if kind == "done" || kind == "error" { self?.claudeStreams[id] = nil }
                 }
             }
+            claudeStreams[id]?.cancel()
             claudeStreams[id] = stream
             try stream.start(key: key, system: params["system"] as? String ?? "", messages: params["messages"] as? [[String: Any]] ?? [],
                              effort: params["effort"] as? String ?? "medium")
             return ["id": id]
         case "Claude.cancel":
-            if let id = params["id"] as? String { claudeStreams[id]?.cancel() }
+            if let id = params["id"] as? String {
+                claudeStreams[id]?.cancel()
+                claudeStreams[id] = nil
+            }
             return true
 
         default:
             throw DevToolsError.unknownRequest
         }
+    }
+
+    /// Teardown: an answer nobody can read any more is a subprocess (or an
+    /// HTTP stream) still running with its output thrown away.
+    func cancelClaudeStreams() {
+        let streams = claudeStreams
+        claudeStreams.removeAll()
+        for (_, stream) in streams { stream.cancel() }
     }
 
     /// `window.__sbDevExt` in the page world, installed at document start when React or dataLayer is on.

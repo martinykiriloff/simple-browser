@@ -459,13 +459,14 @@ final class AgentApprovalCard: KeelPanel {
         let buttons = NSStackView(views: [allow, deny])
         buttons.spacing = 8
 
-        let always = NSButton(title: "Always allow on this origin for 1 h", target: nil, action: nil)
+        let always = KeelActionButton(title: "Always allow on this origin for 1 h") { [weak self] in
+            self?.answer(.allowOnOrigin(until: Date().addingTimeInterval(3600)))
+        }
         always.isBordered = false
         always.attributedTitle = NSAttributedString(string: "Always allow on this origin for 1 h",
                                                     attributes: [.font: Keel.font(12, .medium), .foregroundColor: Keel.amberSoft,
                                                                  .underlineStyle: NSUnderlineStyle.single.rawValue])
         always.isHidden = pending.risk.kind == .payment || pending.risk.kind == .credential || pending.origin == nil
-        KeelButtonActions.attach(always) { [weak self] in self?.answer(.allowOnOrigin(until: Date().addingTimeInterval(3600))) }
 
         let footnote = Keel.label("Denying tells \(pending.clientName) the action was refused.", size: 12, color: Keel.dim, wraps: true)
         let stop = KeelButton("Stop & revoke", kind: .danger, target: nil, action: nil)
@@ -502,20 +503,3 @@ final class AgentApprovalCard: KeelPanel {
     }
 }
 
-/// Closures for plain NSButtons.
-@MainActor
-enum KeelButtonActions {
-    private final class Target: NSObject {
-        let handler: () -> Void
-        init(_ handler: @escaping () -> Void) { self.handler = handler }
-        @objc func run(_ sender: Any?) { handler() }
-    }
-    private static var targets: [ObjectIdentifier: Target] = [:]
-
-    static func attach(_ button: NSButton, _ handler: @escaping () -> Void) {
-        let target = Target(handler)
-        targets[ObjectIdentifier(button)] = target
-        button.target = target
-        button.action = #selector(Target.run(_:))
-    }
-}

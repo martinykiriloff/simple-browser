@@ -42,6 +42,7 @@ final class PermissionsController: NSObject, NSPopoverDelegate {
     private var waiting: [Request] = []
     private var asking: Request?
     private var captureObservations: [NSKeyValueObservation] = []
+    private var choicesObserver: NSObjectProtocol?
     private var site: String?
 
     override init() {
@@ -50,10 +51,18 @@ final class PermissionsController: NSObject, NSPopoverDelegate {
         captureButton.target = self
         captureButton.action = #selector(showCaptureMenu(_:))
         syncCapture()
+        // A choice taken back -- in Settings → Websites, in the lock's
+        // popover, or by refusing here -- applies to what is going on now,
+        // not only to the next time the page asks.
+        choicesObserver = NotificationCenter.default.addObserver(forName: Self.didChange, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.stopCaptureNoLongerAllowed() }
+        }
     }
 
     func tearDown() {
         captureObservations = []
+        if let choicesObserver { NotificationCenter.default.removeObserver(choicesObserver) }
+        choicesObserver = nil
         popover?.close()
         popupBar?.removeFromSuperview()
     }
@@ -198,7 +207,15 @@ final class PermissionsController: NSObject, NSPopoverDelegate {
 
     /// A page opening a window by itself. True when it may.
     func allowsPopup(to url: URL?, userInitiated: Bool) -> Bool {
-        guard !userInitiated, let site = currentSite else { return true }
+        if userInitiated { return true }
+        // No site to have allowed it: `about:blank`, `data:`, `blob:` and
+        // `file:` are nobody's, so nothing can have been allowed for them
+        // and the window is held back. `request(…)` refuses them too.
+        guard let site = currentSite else {
+            note("popups: blocked, no site")
+            if let url { blockedPopups.append(url) }
+            return false
+        }
         if PermissionDecision.decide([.popups], site: site, stored: choices, allowedOnce: allowedOnce) == .allow {
             note("popups: allowed")
             return true
@@ -273,6 +290,24 @@ final class PermissionsController: NSObject, NSPopoverDelegate {
         if microphoneInUse { menu.addItem(withTitle: "Stop Using Microphone", action: #selector(stopMicrophone(_:)), keyEquivalent: "").target = self }
         if cameraInUse && microphoneInUse { menu.addItem(withTitle: "Stop Both", action: #selector(stopCapture(_:)), keyEquivalent: "").target = self }
         menu.popUp(positioning: nil, at: NSPoint(x: 0, y: captureButton.bounds.height + 4), in: captureButton)
+    }
+
+    /// The camera or microphone of a site that may no longer use it is
+    /// turned off there and then: the light goes out when the choice
+    /// changes, rather than at the next reload.
+    private func stopCaptureNoLongerAllowed() {
+        guard isCapturing, let site = currentSite else { return }
+        func mayUse(_ permission: SitePermission) -> Bool {
+            PermissionDecision.decide([permission], site: site, stored: choices, allowedOnce: allowedOnce) == .allow
+        }
+        if cameraInUse, !mayUse(.camera) {
+            note("camera: taken back, stopped")
+            stopCamera(nil)
+        }
+        if microphoneInUse, !mayUse(.microphone) {
+            note("microphone: taken back, stopped")
+            stopMicrophone(nil)
+        }
     }
 
     @objc func stopCamera(_ sender: Any?) { webView?.setCameraCaptureState(.none) { } }

@@ -59,6 +59,10 @@ public enum PasswordGenerator {
         // Drop look-alikes only where that leaves every required class something to draw.
         let readable = allowed.subtracting(lookAlikes)
         if rules.required.allSatisfy({ !$0.intersection(readable).isEmpty }) && !readable.isEmpty { allowed = readable }
+        // Rules that allow no character at all would leave nothing to draw from:
+        // the default alphabet is used instead, and the site's own validation
+        // explains the rest. Never an empty alphabet, which cannot be drawn from.
+        if allowed.isEmpty { allowed = base }
         let alphabet = Array(allowed).sorted()
         let required = rules.required.map { $0.intersection(allowed) }
 

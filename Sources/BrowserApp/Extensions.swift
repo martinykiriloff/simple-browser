@@ -109,28 +109,63 @@ final class ExtensionStore {
         save()
     }
 
-    /// On or off for a profile. Turned on in a profile it was never agreed
-    /// to, it gets what it was agreed to in the first.
+    /// On or off for a profile. A profile that never agreed to it starts
+    /// with nothing granted -- what another profile allowed is that
+    /// profile's business -- and turning it on there asks, as adding it did.
     func setEnabled(_ id: String, _ enabled: Bool, in profile: Profile) {
         guard let index = installed.firstIndex(where: { $0.id == id }) else { return }
         let key = profile.id.description
-        var settings = installed[index].profiles[key] ?? installed[index].profiles.values.first ?? .init()
-        settings.enabled = enabled
-        installed[index].profiles[key] = settings
+        if var settings = installed[index].profiles[key] {
+            settings.enabled = enabled
+            installed[index].profiles[key] = settings
+            save()
+            return
+        }
+        installed[index].profiles[key] = .init(enabled: enabled, access: .onClick, permissions: [])
+        save()
+        guard enabled else { return }
+        let item = installed[index]
+        Task { await askAboutProfile(item.id, named: item.name, folder: folder(of: item), profile: key) }
+    }
+
+    /// What it may do in a profile it is being turned on in for the first
+    /// time: nothing until this is answered, everything it asked for after
+    /// a yes. Asked with the same words as adding it, since it is the same
+    /// question.
+    private func askAboutProfile(_ id: String, named name: String, folder: URL, profile key: String) async {
+        guard let webExtension = try? await WKWebExtension(resourceBaseURL: folder) else { return }
+        let permissions = Set(webExtension.requestedPermissions.map(\.rawValue))
+        let patterns = Set(webExtension.allRequestedMatchPatterns.map(\.string))
+        let yes = await confirmInstall(name, ExtensionPermissionWording.describe(permissions: permissions, matchPatterns: patterns))
+        guard let index = installed.firstIndex(where: { $0.id == id }), installed[index].profiles[key]?.enabled == true else { return }
+        guard yes else {
+            // Not agreed to: off again here, and still nothing granted.
+            installed[index].profiles[key]?.enabled = false
+            save()
+            return
+        }
+        installed[index].profiles[key] = .init(enabled: true, access: .allRequested, permissions: permissions.sorted())
         save()
     }
 
+    /// Where it may read and change pages, for a profile that has settings
+    /// of its own. A profile that has none is not given any here: that is
+    /// what turning the extension on in it is for.
     func setAccess(_ id: String, _ access: ExtensionSiteAccess, in profile: Profile) {
-        guard let index = installed.firstIndex(where: { $0.id == id }) else { return }
-        installed[index].profiles[profile.id.description, default: .init()].access = access
+        guard let index = installed.firstIndex(where: { $0.id == id }),
+              installed[index].profiles[profile.id.description] != nil else { return }
+        installed[index].profiles[profile.id.description]?.access = access
         save()
     }
 
-    /// Agreed to later, when the extension asked while running.
+    /// Agreed to later, when the extension asked while running. Only for a
+    /// profile that has settings of its own: anywhere else the extension is
+    /// not running, so nothing can have asked.
     func addPermissions(_ names: [String], to id: String, in profile: Profile) {
         guard let index = installed.firstIndex(where: { $0.id == id }) else { return }
         let key = profile.id.description
-        installed[index].profiles[key, default: .init()].permissions = Array(Set(installed[index].profiles[key]?.permissions ?? []).union(names)).sorted()
+        guard let settings = installed[index].profiles[key] else { return }
+        installed[index].profiles[key]?.permissions = Array(Set(settings.permissions).union(names)).sorted()
         save()
     }
 
@@ -152,9 +187,13 @@ final class ExtensionStore {
         alert.messageText = "Add “\(name)”?"
         alert.informativeText = lines.isEmpty ? "It asks for nothing beyond its own button."
             : "It will be able to:\n" + lines.map { "•  " + $0 }.joined(separator: "\n")
-        alert.addButton(withTitle: "Add Extension")
+        // Cancel first, so Return -- and Escape -- add nothing: agreeing to
+        // what an extension may read and change is a deliberate click.
         alert.addButton(withTitle: "Cancel")
-        return alert.runModal() == .alertFirstButtonReturn
+        alert.addButton(withTitle: "Add Extension")
+        alert.buttons[0].keyEquivalent = "\r"
+        alert.buttons[1].keyEquivalent = ""
+        return alert.runModal() == .alertSecondButtonReturn
     }
 }
 
@@ -189,14 +228,41 @@ final class ProfileExtensions: NSObject, WKWebExtensionControllerDelegate {
         controller = WKWebExtensionController(configuration: configuration)
         super.init()
         controller.delegate = self
+        // What runs follows the list: a grant agreed to after the fact (a
+        // profile just turned the extension on, and said what it may do)
+        // reaches the running extension without waiting for a reload.
+        listObserver = NotificationCenter.default.addObserver(forName: ExtensionStore.didChange, object: store, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                Task { await self.sync() }
+            }
+        }
     }
+
+    private var listObserver: NSObjectProtocol?
 
     var loaded: [(item: InstalledExtension, context: WKWebExtensionContext)] {
         store.installed.compactMap { item in contexts[item.id].map { (item, $0) } }
     }
 
     /// Loads what is turned on in this profile and unloads what is not.
+    ///
+    /// One at a time: loading an extension takes a turn of the loop, and two
+    /// syncs at once would both find it not yet loaded and load it twice.
     func sync() async {
+        guard !syncing else { syncAgain = true; return }
+        syncing = true
+        repeat {
+            syncAgain = false
+            await syncOnce()
+        } while syncAgain
+        syncing = false
+    }
+
+    private var syncing = false
+    private var syncAgain = false
+
+    private func syncOnce() async {
         for item in store.installed where item.isEnabled(in: profile) && contexts[item.id] == nil {
             do {
                 let webExtension = try await WKWebExtension(resourceBaseURL: store.folder(of: item))
@@ -358,14 +424,17 @@ final class ProfileExtensions: NSObject, WKWebExtensionControllerDelegate {
         let alert = NSAlert()
         alert.messageText = "“\(name)” would like to:"
         alert.informativeText = lines.map { "•  " + $0 }.joined(separator: "\n")
-        alert.addButton(withTitle: "Allow")
+        // "Don’t Allow" first, so Return and Escape both refuse.
         alert.addButton(withTitle: "Don’t Allow")
+        alert.addButton(withTitle: "Allow")
+        alert.buttons[0].keyEquivalent = "\r"
+        alert.buttons[1].keyEquivalent = ""
         if let window {
             return await withCheckedContinuation { continuation in
-                alert.beginSheetModal(for: window) { continuation.resume(returning: $0 == .alertFirstButtonReturn) }
+                alert.beginSheetModal(for: window) { continuation.resume(returning: $0 == .alertSecondButtonReturn) }
             }
         }
-        return alert.runModal() == .alertFirstButtonReturn
+        return alert.runModal() == .alertSecondButtonReturn
     }
 }
 

@@ -562,7 +562,7 @@ final class AgentToolbox {
         guard let data = Self.encode(image, jpeg: jpeg, quality: quality) else { throw ToolError("Could not encode the image") }
         var text = note.isEmpty ? "Screenshot of the full page." : note.trimmingCharacters(in: .newlines)
         if let path = a["savePath"]?.string, !path.isEmpty {
-            let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+            let url = try Self.saveDestination(path, keelFiles: trust?.stateDirectory)
             try data.write(to: url, options: .atomic)
             text += "\nSaved to \(url.path)."
         }
@@ -606,19 +606,62 @@ final class AgentToolbox {
         return jpeg ? rep.representation(using: .jpeg, properties: [.compressionFactor: quality]) : rep.representation(using: .png, properties: [:])
     }
 
+    /// Where `screenshot` may write its `savePath`. Taking a screenshot reads
+    /// the page, so the tool is read-only: it asks for no approval, spends no
+    /// action budget, and a read-only client is offered it. Its one touch of
+    /// the disk is therefore confined to two places — the person's Downloads
+    /// folder and this app's temporary directory — with `~`, `..` and
+    /// symlinks resolved before the comparison, and never inside Keel's own
+    /// agent files (clients.json, rules.json, the session logs) wherever
+    /// those have been pointed. Anything else is refused and the image still
+    /// comes back in the result.
+    static func saveDestination(_ path: String, keelFiles: URL?) throws -> URL {
+        let expanded = (path as NSString).expandingTildeInPath
+        guard expanded.hasPrefix("/") else { throw ToolError("savePath must be an absolute path.") }
+        // The file itself need not exist yet, so the folder is what resolves.
+        let asked = URL(fileURLWithPath: expanded).standardizedFileURL
+        let folder = asked.deletingLastPathComponent().resolvingSymlinksInPath().standardizedFileURL
+        let url = folder.appendingPathComponent(asked.lastPathComponent)
+        let allowed = [FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first,
+                       URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)].compactMap { $0 }
+        guard allowed.contains(where: { isInside(url, $0) }) else {
+            throw ToolError("savePath may only be inside the Downloads folder or the temporary directory, so \(url.path) was refused. The screenshot is in this result; save it under ~/Downloads instead.")
+        }
+        if let keelFiles, isInside(url, keelFiles) {
+            throw ToolError("savePath is inside Keel's own agent files, which no agent writes to.")
+        }
+        return url
+    }
+
+    /// Whether a resolved path sits under a directory: not the directory
+    /// itself, and nothing leading back out of it.
+    static func isInside(_ url: URL, _ directory: URL) -> Bool {
+        let parent = directory.resolvingSymlinksInPath().standardizedFileURL.pathComponents
+        let child = url.pathComponents
+        return child.count > parent.count && Array(child.prefix(parent.count)) == parent
+    }
+
     // MARK: - Acting
 
-    static func targetParams(_ a: JSONValue) -> JSONValue {
+    /// The element a tool acts on, as the automation agent matches it.
+    /// `type_text` is the exception: its own `text` is what it types, so for
+    /// it the element is only ever named by ref or selector — otherwise
+    /// `type_text {text: "hello"}`, the documented focused-element case,
+    /// would look for an element whose visible text is "hello".
+    static func targetParams(_ a: JSONValue, tool: String = "") -> JSONValue {
         var params: [String: JSONValue] = [:]
         if let ref = a["ref"]?.string { params["ref"] = .string(ref) }
         if let selector = a["selector"]?.string { params["selector"] = .string(selector) }
-        if let text = a["text"]?.string { params["text"] = .string(text) }
-        if let role = a["role"]?.string { params["role"] = .string(role) }
+        if tool != "type_text" {
+            if let text = a["text"]?.string { params["text"] = .string(text) }
+            if let role = a["role"]?.string { params["role"] = .string(role) }
+        }
         return .object(params)
     }
 
-    static func hasTarget(_ a: JSONValue) -> Bool {
-        a["ref"]?.string != nil || a["selector"]?.string != nil || a["text"]?.string != nil
+    static func hasTarget(_ a: JSONValue, tool: String = "") -> Bool {
+        if tool == "type_text" { return a["ref"]?.string != nil || a["selector"]?.string != nil }
+        return a["ref"]?.string != nil || a["selector"]?.string != nil || a["text"]?.string != nil
     }
 
     /// Scrolls the element into view and finds where to press, refusing
@@ -722,8 +765,8 @@ final class AgentToolbox {
         let since = recorder.events.last?.sequence ?? -1
         let urlBefore = tab.pageWebView.url
         var into = "the focused element"
-        if Self.hasTarget(a) {
-            let (point, target) = try await aim(tab, a)
+        if Self.hasTarget(a, tool: "type_text") {
+            let (point, target) = try await aim(tab, Self.targetParams(a, tool: "type_text"))
             try AgentInput.click(at: point, in: tab.pageWebView)
             into = target["describe"]?.string ?? into
             try await Task.sleep(for: .milliseconds(50))
@@ -731,7 +774,8 @@ final class AgentToolbox {
         if a["clear"]?.bool == true, try await automation(tab, "selectContents")["selected"]?.bool == true {
             try AgentInput.press("Backspace", in: tab.pageWebView)
         }
-        let text = a["text"]?.string ?? ""
+        // `value` is the name; `text` is the older one, kept working.
+        let text = a["value"]?.string ?? a["text"]?.string ?? ""
         try await AgentInput.type(text, in: tab.pageWebView)
         var summary = "Typed \(text.count) characters into \(into)."
         if a["submit"]?.bool == true {
@@ -1000,6 +1044,27 @@ final class AgentToolbox {
 
     static func requestID(_ request: NetworkRequest) -> String { String(request.id.uuidString.prefix(8)).lowercased() }
 
+    /// The headers DevTools' Network panel redacts (markdown.js), for the
+    /// same reason: a session cookie or a bearer token lifted out of a
+    /// request is the sign-in itself, and `network_request` reads the page,
+    /// so it asks for no approval and a read-only client may call it.
+    static let secretHeaders: Set<String> = ["cookie", "set-cookie", "authorization", "proxy-authorization",
+                                             "x-api-key", "x-auth-token", "x-csrf-token", "x-xsrf-token"]
+
+    /// One header line, with the value left out when the name says it is a
+    /// credential. Cookie names stay, as they do in the panel, so what a
+    /// page sends is still debuggable without the values.
+    static func headerLine(_ name: String, _ value: String) -> String {
+        let lowered = name.lowercased()
+        guard secretHeaders.contains(lowered) else { return "  \(name): \(value)" }
+        if lowered == "cookie" || lowered == "set-cookie" {
+            let pairs = lowered == "cookie" ? value.split(separator: ";").map(String.init) : value.split(whereSeparator: \.isNewline).map(String.init)
+            let names = pairs.compactMap { $0.split(separator: "=").first?.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+            return "  \(name): <\(names.joined(separator: ", ")) — values redacted>"
+        }
+        return "  \(name): <redacted>"
+    }
+
     func networkRequests(_ a: JSONValue) throws -> MCPToolResult {
         let tab = try tab(a)
         var requests = requestLog(tab, sinceNavigation: a["sinceNavigation"]?.bool ?? true)
@@ -1048,10 +1113,10 @@ final class AgentToolbox {
                                 timing.responseStart - timing.requestStart, timing.responseEnd - timing.responseStart))
         }
         lines.append("\nRequest headers:")
-        lines.append(contentsOf: request.requestHeaders.sorted { $0.key < $1.key }.map { "  \($0.key): \($0.value)" })
+        lines.append(contentsOf: request.requestHeaders.sorted { $0.key < $1.key }.map { Self.headerLine($0.key, $0.value) })
         if request.requestHeaders.isEmpty { lines.append("  (not observed for this request)") }
         lines.append("\nResponse headers:")
-        lines.append(contentsOf: request.responseHeaders.sorted { $0.key < $1.key }.map { "  \($0.key): \($0.value)" })
+        lines.append(contentsOf: request.responseHeaders.sorted { $0.key < $1.key }.map { Self.headerLine($0.key, $0.value) })
         if request.responseHeaders.isEmpty { lines.append("  (not observed for this request)") }
         let max = a["maxBodyLength"]?.int ?? 20000
         if let body = request.requestBody, !body.isEmpty {

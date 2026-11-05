@@ -31,16 +31,45 @@ final class InspectorProtocolBridge: NSObject, WKScriptMessageHandler {
     private weak var frontend: WKWebView?
     /// Results travel as JSON `Data`, which is `Sendable`; dictionaries of `Any` are not.
     private var pending: [Int: CheckedContinuation<Data, any Error>] = [:]
+    /// One per command in flight, cancelled the moment its reply lands.
+    private var timeouts: [Int: Task<Void, Never>] = [:]
     private(set) var isAttached = false
     private var attachTask: Task<Void, any Error>?
 
+    /// Request ids are minted here rather than in the shim. The shim is
+    /// reinstalled whenever the page's web process is replaced, and a counter
+    /// of its own would start again at its base and hand out ids we are still
+    /// waiting on: the reply to the new command would be delivered to the old
+    /// one's continuation. This counter never restarts while the app runs, so
+    /// an id is used exactly once. Ids stay above `idBase` because that is
+    /// how the shim recognises our own traffic.
+    private static let idBase = 1_000_000_000
+    private static var nextRequestID = idBase
+
     /// Every protocol event from the inspected page: method name and params.
+    ///
+    /// This is one slot, for whoever owns the bridge. Anybody else listens
+    /// with `addEventObserver`, and both are delivered: a diagnostic probe
+    /// must not be able to cut the DevTools off from its events, which is
+    /// what a single shared slot made easy.
     var onEvent: ((String, [String: Any]) -> Void)?
+    private var observers: [UUID: (String, [String: Any]) -> Void] = [:]
 
     private static let handlerName = "sbProtocol"
 
     init(page: WKWebView) {
         self.page = page
+    }
+
+    /// Adds a listener alongside `onEvent`; keep the token to stop listening.
+    func addEventObserver(_ handler: @escaping (String, [String: Any]) -> Void) -> UUID {
+        let token = UUID()
+        observers[token] = handler
+        return token
+    }
+
+    func removeEventObserver(_ token: UUID) {
+        observers[token] = nil
     }
 
     // MARK: - Attaching
@@ -57,6 +86,11 @@ final class InspectorProtocolBridge: NSObject, WKScriptMessageHandler {
     }
 
     private func performAttach() async throws {
+        // We only ever get here while detached, so anything still waiting was
+        // sent on a connection that is gone (a crashed web process, a shim
+        // that vanished) and its reply will never arrive. Fail it now instead
+        // of leaving it to time out minutes later.
+        failPending(.unavailable("the inspector reattached"))
         guard let page else { throw BridgeError.unavailable("no page") }
         guard let inspector = Self.object(page, "_inspector") else {
             throw BridgeError.unavailable("WKWebView has no _inspector")
@@ -95,11 +129,35 @@ final class InspectorProtocolBridge: NSObject, WKScriptMessageHandler {
         isAttached = true
     }
 
+    /// Disconnects the hidden frontend and fails everything in flight.
+    ///
+    /// Call this when the page is going away -- DevTools closing, the tab
+    /// closing, hibernation. Dropping the Swift reference is not enough: the
+    /// frontend's `userContentController` holds this object as a script
+    /// message handler, so without this the inspector stays connected to a
+    /// page that is being released, and in-flight commands sit on their
+    /// 10-to-90-second timeouts.
     func detach() {
         frontend?.configuration.userContentController.removeScriptMessageHandler(forName: Self.handlerName)
-        for (_, continuation) in pending { continuation.resume(throwing: BridgeError.unavailable("detached")) }
-        pending.removeAll()
+        attachTask?.cancel()
+        attachTask = nil
+        failPending(.unavailable("detached"))
         isAttached = false
+        frontend = nil
+        // Probed, like every other piece of this: a WebKit without it simply
+        // leaves the frontend page alive.
+        if let page { _ = WebInspectorSPI.close(page) }
+    }
+
+    /// Resumes every waiting command with the same error, exactly once. A
+    /// continuation that is dropped without being resumed hangs its caller
+    /// for good, so `pending` is emptied before anything is resumed.
+    private func failPending(_ error: BridgeError) {
+        let waiting = pending
+        pending.removeAll()
+        for task in timeouts.values { task.cancel() }
+        timeouts.removeAll()
+        for (_, continuation) in waiting { continuation.resume(throwing: error) }
     }
 
     // MARK: - Commands
@@ -108,20 +166,26 @@ final class InspectorProtocolBridge: NSObject, WKScriptMessageHandler {
     func send(_ method: String, _ params: [String: Any] = [:], timeout: Duration = .seconds(10)) async throws -> [String: Any] {
         try await attach()
         guard let frontend else { throw BridgeError.unavailable("no frontend") }
-        let payload = try JSONSerialization.data(withJSONObject: ["method": method, "params": params])
+        let id = Self.nextRequestID
+        Self.nextRequestID += 1
+        let payload = try JSONSerialization.data(withJSONObject: ["id": id, "method": method, "params": params])
         let json = String(decoding: payload, as: UTF8.self)
         let raw = try await frontend.evaluateJavaScript("window.__sbProtocol ? window.__sbProtocol.send(\(json)) : -1")
-        guard let id = (raw as? NSNumber)?.intValue, id >= 0 else {
+        // The shim echoes the id it sent, or -1 when it had no connection.
+        guard let accepted = (raw as? NSNumber)?.intValue, accepted == id else {
             isAttached = false
             throw BridgeError.unavailable("shim is gone")
         }
         let data: Data = try await withCheckedThrowingContinuation { continuation in
             pending[id] = continuation
-            Task { @MainActor in
+            // Held weakly, and cancelled the moment the reply lands: one task
+            // that always slept the whole timeout accumulated per command
+            // while stepping or during a burst of network calls.
+            timeouts[id] = Task { @MainActor [weak self] in
                 try? await Task.sleep(for: timeout)
-                if let waiting = self.pending.removeValue(forKey: id) {
-                    waiting.resume(throwing: BridgeError.timedOut(method))
-                }
+                guard !Task.isCancelled, let self else { return }
+                self.timeouts[id] = nil
+                self.pending.removeValue(forKey: id)?.resume(throwing: BridgeError.timedOut(method))
             }
         }
         return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
@@ -190,6 +254,7 @@ final class InspectorProtocolBridge: NSObject, WKScriptMessageHandler {
         guard let text = message.body as? String, let data = text.data(using: .utf8),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
         if let id = (object["id"] as? NSNumber)?.intValue {
+            timeouts.removeValue(forKey: id)?.cancel()
             guard let continuation = pending.removeValue(forKey: id) else { return }
             if let error = object["error"] as? [String: Any] {
                 continuation.resume(throwing: BridgeError.commandFailed(error["message"] as? String ?? "protocol error"))
@@ -198,7 +263,9 @@ final class InspectorProtocolBridge: NSObject, WKScriptMessageHandler {
                 continuation.resume(returning: (try? JSONSerialization.data(withJSONObject: result)) ?? Data("{}".utf8))
             }
         } else if let method = object["method"] as? String {
-            onEvent?(method, object["params"] as? [String: Any] ?? [:])
+            let params = object["params"] as? [String: Any] ?? [:]
+            onEvent?(method, params)
+            for handler in observers.values { handler(method, params) }
         }
     }
 
@@ -247,7 +314,9 @@ final class InspectorProtocolBridge: NSObject, WKScriptMessageHandler {
       if (window.__sbProtocol) return "already";
       var handler = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.\(handlerName);
       if (!handler) return "no message handler";
-      var BASE = 1000000000, next = BASE;
+      // Ids are minted on the native side; this is only how we recognise a
+      // reply to one of ours.
+      var BASE = \(idBase);
 
       // Returns true when the frontend must not see the message.
       function inspect(inner) {
@@ -317,7 +386,7 @@ final class InspectorProtocolBridge: NSObject, WKScriptMessageHandler {
       window.__sbProtocol = {
         stats: stats,
         send: function (command) {
-          var id = next++;
+          var id = command.id;
           var connection = WI.mainTarget && WI.mainTarget.connection;
           if (!connection) return -1;
           stats.sent++; stats.lastSent = id + " " + command.method;

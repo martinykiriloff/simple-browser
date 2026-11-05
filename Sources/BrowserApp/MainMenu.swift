@@ -31,9 +31,10 @@ enum MainMenu {
         func walk(_ menu: NSMenu) {
             for item in menu.items {
                 if let submenu = item.submenu { walk(submenu); continue }
-                guard let action = item.action, !item.isHidden else { continue }
-                let id = NSStringFromSelector(action)
-                guard let command = Shortcuts.command(id), !command.fixed, !done.contains(id) else { continue }
+                guard let id = shortcutID(of: item) else { continue }
+                // Fixed keys are not ours to change, but an alias is: it is
+                // given and taken away with the command it belongs to.
+                guard let command = Shortcuts.command(id), !command.fixed || command.isAlias, !done.contains(id) else { continue }
                 done.insert(id)
                 if let shortcut = effective[id] ?? nil {
                     let (key, flags) = shortcut.menuKeyEquivalent
@@ -51,14 +52,25 @@ enum MainMenu {
     /// Start Dictation): the Mac's, not the app's to audit or change.
     static let appKitOwn: Set<String> = ["closeAll:", "orderFrontCharacterPalette:", "startDictation:"]
 
+    /// Which command in the catalogue an item carries a key for: its action,
+    /// or, for the hidden twin that gives a command a second spelling of its
+    /// key (⌘= for Zoom In's ⌘+), the alias's own id, which the item carries
+    /// as its identifier. Hidden items have no keys of their own, but an
+    /// alias answers to its key although it is hidden, so the shortcut
+    /// machinery has to see past `isHidden` for that one.
+    static func shortcutID(of item: NSMenuItem) -> String? {
+        if let id = item.identifier?.rawValue, Shortcuts.command(id)?.isAlias == true { return id }
+        guard !item.isHidden, let action = item.action else { return nil }
+        return NSStringFromSelector(action)
+    }
+
     /// Every key the menu bar answers to, by command: the audit's other half.
     static func menuShortcuts() -> [String: KeyShortcut] {
         var result: [String: KeyShortcut] = [:]
         func walk(_ menu: NSMenu) {
             for item in menu.items {
                 if let submenu = item.submenu { walk(submenu); continue }
-                guard let action = item.action, !item.isHidden, let shortcut = KeyShortcut(menuItem: item) else { continue }
-                let id = NSStringFromSelector(action)
+                guard let id = shortcutID(of: item), let shortcut = KeyShortcut(menuItem: item) else { continue }
                 if appKitOwn.contains(id) { continue }
                 if result[id] == nil { result[id] = shortcut }
             }
@@ -164,9 +176,13 @@ enum MainMenu {
         menu.addItem(withTitle: "Actual Size", action: #selector(BrowserWindowController.zoomReset(_:)), keyEquivalent: "0")
         menu.addItem(withTitle: "Zoom In", action: #selector(BrowserWindowController.zoomIn(_:)), keyEquivalent: "+")
         // ⌘= is ⌘+ without Shift, which is how it is typed on most keyboards.
+        // It is hidden so the menu shows one Zoom In, and carries the
+        // catalogue's id for the alias so that `applyShortcuts` gives and
+        // takes it with Zoom In's own key rather than leaving it live for ever.
         let zoomInUnshifted = menu.addItem(withTitle: "Zoom In", action: #selector(BrowserWindowController.zoomIn(_:)), keyEquivalent: "=")
         zoomInUnshifted.isHidden = true
         zoomInUnshifted.allowsKeyEquivalentWhenHidden = true
+        zoomInUnshifted.identifier = NSUserInterfaceItemIdentifier("zoomIn:unshifted")
         menu.addItem(withTitle: "Zoom Out", action: #selector(BrowserWindowController.zoomOut(_:)), keyEquivalent: "-")
         menu.addItem(.separator())
         let reader = menu.addItem(withTitle: "Show Reader", action: #selector(BrowserWindowController.toggleReader(_:)), keyEquivalent: "r")
@@ -402,12 +418,19 @@ final class TabGroupsMenuFiller: NSObject, NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
         guard let browser = front() else { return }
+        // The items stay in the long-lived Window menu until it is filled
+        // again, which may be never, so the tab is held weakly: holding it
+        // would keep its web view and its web content process alive long
+        // after it was closed. A closed tab simply does nothing.
         for group in organizer.groups(besides: browser) {
             let name = group.displayName(firstTab: organizer.tabs(in: group.id).first?.window?.title)
             menu.addItem(ClosureMenuItem(name, state: browser.groupID == group.id ? .on : .off,
-                                         image: TabSidebarController.dot(group.color)) { [organizer] in organizer.add([browser], to: group.id) })
+                                         image: TabSidebarController.dot(group.color)) { [organizer, weak browser] in
+                guard let browser else { return }
+                organizer.add([browser], to: group.id)
+            })
         }
         if !menu.items.isEmpty { menu.addItem(.separator()) }
-        menu.addItem(ClosureMenuItem("New Group") { browser.newTabGroup(nil) })
+        menu.addItem(ClosureMenuItem("New Group") { [weak browser] in browser?.newTabGroup(nil) })
     }
 }

@@ -8,9 +8,12 @@ import AppKit
 /// header's button or ⌘W on it, leaves the other as an ordinary tab.
 @MainActor
 final class SplitViewController: NSObject, NSSplitViewDelegate {
-    private(set) weak var host: BrowserWindowController!
-    private(set) weak var guest: BrowserWindowController!
-    private(set) weak var focused: BrowserWindowController!
+    /// Either side may be gone before the split is: a tab can be closed
+    /// from outside it (Close Group), and a window can be closed outright.
+    /// Nothing here may assume both are still there.
+    private(set) weak var host: BrowserWindowController?
+    private(set) weak var guest: BrowserWindowController?
+    private(set) weak var focused: BrowserWindowController?
 
     let pages = NSSplitView()
     let hostPane: SplitPane
@@ -42,6 +45,7 @@ final class SplitViewController: NSObject, NSSplitViewDelegate {
     }
 
     private func start(in hostWindow: NSWindow) {
+        guard let host, let guest else { return }
         // Laying the panes out is not the divider being moved.
         applying = true
         // Out of the tab bar: a window ordered out leaves its tab group.
@@ -51,8 +55,8 @@ final class SplitViewController: NSObject, NSSplitViewDelegate {
 
         hostPane.embed(host.detachPage())
         guestPane.embed(guest.detachPage())
-        hostPane.onClose = { [weak self] in self.map { $0.close($0.host) } }
-        guestPane.onClose = { [weak self] in self.map { $0.close($0.guest) } }
+        hostPane.onClose = { [weak self] in self?.close(self?.host) }
+        guestPane.onClose = { [weak self] in self?.close(self?.guest) }
         pages.isVertical = true
         pages.dividerStyle = .thin
         pages.delegate = self
@@ -87,16 +91,16 @@ final class SplitViewController: NSObject, NSSplitViewDelegate {
     /// Makes one side the one in front: its toolbar in the window, the
     /// keyboard in its page, its header marked.
     func focus(_ side: BrowserWindowController, moveKeyboard: Bool = true) {
-        guard side === host || side === guest, let window = host.window else { return }
+        guard side === host || side === guest, let window = host?.window else { return }
         focused = side
         let toolbar = side === guest ? guestToolbar : hostToolbar
         if window.toolbar !== toolbar {
             if side === guest {
-                guest.window?.toolbar = nil
+                guest?.window?.toolbar = nil
                 window.toolbar = guestToolbar
             } else {
                 window.toolbar = hostToolbar
-                guest.window?.toolbar = guestToolbar
+                guest?.window?.toolbar = guestToolbar
             }
             side.fitAddressField()
             window.toolbar?.validateVisibleItems()
@@ -116,39 +120,56 @@ final class SplitViewController: NSObject, NSSplitViewDelegate {
     // MARK: - Ending
 
     /// Closes one side's tab; the other goes on as a tab of its own.
-    func close(_ side: BrowserWindowController) {
-        let other: BrowserWindowController = side === host ? guest : host
-        end(front: other)
+    func close(_ side: BrowserWindowController?) {
+        guard let side, side === host || side === guest else { return }
+        end(front: side === host ? guest : host)
         side.window?.performClose(nil)
     }
 
     /// Back to two tabs, the guest just after the host in the tab bar.
-    func end(front: BrowserWindowController? = nil) {
-        guard let host, let guest, host.split === self else { return }
+    ///
+    /// Runs once, and runs with either side already gone: a tab closed from
+    /// outside the split takes its controller with it, and what is left
+    /// still has to be put back together — its page returned to its own
+    /// window, the mouse monitor and the groups observer let go. With
+    /// `rejoinTabBar` off the guest is left as a window of its own: the
+    /// window it would join is itself closing, and a tab added to a window
+    /// on its way out goes with it.
+    func end(front: BrowserWindowController? = nil, rejoinTabBar: Bool = true) {
+        guard !hasEnded, host == nil || host?.split === self else { return }
+        hasEnded = true
         applying = true
         if let mouseMonitor { NSEvent.removeMonitor(mouseMonitor) }
         mouseMonitor = nil
         if let observer { NotificationCenter.default.removeObserver(observer) }
         observer = nil
-        host.window?.toolbar = hostToolbar
-        guest.window?.toolbar = guestToolbar
-        guest.nextResponder = guestResponder
-        host.split = nil
-        guest.splitHost = nil
-        host.window?.tab.title = nil
+        host?.window?.toolbar = hostToolbar
+        guest?.window?.toolbar = guestToolbar
+        guest?.nextResponder = guestResponder
+        host?.split = nil
+        guest?.splitHost = nil
+        host?.window?.tab.title = nil
         hostPane.release()
         guestPane.release()
-        host.reattachPage(replacing: pages)
-        guest.reattachPage()
-        if let window = host.window, let guestWindow = guest.window {
+        host?.reattachPage(replacing: pages)
+        guest?.reattachPage()
+        if rejoinTabBar, let window = host?.window, let guestWindow = guest?.window {
             guestWindow.tabbingMode = .automatic
             window.addTabbedWindow(guestWindow, ordered: .above)
-            guest.acceptTabs()
+            guest?.acceptTabs()
         }
-        (front ?? host).window?.makeKeyAndOrderFront(nil)
-        host.organizer?.arrange(besides: host)
-        host.organizer?.changed()
+        (front ?? host)?.window?.makeKeyAndOrderFront(nil)
+        if let host {
+            host.organizer?.arrange(besides: host)
+            host.organizer?.changed()
+        } else {
+            guest?.organizer?.changed()
+        }
     }
+
+    /// `host.split` is nil once this has ended, which is what keeps it from
+    /// running twice — but a host that has gone cannot say so.
+    private var hasEnded = false
 
     // MARK: - The divider
 

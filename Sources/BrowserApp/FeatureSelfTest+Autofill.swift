@@ -8,8 +8,18 @@ extension FeatureSelfTest {
     private final class Confirmer: PasswordAuthenticator {
         var answer = true
         var asked: [String] = []
+        /// How each confirmation was asked for. A card going into a web page
+        /// must ask for a fresh one, never take the minute's grace that
+        /// looking through your own cards in Settings is allowed.
+        var freshness: [AuthenticationFreshness] = []
+
         func authenticate(reason: String) async -> Bool {
+            await authenticate(reason: reason, freshness: .recentWillDo)
+        }
+
+        func authenticate(reason: String, freshness: AuthenticationFreshness) async -> Bool {
             asked.append(reason)
+            self.freshness.append(freshness)
             return answer
         }
     }
@@ -60,6 +70,71 @@ extension FeatureSelfTest {
         await pause(0.5)
         check("autofill: not confirmed, no card is filled", (await values(["ccnumber"])) == [""])
         confirmer.answer = true
+
+        // A page with a second, hidden form beside the one it shows: however
+        // it hides those fields, they are not fields a person is filling in,
+        // so nothing goes into them.
+        await open("/checkout", in: browser)
+        _ = await js("""
+            const trap = document.createElement('div');
+            trap.style.position = 'relative';
+            trap.innerHTML = '<input id=away autocomplete=cc-number><input id=faded autocomplete="shipping address-line1">'
+              + '<input id=clipped autocomplete=cc-name><input id=tiny autocomplete="shipping postal-code">'
+              + '<input id=covered autocomplete="shipping address-level2">';
+            document.getElementById('checkout').appendChild(trap);
+            document.getElementById('away').style.cssText = 'position:absolute;left:-10000px;top:0';
+            document.getElementById('faded').style.opacity = '0';
+            document.getElementById('clipped').style.clipPath = 'inset(100%)';
+            document.getElementById('tiny').style.cssText = 'width:1px;height:1px;padding:0;border:0';
+            const over = document.getElementById('covered').getBoundingClientRect();
+            const sheet = document.createElement('div');
+            sheet.style.cssText = `position:fixed;left:${over.left}px;top:${over.top}px;width:${over.width}px;height:${over.height}px;background:#fff`;
+            document.body.appendChild(sheet);
+            """, in: browser)
+        _ = await js("document.getElementById('given').focus()", in: browser)
+        check("autofill: the hidden half of a form is not offered to be filled", await waitFor { fill.suggestions.titles.first == "Home · Visa •••• 4242" }, fill.suggestions.titles)
+        fill.suggestions.rows.first?.choose()
+        let traps = ["away", "faded", "clipped", "tiny", "covered"]
+        check("autofill: …and the whole form is still filled", await waitFor { (await values(["given", "ccnumber"])) == ["Ada", "4242424242424242"] },
+              [await values(["given", "ccnumber"]), fill.trace.suffix(2)] as Any)
+        check("autofill: …while the fields the page keeps out of sight stay empty", (await values(traps)) == ["", "", "", "", ""], await values(traps))
+
+        // Hidden only once the list is up: the fields are looked at again at
+        // the moment of filling, not only when the form was described.
+        await open("/checkout", in: browser)
+        _ = await js("document.getElementById('given').focus()", in: browser)
+        _ = await waitFor { fill.offered.first == "Home · Visa •••• 4242" }
+        _ = await js("document.getElementById('city').style.opacity = '0'", in: browser)
+        fill.suggestions.rows.first?.choose()
+        check("autofill: a field hidden after the list opened is no longer filled", await waitFor { (await values(["line1", "city"])) == ["12 St James's Square", ""] },
+              await values(["line1", "city"]))
+
+        // A card is confirmed afresh every time, however recently the person
+        // confirmed something in Settings.
+        confirmer.asked = []
+        confirmer.freshness = []
+        await open("/checkout", in: browser)
+        _ = await js("document.getElementById('ccnumber').focus()", in: browser)
+        _ = await waitFor { fill.offered.contains(visa.masked) }
+        fill.suggestions.rows.first { $0.item.title == visa.masked }?.choose()
+        check("autofill: a card into a page is confirmed afresh, not by a minute-old confirmation",
+              await waitFor { confirmer.asked == ["fill your card details"] && confirmer.freshness == [.required] }, confirmer.freshness)
+
+        // The page the list was opened on is gone by the time the card is
+        // confirmed: nothing goes into the one that took its place. The agent
+        // refuses the fill because the origin it was given is not the one it
+        // is in -- `localhost` and `127.0.0.1` are the same server and two
+        // origins -- and WebKit itself refuses the frame it no longer has.
+        _ = await js("document.getElementById('ccnumber').focus()", in: browser)
+        _ = await waitFor { fill.suggestions.titles.contains(visa.masked) }
+        browser.load(URL(string: "http://localhost:8767/checkout")!)
+        _ = await waitFor { (await js("return location.origin", in: browser) as? String) == "http://localhost:8767" }
+        fill.choose(address: nil, card: visa)
+        check("autofill: a card is not filled into the page that replaced the one it was meant for",
+              await waitFor {
+                  let refused = fill.trace.last ?? ""
+                  return (await values(["ccnumber"])) == [""] && (refused.contains("wrong document") || refused.contains("failed"))
+              }, fill.trace.suffix(3))
 
         // A shop that labels nothing; a card typed by hand is offered to be kept.
         await open("/checkout-legacy", in: browser)

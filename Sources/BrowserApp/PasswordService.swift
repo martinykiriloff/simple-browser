@@ -3,12 +3,35 @@ import LocalAuthentication
 import BrowserKit
 import PasswordKit
 
+/// Whether a confirmation from a moment ago may stand in for this one.
+enum AuthenticationFreshness: Equatable {
+    /// Looking through your own passwords or cards in Settings: one
+    /// confirmation covers a minute of it, as in Chrome.
+    case recentWillDo
+    /// Something leaving the app, into a web page: asked every time, however
+    /// recently the person confirmed. Settings and a page are not the same
+    /// act, and a page that opens right after a visit to Settings must not
+    /// inherit its confirmation.
+    case required
+}
+
 /// Confirms the person at the keyboard is the Mac's owner before a saved
-/// password is shown, copied, edited or exported -- Touch ID, Apple Watch or
-/// the login password, whatever the Mac offers.
+/// password is shown, copied, edited or exported, or a card is filled into a
+/// page -- Touch ID, Apple Watch or the login password, whatever the Mac
+/// offers.
 @MainActor
 protocol PasswordAuthenticator: AnyObject {
     func authenticate(reason: String) async -> Bool
+    func authenticate(reason: String, freshness: AuthenticationFreshness) async -> Bool
+}
+
+extension PasswordAuthenticator {
+    /// An authenticator that keeps no grace window of its own -- the scripted
+    /// ones the self-tests use -- asks every time, which is the stricter of
+    /// the two answers and so the safe default.
+    func authenticate(reason: String, freshness: AuthenticationFreshness) async -> Bool {
+        await authenticate(reason: reason)
+    }
 }
 
 @MainActor
@@ -17,7 +40,11 @@ final class DeviceOwnerAuthenticator: PasswordAuthenticator {
     private var validUntil = Date.distantPast
 
     func authenticate(reason: String) async -> Bool {
-        if Date() < validUntil { return true }
+        await authenticate(reason: reason, freshness: .recentWillDo)
+    }
+
+    func authenticate(reason: String, freshness: AuthenticationFreshness) async -> Bool {
+        if freshness == .recentWillDo, Date() < validUntil { return true }
         let context = LAContext()
         var error: NSError?
         guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &error) else {
@@ -25,7 +52,9 @@ final class DeviceOwnerAuthenticator: PasswordAuthenticator {
             return error?.code == LAError.passcodeNotSet.rawValue
         }
         let ok = (try? await context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: reason)) ?? false
-        if ok { validUntil = Date().addingTimeInterval(60) }
+        // A confirmation that had to be fresh opens no grace window either:
+        // it was given for this one card, not for the next minute.
+        if ok, freshness == .recentWillDo { validUntil = Date().addingTimeInterval(60) }
         return ok
     }
 }

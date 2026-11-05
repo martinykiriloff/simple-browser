@@ -318,6 +318,16 @@ public actor AutofillVault {
     /// report, never a reason to make a new one: that would lock it for good.
     private let passwordVault: URL?
     private var cache: Contents?
+    private var cacheStamp: Stamp?
+
+    /// What the file looked like when it was read. Another window of the app
+    /// is another process with its own vault object, so a cache that is never
+    /// checked against the file would hide that window's new card -- and the
+    /// next write here would drop it.
+    private struct Stamp: Equatable {
+        var modified: Date?
+        var size: Int?
+    }
 
     public init(fileURL: URL, keyProvider: any VaultKeyProvider, passwordVault: URL? = nil) {
         self.fileURL = fileURL
@@ -325,9 +335,25 @@ public actor AutofillVault {
         self.passwordVault = passwordVault
     }
 
+    private func stamp() -> Stamp? {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: fileURL.path) else { return nil }
+        return Stamp(modified: attributes[.modificationDate] as? Date, size: (attributes[.size] as? NSNumber)?.intValue)
+    }
+
+    /// Re-reads the file whenever it has changed since it was last read.
     public func contents() throws -> Contents {
-        if let cache { return cache }
-        guard let data = try? Data(contentsOf: fileURL) else { return Contents() }
+        let current = stamp()
+        if let cache, current == cacheStamp { return cache }
+        guard current != nil else {
+            // No file yet: nothing kept, which is not the same as a file that
+            // cannot be opened -- that throws, below.
+            let empty = Contents()
+            cache = empty
+            cacheStamp = nil
+            return empty
+        }
+        let data: Data
+        do { data = try Data(contentsOf: fileURL) } catch { throw CredentialStoreError.io(error.localizedDescription) }
         guard data.prefix(Self.magic.count) == Self.magic, let raw = try keyProvider.existingKey() else {
             throw CredentialStoreError.io("the AutoFill file cannot be opened")
         }
@@ -335,6 +361,7 @@ public actor AutofillVault {
         let plain = try AES.GCM.open(box, using: SymmetricKey(data: raw), authenticating: Self.magic)
         let contents = try JSONDecoder().decode(Contents.self, from: plain)
         cache = contents
+        cacheStamp = current
         return contents
     }
 
@@ -356,6 +383,10 @@ public actor AutofillVault {
     public func deleteCard(_ id: UUID) throws { try mutate { $0.cards.removeAll { $0.id == id } } }
 
     private func mutate(_ change: (inout Contents) -> Void) throws {
+        // From the file, not from a cache taken minutes ago, so another
+        // window's addresses and cards survive this write. `contents` throws
+        // for a vault that cannot be opened, which is what stops this
+        // replacing it with a nearly empty one.
         var contents = try self.contents()
         change(&contents)
         let raw: Data
@@ -370,13 +401,24 @@ public actor AutofillVault {
         guard let sealed = try AES.GCM.seal(plain, using: SymmetricKey(data: raw), authenticating: Self.magic).combined else {
             throw CredentialStoreError.io("could not seal the AutoFill file")
         }
-        try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        let temporary = fileURL.appendingPathExtension("tmp")
-        guard FileManager.default.createFile(atPath: temporary.path, contents: Self.magic + sealed, attributes: [.posixPermissions: 0o600]) else {
+        let manager = FileManager.default
+        let directory = fileURL.deletingLastPathComponent()
+        // The directory is the owner's own, as the passwords' is.
+        try manager.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        // Born private, under a name nobody can have guessed -- two windows
+        // writing at once would otherwise write the same file over each other
+        // -- then renamed into place: never world-readable, never half-written.
+        let temporary = directory.appendingPathComponent(".\(fileURL.lastPathComponent).\(UUID().uuidString)")
+        guard manager.createFile(atPath: temporary.path, contents: Self.magic + sealed, attributes: [.posixPermissions: 0o600]) else {
             throw CredentialStoreError.io("could not write the AutoFill file")
         }
-        _ = try FileManager.default.replaceItemAt(fileURL, withItemAt: temporary)
+        if rename(temporary.path, fileURL.path) != 0 {
+            let reason = String(cString: strerror(errno))
+            try? manager.removeItem(at: temporary)
+            throw CredentialStoreError.io("could not replace the AutoFill file: \(reason)")
+        }
         cache = contents
+        cacheStamp = stamp()
     }
 }
 

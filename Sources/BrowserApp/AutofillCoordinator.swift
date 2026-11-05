@@ -8,8 +8,16 @@ import PasswordKit
 /// each field is for is decided here (`AutofillClassifier`), and the list
 /// under the field is a native panel the page cannot read. One choice fills
 /// the whole form, name, address and card; a card is filled only after the
-/// person has confirmed it is them (Touch ID or the Mac's password). Its
-/// security code is never kept, and never filled.
+/// person has confirmed it is them (Touch ID or the Mac's password), every
+/// time. Its security code is never kept, and never filled.
+///
+/// The rules the saved passwords keep hold here too, because a card number
+/// is no less worth stealing than a password. The origin is always the one
+/// WebKit reports for the frame a message came from, never something the page
+/// said; nothing is offered or filled on a page that is not on a secure
+/// origin; and the values travel into the page only as arguments to the agent
+/// in its isolated world, into a document whose origin the agent re-checks,
+/// so a frame that navigated while the person was confirming gets nothing.
 @MainActor
 final class AutofillCoordinator: NSObject, WKScriptMessageHandler {
     static let worldName = "KeelAutofill"
@@ -27,11 +35,14 @@ final class AutofillCoordinator: NSObject, WKScriptMessageHandler {
     private weak var userContentController: WKUserContentController?
     let suggestions = CredentialSuggestionPanel()
     private var keyMonitor: Any?
-    private var focus: (frame: WKFrameInfo, kinds: [AutofillFieldKind?], index: Int, rect: NSRect?)?
+    private var focus: (frame: WKFrameInfo, origin: String, kinds: [AutofillFieldKind?], index: Int, rect: NSRect?)?
     private var generation = 0
 
     /// For the self-test: the last list offered, and what is waiting to be saved.
     private(set) var offered: [String] = []
+    /// Steps taken, without an address or a card number in them. Read by the
+    /// self-test, and the one place a refusal is written down.
+    private(set) var trace: [String] = []
     private(set) var pendingSave: (address: AutofillAddress?, card: AutofillCard?)?
     private(set) var savePopover: NSPopover?
     private(set) var codePopover: NSPopover?
@@ -101,12 +112,25 @@ final class AutofillCoordinator: NSObject, WKScriptMessageHandler {
         guard let body = message.body as? [String: Any], let kind = body["kind"] as? String else { return }
         switch kind {
         case "focus": handleFocus(body, frame: message.frameInfo)
-        case "blur", "input":
+        case "blur", "input", "dismiss":
             generation += 1
             suggestions.hide()
-        case "submit": handleSubmit(body)
+        case "submit": handleSubmit(body, frame: message.frameInfo)
         default: break
         }
+    }
+
+    /// The origin of the frame a message came from, or nil when nothing may be
+    /// offered to it or filled into it: a page that is not web content at all
+    /// (`file:`, `about:`, `data:`), or one on plain http away from loopback,
+    /// where anyone on the network can rewrite the form that asks for a card
+    /// and read what is typed into it. The same rule the saved passwords keep
+    /// (`CredentialOrigin`).
+    private static func secureOrigin(of frame: WKFrameInfo) -> String? {
+        let security = frame.securityOrigin
+        guard let origin = CredentialOrigin.origin(scheme: security.protocol, host: security.host, port: security.port),
+              !CredentialOrigin.isInsecure(origin) else { return nil }
+        return origin
     }
 
     private static func descriptors(_ body: [String: Any]) -> [(AutofillFieldDescriptor, String)] {
@@ -119,6 +143,18 @@ final class AutofillCoordinator: NSObject, WKScriptMessageHandler {
 
     private func handleFocus(_ body: [String: Any], frame: WKFrameInfo) {
         guard BrowserSettings.autofillForms else { return }
+        guard let origin = Self.secureOrigin(of: frame) else {
+            note("not a secure page: nothing offered")
+            suggestions.hide()
+            return
+        }
+        // The password list is the one that wins. A single field can look like
+        // a username to one side and an email address to the other, and two
+        // lists at one anchor make the arrow keys a lottery.
+        guard !CredentialSuggestionPanel.anotherIsVisible(than: suggestions) else {
+            note("the password list is up for this field")
+            return
+        }
         let fields = Self.descriptors(body)
         let kinds = AutofillClassifier.kinds(of: fields.map(\.0))
         let index = (body["focused"] as? NSNumber)?.intValue ?? -1
@@ -128,7 +164,7 @@ final class AutofillCoordinator: NSObject, WKScriptMessageHandler {
            let width = (r["width"] as? NSNumber)?.doubleValue, let height = (r["height"] as? NSNumber)?.doubleValue {
             rect = NSRect(x: x, y: y, width: width, height: height)
         }
-        focus = (frame, kinds, index, rect)
+        focus = (frame, origin, kinds, index, rect)
         generation += 1
         if focused == .oneTimeCode {
             showCodeField()
@@ -136,10 +172,22 @@ final class AutofillCoordinator: NSObject, WKScriptMessageHandler {
         }
         let current = generation
         Task { @MainActor in
-            guard let contents = try? await service.autofill?.contents(), current == generation else { return }
+            // A vault that cannot be opened is not an empty one: nothing is
+            // offered, and the person is told when they try to save.
+            guard let vault = service.autofill else { return }
+            let contents: AutofillVault.Contents
+            do {
+                contents = try await vault.contents()
+            } catch {
+                note("could not read the AutoFill vault: \(error)")
+                suggestions.hide()
+                return
+            }
+            guard current == generation else { return }
             let items = offers(for: focused, kinds: kinds, contents: contents)
             offered = items.map(\.title)
-            guard !items.isEmpty, let window = webView?.window else { suggestions.hide(); return }
+            guard !items.isEmpty, let window = webView?.window,
+                  !CredentialSuggestionPanel.anotherIsVisible(than: suggestions) else { suggestions.hide(); return }
             suggestions.show(items, below: screenRect(for: rect), in: window)
         }
     }
@@ -174,23 +222,62 @@ final class AutofillCoordinator: NSObject, WKScriptMessageHandler {
     func choose(address: AutofillAddress?, card: AutofillCard?) {
         guard let focus else { return }
         Task { @MainActor in
-            if card != nil, !(await service.authenticator.authenticate(reason: "fill your card details")) { return }
+            if card != nil {
+                // Every card going into a page is confirmed afresh. The
+                // minute's grace that Settings allows is for looking through
+                // your own cards there; here it would let the page that opens
+                // straight afterwards have a card number with nobody asked.
+                guard await service.authenticator.authenticate(reason: "fill your card details", freshness: .required) else {
+                    note("not confirmed: no card filled")
+                    return
+                }
+            }
             let values = AutofillFill.values(for: focus.kinds, address: address, card: card)
             let strings = Dictionary(uniqueKeysWithValues: values.map { (String($0.key), $0.value) })
-            _ = try? await webView?.callAsyncJavaScript("return window.__simpleBrowserAutofill.fill(values)", arguments: ["values": strings],
-                                                        in: focus.frame, contentWorld: world)
+            note("fill \(card == nil ? "address" : "address and card"): \(await fill(strings, into: focus))")
         }
+    }
+
+    /// Hands the values to the agent, which refuses them unless the document
+    /// is still the one they were meant for and the fields are still there to
+    /// be seen. Confirming a card takes as long as the person takes, and the
+    /// page can navigate or rearrange itself in the meantime.
+    private func fill(_ values: [String: String], into focus: (frame: WKFrameInfo, origin: String, kinds: [AutofillFieldKind?], index: Int, rect: NSRect?)) async -> String {
+        guard !values.isEmpty else { return "nothing to fill" }
+        let outcome = try? await webView?.callAsyncJavaScript(
+            "return window.__simpleBrowserAutofill.fill({ values: values, origin: origin })",
+            arguments: ["values": values, "origin": focus.origin], in: focus.frame, contentWorld: world)
+        guard let result = outcome as? [String: Any] else { return "failed" }
+        if let reason = result["reason"] as? String { return reason }
+        let filled = (result["filled"] as? NSNumber)?.intValue ?? 0
+        let refused = (result["refused"] as? NSNumber)?.intValue ?? 0
+        return refused > 0 ? "\(filled) filled, \(refused) hidden and left alone" : "\(filled) filled"
     }
 
     // MARK: - Saving what was typed
 
-    private func handleSubmit(_ body: [String: Any]) {
+    private func handleSubmit(_ body: [String: Any], frame: WKFrameInfo) {
         guard allowsSaving, BrowserSettings.autofillForms else { return }
+        guard Self.secureOrigin(of: frame) != nil else {
+            note("not a secure page: not offering to save")
+            return
+        }
         let fields = Self.descriptors(body)
         let captured = AutofillFill.captured(kinds: AutofillClassifier.kinds(of: fields.map(\.0)), values: fields.map(\.1))
         guard captured.address != nil || captured.card != nil else { return }
         Task { @MainActor in
-            let contents = (try? await service.autofill?.contents()) ?? .init()
+            guard let vault = service.autofill else { return }
+            // Not `try?`: a vault that cannot be opened reads as empty, and
+            // every address and card in it would then look new -- asking the
+            // person to save what they have already saved, over and over,
+            // and overwriting the file they cannot open if they said yes.
+            let contents: AutofillVault.Contents
+            do {
+                contents = try await vault.contents()
+            } catch {
+                note("could not read the AutoFill vault: \(error)")
+                return
+            }
             let address = captured.address.flatMap { new in contents.addresses.contains { $0.isSame(as: new) } ? nil : new }
             let card = captured.card.flatMap { new in contents.cards.contains { $0.number == new.number } ? nil : new }
             guard address != nil || card != nil else { return }
@@ -225,10 +312,27 @@ final class AutofillCoordinator: NSObject, WKScriptMessageHandler {
         guard save, let pending = pendingSave else { pendingSave = nil; return }
         pendingSave = nil
         Task { @MainActor in
-            if let address = pending.address { try? await service.autofill?.save(address) }
-            if let card = pending.card { try? await service.autofill?.save(card) }
-            NotificationCenter.default.post(name: PasswordService.didChange, object: service)
+            do {
+                guard let vault = service.autofill else { throw CredentialStoreError.io("this window has no AutoFill vault") }
+                if let address = pending.address { try await vault.save(address) }
+                if let card = pending.card { try await vault.save(card) }
+                note("saved")
+                NotificationCenter.default.post(name: PasswordService.didChange, object: service)
+            } catch {
+                // Silence here would be the worst of it: the popover closes,
+                // the person believes the card is kept, and it is nowhere.
+                note("save failed: \(error)")
+                presentSaveFailure(error, what: pending.card != nil ? "card" : "address")
+            }
         }
+    }
+
+    private func presentSaveFailure(_ error: any Error, what: String) {
+        guard let window = webView?.window else { return }
+        let alert = NSAlert()
+        alert.messageText = "The \(what) could not be saved for AutoFill"
+        alert.informativeText = PasswordCoordinator.describe(error)
+        alert.beginSheetModal(for: window)
     }
 
     // MARK: - One-time codes
@@ -257,8 +361,7 @@ final class AutofillCoordinator: NSObject, WKScriptMessageHandler {
         codePopover?.close()
         guard let focus, !code.isEmpty else { return }
         Task { @MainActor in
-            _ = try? await webView?.callAsyncJavaScript("return window.__simpleBrowserAutofill.fill(values)",
-                                                        arguments: ["values": [String(focus.index): code]], in: focus.frame, contentWorld: world)
+            note("fill code: \(await fill([String(focus.index): code], into: focus))")
             webView?.window?.makeFirstResponder(webView)
         }
     }
@@ -272,6 +375,11 @@ final class AutofillCoordinator: NSObject, WKScriptMessageHandler {
         var inView = NSRect(x: rect.minX * scale, y: rect.minY * scale, width: rect.width * scale, height: rect.height * scale)
         if !webView.isFlipped { inView.origin.y = webView.bounds.height - inView.maxY }
         return window.convertToScreen(webView.convert(inView, to: nil))
+    }
+
+    private func note(_ step: String) {
+        trace.append(step)
+        if trace.count > 200 { trace.removeFirst(50) }
     }
 }
 

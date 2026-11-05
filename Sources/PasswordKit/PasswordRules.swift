@@ -49,7 +49,9 @@ public struct PasswordRules: Equatable, Sendable {
             case "required":
                 if let set = characterClass(value), !set.isEmpty { rules.required.append(set) }
             case "allowed":
-                if let set = characterClass(value) { rules.allowed = (rules.allowed ?? []).union(set) }
+                // An empty class ("allowed: ;") allows nothing, which no password
+                // can satisfy: treated as unsaid, like `required` above.
+                if let set = characterClass(value), !set.isEmpty { rules.allowed = (rules.allowed ?? []).union(set) }
             case "minlength":
                 if let n = Int(value), n > 0 { rules.minLength = max(rules.minLength ?? 0, n) }
             case "maxlength":

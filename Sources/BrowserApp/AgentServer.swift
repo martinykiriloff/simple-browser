@@ -231,7 +231,14 @@ final class AgentServer {
         case "POST":
             return await handleMessage(request, client: client)
         case "DELETE":
-            if let id = request.header("mcp-session-id") { sessions[id] = nil }
+            // Only the client an MCP session belongs to may end it: the id
+            // travels in a header any paired client could copy.
+            if let id = request.header("mcp-session-id") {
+                guard sessions[id]?.client == client.id else {
+                    return .json(["error": "No such MCP session for this client."], status: 404)
+                }
+                sessions[id] = nil
+            }
             return HTTPResponse(status: 200)
         case "GET":
             // No server-initiated stream: everything comes back as a reply.
@@ -289,8 +296,9 @@ final class AgentServer {
 
     private func handleMessage(_ request: HTTPRequest, client: PairedClient) async -> HTTPResponse {
         let session = request.header("mcp-session-id")
-        // A session from before a restart: the client starts over.
-        if let session, sessions[session] == nil, !Self.isInitialize(request.body) {
+        // A session from before a restart, or one belonging to another
+        // client: either way this client starts over with its own.
+        if let session, sessions[session]?.client != client.id, !Self.isInitialize(request.body) {
             return .json(["jsonrpc": "2.0", "id": nil, "error": ["code": -32001, "message": "Session not found; initialize again"]], status: 404)
         }
         let toolbox = self.toolbox

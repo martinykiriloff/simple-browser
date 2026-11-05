@@ -28,6 +28,20 @@ final class CredentialSuggestionPanel {
     private weak var parent: NSWindow?
     private var observers: [NSObjectProtocol] = []
 
+    /// The list on screen, of however many a tab has. A tab watches its fields
+    /// twice over -- once for saved sign-ins, once for addresses and cards --
+    /// and one field can look like both, so without this two lists would sit
+    /// at the same anchor and the arrow keys would go to whichever monitor
+    /// answered first. Only ever one.
+    private(set) static weak var onScreen: CredentialSuggestionPanel?
+
+    /// Whether some other list is up. The address side asks before offering,
+    /// and keeps quiet when the passwords' list has the field.
+    static func anotherIsVisible(than panel: CredentialSuggestionPanel) -> Bool {
+        guard let onScreen, onScreen !== panel else { return false }
+        return onScreen.isVisible
+    }
+
     var isVisible: Bool { panel?.isVisible ?? false }
     /// For the self-test: what is on offer, in order.
     var titles: [String] { rows.map(\.item.title) }
@@ -36,6 +50,9 @@ final class CredentialSuggestionPanel {
     func show(_ items: [Item], below anchor: NSRect, in parent: NSWindow) {
         hide()
         guard !items.isEmpty else { return }
+        // Whoever shows a list last has it; the one before it goes away rather
+        // than being left underneath, where it would still take key presses.
+        Self.onScreen?.hide()
 
         let stack = NSStackView()
         stack.orientation = .vertical
@@ -98,6 +115,7 @@ final class CredentialSuggestionPanel {
         parent.addChildWindow(panel, ordered: .above)
         self.panel = panel
         self.parent = parent
+        Self.onScreen = self
         selection = nil
 
         let center = NotificationCenter.default
@@ -111,6 +129,7 @@ final class CredentialSuggestionPanel {
     func hide() {
         observers.forEach(NotificationCenter.default.removeObserver)
         observers = []
+        if Self.onScreen === self { Self.onScreen = nil }
         guard let panel else { return }
         parent?.removeChildWindow(panel)
         panel.orderOut(nil)

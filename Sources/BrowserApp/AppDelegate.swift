@@ -214,9 +214,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Before anything else, and before the session is read: moved, the
         // app opens again from the Applications folder, and this one quits.
-        if launch.url == nil, !usesScratchData, mover.offerIfNeeded() != nil {
+        if launch.url == nil, !usesScratchData {
+            // The flag goes up first: the move ends in `NSApp.terminate`,
+            // which does not come back, so anything set after it would never
+            // be set at all and the quit would save a session with no
+            // windows in it. Down again when there was nothing to move.
             relaunchingAfterMove = true
-            return
+            if mover.offerIfNeeded() != nil { return }
+            relaunchingAfterMove = false
         }
         // Before any window: the rule lists compiled last time are looked
         // up while the first tab is being made.
@@ -268,7 +273,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // Developer aid: the same action the Home button performs.
                 DispatchQueue.main.asyncAfter(deadline: .now() + 2) { controller.goHome(nil) }
             }
-            if launch.showSettings { showSettings(nil) }
+            if launch.showSettings {
+                let panes: [String: SettingsWindowController.Pane] = ["general": .general, "tabs": .tabs, "passwords": .passwords, "autofill": .autofill,
+                    "privacy": .privacy, "websites": .websites, "extensions": .extensions, "agents": .agents, "developer": .developer, "advanced": .advanced]
+                if let name = launch.settingsPane, let pane = panes[name] { settingsWindow.show(pane, sender: nil) } else { showSettings(nil) }
+            }
             if launch.showPasswords { showPasswords(nil) }
             if let out = launch.passwordsSelfTestOutput {
                 PasswordSelfTest.run(app: self, browser: controller, output: out, snapshots: launch.snapshotDirectory)
@@ -295,6 +304,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     Self.snapshot(self.settingsWindow.window, to: directory + "/settings.png")
                 }
             }
+            if let directory = launch.recordFrames { startRecordingFrames(to: directory, every: launch.frameInterval) }
             if let panel = launch.devToolsPanel { controller.showDevTools(panel: panel == "" ? nil : panel) }
             if let script = launch.devToolsScript, let out = launch.devToolsOutput {
                 runDevToolsScript(script, output: out, in: controller, delay: launch.devToolsDelay)
@@ -1091,8 +1101,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     private var restoredPrevious = false
 
+    /// The tabs of a window already written down as closed. File → Close
+    /// Window records the whole window before closing a single tab of it;
+    /// the last of those tabs closing must not then write itself down as a
+    /// window of one tab, because Reopen Last Closed Window takes the last
+    /// written and would bring back one tab of the window it took away.
+    private var rememberedClosing: Set<TabID> = []
+
     private func rememberClosedWindow(_ controller: BrowserWindowController) {
         guard !controller.isPrivate else { return }
+        let tabWindows = controller.window?.tabbedWindows ?? [controller.window].compactMap { $0 }
+        let tabs = tabWindows.compactMap { tabWindow in controllers.first { $0.window === tabWindow } }
+            .flatMap { tab in [tab] + [tab.split?.guest].compactMap { $0 } }
+        for tab in tabs + [controller] { rememberedClosing.insert(tab.tab) }
         closedWindows.append(windowSnapshot(of: controller))
         if closedWindows.count > 10 { closedWindows.removeFirst() }
     }
@@ -1142,6 +1163,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         bookmarkWindows[id] = nil
         historyWindows[id]?.close()
         historyWindows[id] = nil
+        // What the settings kept for this profile alone goes with it: the
+        // sites it granted the camera, microphone or location to, the sites
+        // it turned blocking off for, its zoom levels, its saved tab groups.
+        // The alert promises the profile's data is deleted, and a grant left
+        // behind would come back to life under a profile made with the same
+        // id. Every per-profile key ends in the profile's id (see
+        // `BrowserSettings`), so they go by that rather than one by one, and
+        // a key added there later is covered without a change here.
+        let suffix = "." + id.description
+        for key in BrowserSettings.store.dictionaryRepresentation().keys
+        where key.hasPrefix("settings.") && key.hasSuffix(suffix) {
+            BrowserSettings.store.removeObject(forKey: key)
+        }
         Task { @MainActor in
             await profiles.remove(id)
             if controllers.isEmpty { newWindow(nil) }
@@ -1290,8 +1324,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         controller.onTabClosed = { [weak self, weak controller] url, state, title in
             guard let self, let controller, !controller.isPrivate, !self.terminating, url != nil || state != nil else { return }
-            // The last tab of a window closing is the window closing.
-            if (controller.window?.tabbedWindows?.count ?? 1) <= 1 { self.rememberClosedWindow(controller) }
+            // The last tab of a window closing is the window closing, unless
+            // the window itself was written down already (⇧⌘W).
+            if (controller.window?.tabbedWindows?.count ?? 1) <= 1, !self.rememberedClosing.contains(controller.tab) {
+                self.rememberClosedWindow(controller)
+            }
             self.closedTabs.append(ClosedTab(profileID: controller.profile.id, url: url, state: state, title: title))
             if self.closedTabs.count > 25 { self.closedTabs.removeFirst() }
         }
@@ -1301,7 +1338,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         controller.onClose = { [weak self, weak controller] in
             self?.controllers.removeAll { $0 === controller }
             self?.mediaChanged()
-            if let controller { self?.privateTabClosed(controller) }
+            if let controller {
+                self?.rememberedClosing.remove(controller.tab)
+                self?.privateTabClosed(controller)
+            }
         }
         controller.onBecomeKey = { [weak self, weak controller] in
             guard let self, let controller else { return }
@@ -1317,6 +1357,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
               let bitmap = frameView.bitmapImageRepForCachingDisplay(in: frameView.bounds) else { return }
         frameView.cacheDisplay(in: frameView.bounds, to: bitmap)
         try? bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+    }
+
+    /// Developer aid: every visible window as `<frame>-<window>.png`, for
+    /// screencasts made where the screen itself cannot be recorded.
+    private func startRecordingFrames(to directory: String, every interval: Double) {
+        try? FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+        var frame = 0
+        frameTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { _ in
+            MainActor.assumeIsolated {
+                frame += 1
+                for window in NSApp.windows where window.isVisible && window.frame.width > 200 && !(window is NSPanel && window.title.isEmpty && window.frame.height < 60) {
+                    Self.snapshot(window, to: String(format: "%@/%05d-%d.png", directory, frame, window.windowNumber))
+                }
+            }
+        }
+    }
+    private static var frameTimerStorage: Timer?
+    private var frameTimer: Timer? {
+        get { Self.frameTimerStorage }
+        set { Self.frameTimerStorage = newValue }
     }
 
     /// Developer aid: keeps a JSON copy of the recording on disk, rewritten
@@ -1367,8 +1427,13 @@ struct LaunchOptions {
     var protocolProbeOutput: String?
     var goHome = false
     var showSettings = false
+    /// `--show-settings-pane <name>`: Settings open on that pane (agents, developer, general…).
+    var settingsPane: String?
     var snapshotDirectory: String?
     var snapshotDelay: Double = 3
+    /// `--record-frames <dir>`: every visible window to PNG, every `--frame-interval` seconds (0.25), for screencasts.
+    var recordFrames: String?
+    var frameInterval: Double = 0.25
     var uiSelfTestOutput: String?
     var passwordsSelfTestOutput: String?
     var pageSelfTestOutput: String?
@@ -1418,6 +1483,9 @@ struct LaunchOptions {
                 options.goHome = true
             case "--show-settings":
                 options.showSettings = true
+            case "--show-settings-pane":
+                options.showSettings = true
+                options.settingsPane = iterator.next()
             case "--passwords-selftest":
                 options.passwordsSelfTestOutput = iterator.next()
             case "--update-feed":
@@ -1452,6 +1520,10 @@ struct LaunchOptions {
                 options.showPasswords = true
             case "--ui-selftest":
                 options.uiSelfTestOutput = iterator.next()
+            case "--record-frames":
+                options.recordFrames = iterator.next()
+            case "--frame-interval":
+                options.frameInterval = iterator.next().flatMap(Double.init) ?? 0.25
             case "--snapshot-delay":
                 options.snapshotDelay = iterator.next().flatMap(Double.init) ?? 3
             case "--snapshot-windows":

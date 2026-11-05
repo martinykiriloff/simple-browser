@@ -120,7 +120,7 @@ public enum BrowserTools {
                     "fullPage": ["type": "boolean", "description": "The whole scrollable page, not just the viewport. Default false."],
                     "format": ["type": "string", "enum": ["png", "jpeg"], "description": "Default \"png\"; \"jpeg\" is much smaller."],
                     "quality": ["type": "integer", "description": "JPEG quality 1–100. Default 80."],
-                    "savePath": ["type": "string", "description": "Also write the image to this absolute path."],
+                    "savePath": ["type": "string", "description": "Also write the image to this absolute path. Only inside the Downloads folder or the temporary directory; anywhere else is refused."],
                 ])), readOnly: true),
 
         // Acting
@@ -148,12 +148,13 @@ public enum BrowserTools {
                     "submit": ["type": "boolean", "description": "Press Enter in the last field afterwards. Default false."],
                 ], required: ["fields"])),
         MCPTool(name: "type_text", title: "Type text",
-                description: "Types text as real key presses into the focused element, or into the element given (which is clicked first to focus it).",
+                description: "Types text as real key presses into the focused element, or into the element given by ref or selector (which is clicked first to focus it). The text to type goes in value: this is the one tool where text does not name the element.",
                 inputSchema: schema(targeting([
-                    "text": ["type": "string", "description": "Text to type."],
+                    "value": ["type": "string", "description": "The text to type."],
+                    "text": ["type": "string", "description": "The older name for value, still accepted: the text to type. Unlike every other tool, it never names the element here."],
                     "submit": ["type": "boolean", "description": "Press Enter afterwards. Default false."],
                     "clear": ["type": "boolean", "description": "Select and delete the existing content first. Default false."],
-                ]), required: ["text"])),
+                ]))),
         MCPTool(name: "press_key", title: "Press a key",
                 description: "Presses a key or chord in the page, e.g. \"Enter\", \"Escape\", \"Tab\", \"ArrowDown\", \"Backspace\", \"Meta+A\", \"Shift+Tab\", \"Control+Enter\".",
                 inputSchema: schema([

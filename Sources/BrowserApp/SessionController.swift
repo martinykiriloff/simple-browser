@@ -57,12 +57,37 @@ final class SessionController {
     }
 
     func save(_ snapshot: SessionSnapshot) {
-        guard isEnabled else { return }
+        guard isEnabled, !wouldLoseTabs(snapshot) else { return }
         var comparable = snapshot
         comparable.savedAt = .distantPast
         guard let data = try? JSONEncoder().encode(comparable), data != lastWritten else { return }
         lastWritten = data
         if let stamped = try? JSONEncoder().encode(snapshot) { try? stamped.write(to: sessionFile, options: .atomic) }
+    }
+
+    /// Whether writing this would throw away tabs that are saved: it holds
+    /// no page at all, and what is on disk does.
+    ///
+    /// Losing tabs is the one thing a browser must never do, and an empty
+    /// snapshot is almost always an accident of when it was taken rather
+    /// than anything the person did. A window closes before the app is
+    /// asked to quit, so by the time the quit saves, every window has gone
+    /// and the snapshot is empty however many tabs were open a moment
+    /// earlier. Keeping what was saved last instead means closing the last
+    /// window with ⌘W, or quitting with no window open, brings those tabs
+    /// back next time rather than nothing at all — which is also what the
+    /// person closing tabs one by one gets: each of those closings is saved
+    /// as it happens, so what comes back is the last tab they had, not the
+    /// whole window they emptied. Nothing here can delete a saved session;
+    /// only a session with a page in it can replace one.
+    private func wouldLoseTabs(_ snapshot: SessionSnapshot) -> Bool {
+        guard snapshot.isEmpty else { return false }
+        // Read from the file rather than from `previous`: a run that quits
+        // before `begin()` (the move to the Applications folder) has not
+        // looked at it yet.
+        guard let data = try? Data(contentsOf: sessionFile),
+              let saved = try? JSONDecoder().decode(SessionSnapshot.self, from: data) else { return false }
+        return !saved.isEmpty
     }
 
     /// A clean quit: the session is saved and the marker goes.

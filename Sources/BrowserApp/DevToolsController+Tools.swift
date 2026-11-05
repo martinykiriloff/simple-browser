@@ -187,6 +187,14 @@ extension DevToolsController {
 
     // MARK: - Request blocking
 
+    /// The identifier this tab's blocking list is compiled under.
+    private var blockingIdentifier: String { "devtools-blocking-\(tab)" }
+
+    /// Identifiers this process has compiled, so the sweep below never
+    /// removes a list another tab's DevTools is using.
+    private static var liveBlockingIdentifiers: Set<String> = []
+    private static var hasSweptBlockingLists = false
+
     /// Compiles the patterns into a content rule list on the tab: WebKit then
     /// blocks matching loads in its network process, every resource type,
     /// with or without the inspector protocol.
@@ -201,10 +209,40 @@ extension DevToolsController {
         }
         let json = String(decoding: try JSONSerialization.data(withJSONObject: rules), as: UTF8.self)
         guard let store = WKContentRuleListStore.default() else { return }
-        let list = try await store.compileContentRuleList(forIdentifier: "devtools-blocking-\(tab)", encodedContentRuleList: json)
+        Self.liveBlockingIdentifiers.insert(blockingIdentifier)
+        let list = try await store.compileContentRuleList(forIdentifier: blockingIdentifier, encodedContentRuleList: json)
         // A newer call may have cleared the patterns while this compiled.
         guard tools.isShown, !tools.blockedPatterns.isEmpty else { return }
         ContentBlocker.setPinnedLists(list.map { [$0] } ?? [], for: controller)
+    }
+
+    /// The default rule list store is on disk and keeps what it compiled, the
+    /// way `ContentBlocker` does for its own lists. A pattern typed into the
+    /// blocking pane is a per-tab, per-session thing, so its list goes when
+    /// the DevTools that compiled it does.
+    func removeBlockingList() {
+        if let controller = page?.configuration.userContentController {
+            ContentBlocker.setPinnedLists([], for: controller)
+        }
+        let identifier = blockingIdentifier
+        Self.liveBlockingIdentifiers.remove(identifier)
+        Task { try? await WKContentRuleListStore.default()?.removeContentRuleList(forIdentifier: identifier) }
+    }
+
+    /// Once per run: the lists left behind by earlier runs (a crash, or the
+    /// versions of this code that never removed them) are compiled on disk
+    /// under tab ids that mean nothing now.
+    func sweepStaleBlockingLists() {
+        guard !Self.hasSweptBlockingLists else { return }
+        Self.hasSweptBlockingLists = true
+        Task {
+            guard let store = WKContentRuleListStore.default(),
+                  let identifiers = await store.availableIdentifiers() else { return }
+            for identifier in identifiers where identifier.hasPrefix("devtools-blocking-")
+                && !Self.liveBlockingIdentifiers.contains(identifier) {
+                try? await store.removeContentRuleList(forIdentifier: identifier)
+            }
+        }
     }
 
     /// Chrome's pattern syntax → a WebKit `url-filter` regex: a substring

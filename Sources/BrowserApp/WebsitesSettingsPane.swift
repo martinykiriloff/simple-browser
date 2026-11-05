@@ -156,6 +156,10 @@ final class WebsitesSettingsPane: NSViewController, NSTableViewDataSource, NSTab
         set(PermissionChoice.allCases[sender.indexOfSelectedItem], forRow: sender.tag)
     }
 
+    /// Changing a choice here tells every tab (through `didChange`, posted
+    /// by `stored`), and a tab using the camera or the microphone of a site
+    /// that may no longer have it stops there and then: the light goes out
+    /// with the choice, not at the next reload.
     func set(_ choice: PermissionChoice?, forRow row: Int) {
         guard rows.indices.contains(row) else { return }
         var all = stored

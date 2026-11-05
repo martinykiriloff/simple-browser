@@ -216,7 +216,10 @@
       $("#network-clear").addEventListener("click", () => this.clear());
       $("#network-filter").addEventListener("input", debounce(() => this.setFilter($("#network-filter").value), 100));
       $("#network-invert").addEventListener("change", (e) => { this.invert = e.target.checked; this.renderAll(); });
-      $("#network-preserve").addEventListener("change", (e) => { this.preserve = e.target.checked; });
+      // The native log holds the same rows (and their bodies, up to 40MB of
+      // data URL each), so it must forget them when the panel does.
+      $("#network-preserve").addEventListener("change", (e) => { this.setPreserve(e.target.checked); });
+      this.setPreserve($("#network-preserve").checked);
       $("#network-har").addEventListener("click", () => this.exportHAR());
       $("#network-import").addEventListener("click", () => this.importHARFromDisk());
       $("#network-explain").addEventListener("click", () => this.setExplain(!this.explain));
@@ -341,6 +344,14 @@
       if (this.session) { this.closeSession(); return; }
       DevTools.rpc("Network.clear").catch(() => {});
       this.clearLocal();
+    },
+
+    // "Preserve log": while it is off the app clears its own log on
+    // navigation, so an export or the Claude panel never describes a
+    // document the panel stopped showing.
+    setPreserve(on) {
+      this.preserve = !!on;
+      DevTools.rpc("Network.setPreserveLog", { on: this.preserve }).catch(() => {});
     },
 
     clearLocal() {

@@ -59,12 +59,21 @@ final class ApplicationMover {
         }) else { throw CocoaError(.fileWriteNoPermission) }
         let destination = folder.appendingPathComponent(bundle.lastPathComponent)
         let staged = folder.appendingPathComponent("." + bundle.lastPathComponent + "-\(UUID().uuidString)")
-        try fm.copyItem(at: bundle, to: staged)
-        Self.removeQuarantine(staged)
-        if fm.fileExists(atPath: destination.path) {
-            _ = try fm.replaceItemAt(destination, withItemAt: staged)
-        } else {
-            try fm.moveItem(at: staged, to: destination)
+        do {
+            try fm.copyItem(at: bundle, to: staged)
+            Self.removeQuarantine(staged)
+            if fm.fileExists(atPath: destination.path) {
+                _ = try fm.replaceItemAt(destination, withItemAt: staged)
+            } else {
+                try fm.moveItem(at: staged, to: destination)
+            }
+        } catch {
+            // Whatever was staged goes before the error does: left behind,
+            // it is a whole hidden copy of the app in the Applications
+            // folder, and every retry would leave another. A copy that
+            // arrived is gone by now and there is nothing to remove.
+            try? fm.removeItem(at: staged)
+            throw error
         }
         if location.removesOriginal { discard(bundle) }
         return destination

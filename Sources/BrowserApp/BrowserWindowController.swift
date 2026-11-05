@@ -567,9 +567,25 @@ final class BrowserWindowController: NSWindowController,
     /// Called before ⇧⌘W closes the window, with every tab, for Reopen Last Closed Window.
     var onWindowClosing: ((BrowserWindowController) -> Void)?
 
-    /// File → Close Window (⇧⌘W): every tab of this window.
+    /// File → Close Window (⇧⌘W): every tab of this window, both sides of a
+    /// split among them.
+    ///
+    /// A split's guest is not one of `tabbedWindows`: it left the tab bar
+    /// when the split opened, and was closed by nothing here before. Its
+    /// side goes first, so the tab it stood beside is an ordinary tab again
+    /// by the time that one closes.
     @objc func closeWindowAndTabs(_ sender: Any?) {
+        // Beside another tab in a split, the window on screen is that tab's,
+        // and it is the one Close Window means.
+        if let host = splitHost {
+            host.closeWindowAndTabs(sender)
+            return
+        }
         onWindowClosing?(self)
+        closingWholeWindow = true
+        defer { closingWholeWindow = false }
+        let tabs = organizer?.tabs(besides: self) ?? [self]
+        for guest in tabs.compactMap({ $0.split?.guest }) { guest.window?.performClose(sender) }
         for tab in window?.tabbedWindows ?? [window].compactMap({ $0 }) { tab.performClose(sender) }
     }
 
@@ -624,16 +640,26 @@ final class BrowserWindowController: NSWindowController,
         }
     }
 
+    /// Set while File → Close Window takes the whole window: ⌘W on a split
+    /// closes the side in front and keeps the window, ⇧⌘W closes it.
+    private var closingWholeWindow = false
+
     /// ⌘W with a split closes the side in front; the other stays, as a tab.
     func windowShouldClose(_ sender: NSWindow) -> Bool {
-        guard sender === window, let split else { return true }
-        split.close(split.focused)
+        guard sender === window, let split, !closingWholeWindow else { return true }
+        // With the side in front gone already, there is no side to close:
+        // the split comes apart and the window closes as any other would.
+        guard let focused = split.focused else {
+            split.end()
+            return true
+        }
+        split.close(focused)
         return false
     }
 
     /// ⌥⌘← / ⌥⌘→ in a split: the side that way, if not there already.
     private func focusSplitSide(left: Bool) -> Bool {
-        guard let split, !split.focused.isEditingAddress else { return false }
+        guard let split, split.focused?.isEditingAddress != true else { return false }
         guard let target = left ? split.host : split.guest, split.focused !== target else { return false }
         split.focus(target)
         return true
@@ -809,10 +835,15 @@ final class BrowserWindowController: NSWindowController,
     /// The picture a sleeping tab shows.
     var hibernationImage: NSImage? { snapshotView.image }
 
-    /// Whether this tab must stay live: on screen, making sound, using the
-    /// camera or microphone, holding a form someone is filling in, or being
-    /// inspected. Asked of the page, because only it knows.
-    func mustStayLive() async -> Bool {
+    /// The part of `mustStayLive` this tab can answer by itself, with no
+    /// word from the page: on screen, beside another in a split, inspected,
+    /// using the camera or microphone, or still loading.
+    ///
+    /// The memory saver asks this again just before it puts a tab to sleep.
+    /// Asking the page takes a moment, and in that moment the person may
+    /// have switched to the tab; sent to sleep then, the page they are
+    /// looking at freezes behind a screenshot of itself.
+    var mustStayLiveNow: Bool {
         if window?.isVisible == true && window?.tabGroup?.selectedWindow === window { return true }
         // A tab beside another in a split is on screen whenever that one is.
         if splitHost != nil { return true }
@@ -820,6 +851,14 @@ final class BrowserWindowController: NSWindowController,
         if isDevToolsVisible { return true }
         if webView.cameraCaptureState != .none || webView.microphoneCaptureState != .none { return true }
         if webView.url == nil || webView.isLoading { return true }
+        return false
+    }
+
+    /// Whether this tab must stay live: on screen, making sound, using the
+    /// camera or microphone, holding a form someone is filling in, or being
+    /// inspected. Asked of the page, because only it knows.
+    func mustStayLive() async -> Bool {
+        if mustStayLiveNow { return true }
         let busy = try? await webView.callAsyncJavaScript("""
             const playing = Array.from(document.querySelectorAll('video, audio')).some(m => !m.paused && !m.muted);
             const editing = Array.from(document.querySelectorAll('input, textarea')).some(f =>
@@ -2324,6 +2363,18 @@ final class BrowserWindowController: NSWindowController,
         if let closing = notification.object as? NSWindow, closing === devToolsWindow {
             hideDevTools()
             return
+        }
+        // A split must not outlive either of its sides. This window may be
+        // closing without the split being asked (Close Group closes the
+        // guest; `window.close()` closes a host outright), and what would
+        // be left is a page in a window nobody can see, with its web
+        // process, the split's mouse monitor and its groups observer all
+        // still alive. Neither side rejoins a tab bar: the window it would
+        // join is the one closing.
+        if let split {
+            split.end(front: split.guest, rejoinTabBar: false)
+        } else if let host = splitHost {
+            host.split?.end(front: host, rejoinTabBar: false)
         }
         onTabClosed?(currentURL, interactionState as? Data, isHibernated ? hibernatedTitle : window?.title ?? "")
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }

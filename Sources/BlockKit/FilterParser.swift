@@ -198,7 +198,11 @@ public enum FilterParser {
                        ":min-text-length(", ":upward(", ":remove(", ":style(", ":watch-attr(", ":nth-ancestor(", ":others(", ":spath(",
                        ":if(", ":if-not(", ":matches-property(", ":remove-attr(", ":remove-class("]
         if dialect.contains(where: selector.contains) { return false }
-        if selector.contains("{") || selector.contains("}") || selector.contains("\\") && selector.contains("\n") { return false }
+        if selector.contains("{") || selector.contains("}") || selector.contains("\n") || selector.contains("\r") { return false }
+        // A selector ending in an unpaired backslash would escape the comma
+        // that joins it to the next one in a group, and WebKit would refuse
+        // the whole list -- fifty other filters with it.
+        if selector.reversed().prefix(while: { $0 == "\\" }).count % 2 == 1 { return false }
         var depth = 0, square = 0
         var quote: Character?
         var previous: Character?

@@ -226,11 +226,10 @@ final class AgentGrantsForm: NSObject, NSTextFieldDelegate {
                 self.rebuildOrigins()
             }
         }
-        let add = NSButton(title: "+ Add origin", target: nil, action: nil)
+        let add = KeelActionButton(title: "+ Add origin") { [weak self] in self?.showOriginInput() }
         add.isBordered = false
         add.attributedTitle = NSAttributedString(string: "+ Add origin", attributes: [.font: Keel.font(12, .medium), .foregroundColor: Keel.muted])
         add.setAccessibilityLabel("Add an allowed origin")
-        KeelButtonActions.attach(add) { [weak self] in self?.showOriginInput() }
         chips.append(add)
         originsBox.addArrangedSubview(Keel.wrapping(chips, width: inner))
         if let input = originInput { originsBox.addArrangedSubview(input.box) }

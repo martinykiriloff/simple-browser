@@ -41,7 +41,8 @@ public struct TranslationLanguage: Hashable, Sendable, Identifiable {
         let lower = normalized.lowercased()
         if let exact = all.first(where: { $0.code.lowercased() == lower }) { return exact }
         let parts = lower.split(separator: "-").map(String.init)
-        let base = parts[0]
+        // A tag of nothing but separators ("-", "__") splits to nothing: no language.
+        guard let base = parts.first else { return nil }
         switch base {
         case "zh":
             let traditional = parts.contains { ["hant", "tw", "hk", "mo"].contains($0) }

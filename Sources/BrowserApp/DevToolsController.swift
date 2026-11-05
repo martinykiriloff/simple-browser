@@ -38,7 +38,25 @@ final class DevToolsController: NSObject, WKScriptMessageHandler, WKNavigationDe
     /// While the page is paused its JavaScript cannot run, so agent calls
     /// would hang until resume. They fail fast instead.
     private(set) var isPaused = false
+    /// Our listener on the bridge, removed on teardown. An observer rather
+    /// than the bridge's single `onEvent` slot, which anything else -- the
+    /// `--protocol-probe` diagnostic, say -- may be using.
+    private var protocolObserver: UUID?
     private var protocolRequests: [String: ProtocolRequest] = [:]
+    /// Serialises the agent-to-protocol node handoff: the mark it uses lives
+    /// in one global slot in the page world, so two of these at once would
+    /// swap each other's node. See `protocolNodeId`.
+    private var nodeHandoff: Task<Int, any Error>?
+    /// Numbers the handoffs, so each has an object group of its own.
+    private var nodeHandoffCount = 0
+    /// Claude answers being streamed into this DevTools' panel, by id from
+    /// the UI. Per controller, not per process: two DevTools windows are two
+    /// sets of answers, and neither Stop button may reach the other's.
+    var claudeStreams: [String: any ClaudeAnswer] = [:]
+    /// "Preserve log" in the Network panel. While it is off, the native log
+    /// is cleared on navigation with the panel's own copy, so the HAR export
+    /// and the Claude panel's context describe the document on screen.
+    var preserveNetworkLog = false
     /// Diagnostics: recent script calls into the page and how many are outstanding.
     private var pageCallLog: [String] = []
     private var pageCallsInFlight = 0
@@ -93,6 +111,7 @@ final class DevToolsController: NSObject, WKScriptMessageHandler, WKNavigationDe
         }
         observation = recorder.observe { [weak self] change in self?.handle(change) }
         installActorHooks()
+        sweepStaleBlockingLists()
 
         if let url = Self.resourceBundle.url(forResource: "devtools", withExtension: "html", subdirectory: "DevToolsUI") {
             view.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
@@ -107,7 +126,16 @@ final class DevToolsController: NSObject, WKScriptMessageHandler, WKNavigationDe
         view.configuration.userContentController.removeScriptMessageHandler(forName: Self.handlerName)
         view.navigationDelegate = nil
         didHide()
-        protocolBridge.onEvent = nil
+        cancelClaudeStreams()
+        removeBlockingList()
+        if let token = protocolObserver { protocolBridge.removeEventObserver(token); protocolObserver = nil }
+        // Nothing else disconnects the hidden inspector frontend: without
+        // this, a closed DevTools (or a tab on its way into hibernation)
+        // leaves a live protocol connection to the page, and whatever was in
+        // flight waits out its timeout.
+        nodeHandoff = nil
+        protocolBridge.detach()
+        protocolState = "pending"
     }
 
     /// DevTools closed: a page must never stay frozen on a breakpoint nobody
@@ -288,6 +316,9 @@ final class DevToolsController: NSObject, WKScriptMessageHandler, WKNavigationDe
             return try networkLog.requests.map(Self.jsonObject)
         case "Network.clear":
             networkLog.clear(); return true
+        case "Network.setPreserveLog":
+            preserveNetworkLog = params["on"] as? Bool ?? false
+            return true
         case "Network.getResponseBody", "Network.refetch":
             guard let raw = params["id"] as? String, let id = UUID(uuidString: raw),
                   let request = networkLog.request(id: id) else { throw DevToolsError.unknownRequest }
@@ -382,7 +413,10 @@ final class DevToolsController: NSObject, WKScriptMessageHandler, WKNavigationDe
         protocolState = "attaching"
         do {
             try await protocolBridge.attach()
-            protocolBridge.onEvent = { [weak self] method, params in self?.handleProtocolEvent(method, params) }
+            if let token = protocolObserver { protocolBridge.removeEventObserver(token) }
+            protocolObserver = protocolBridge.addEventObserver { [weak self] method, params in
+                self?.handleProtocolEvent(method, params)
+            }
             // Our injected agents are user scripts; stepping must never land in them.
             _ = try? await protocolBridge.send("Debugger.setShouldBlackboxURL",
                                                ["url": "^user-script:", "shouldBlackbox": true, "caseSensitive": true, "isRegex": true])
@@ -730,12 +764,36 @@ final class DevToolsController: NSObject, WKScriptMessageHandler, WKNavigationDe
 
     /// The protocol's node id for a node in our tree: the agent marks the
     /// node, the page world remembers it, and the protocol resolves that.
+    ///
+    /// One at a time. The mark is a single global slot in the page world and
+    /// the handoff awaits three times, while every DevTools request runs in a
+    /// Task of its own: two overlapping handoffs used to read each other's
+    /// mark, and a DOM breakpoint, forced pseudo-state or a11y query would
+    /// quietly land on the wrong element. Each call queues behind the one
+    /// before it, however that one ended.
     func protocolNodeId(for params: [String: Any]) async throws -> Int {
+        let previous = nodeHandoff
+        let work = Task { @MainActor [weak self] () throws -> Int in
+            _ = await previous?.result
+            guard let self else { throw DevToolsError.noPage }
+            return try await self.resolveProtocolNodeId(for: params)
+        }
+        nodeHandoff = work
+        return try await work.value
+    }
+
+    private func resolveProtocolNodeId(for params: [String: Any]) async throws -> Int {
         guard protocolState == "attached" else { throw DevToolsError.protocolUnavailable(protocolState) }
         guard let agentNode = (params["nodeId"] as? NSNumber)?.intValue else { throw DevToolsError.unknownRequest }
+        nodeHandoffCount += 1
+        // A group of its own, registered for release before the call that
+        // creates it: a shared group let one handoff invalidate another's
+        // object id, and a release registered after the evaluate was never
+        // reached when the evaluate threw, leaving the node retained.
+        let group = "sb-node-\(nodeHandoffCount)"
+        defer { Task { _ = try? await protocolBridge.send("Runtime.releaseObjectGroup", ["objectGroup": group]) } }
         _ = try await callIsolated("DOM.mark", ["nodeId": agentNode])
-        let evaluated = try await protocolBridge.send("Runtime.evaluate", ["expression": "window.__sbInspector && window.__sbInspector.marked", "objectGroup": "sb-node"])
-        defer { Task { _ = try? await protocolBridge.send("Runtime.releaseObjectGroup", ["objectGroup": "sb-node"]) } }
+        let evaluated = try await protocolBridge.send("Runtime.evaluate", ["expression": "window.__sbInspector && window.__sbInspector.marked", "objectGroup": group])
         guard let objectId = (evaluated["result"] as? [String: Any])?["objectId"] as? String else {
             throw DevToolsError.protocolUnavailable("the node is no longer in the document")
         }
@@ -841,6 +899,13 @@ final class DevToolsController: NSObject, WKScriptMessageHandler, WKNavigationDe
                     emit("Performance.entryAdded", ["entry": json, "sequence": recorded.sequence])
                 }
             case .navigation(let nav):
+                // The Network panel drops its rows here unless "preserve log"
+                // is on. The native log goes with them: it is what the HAR
+                // export, `Network.getRequests` and the Claude panel's failed
+                // requests read, and those must describe the document the
+                // panel is showing, not three navigations ago. Rows can hold
+                // a response body each, so this is where the log stops growing.
+                if nav.phase == .started, !preserveNetworkLog { networkLog.clear() }
                 emit("Page.navigated", ["url": nav.url.absoluteString, "phase": nav.phase.rawValue,
                                         "sequence": recorded.sequence, "title": page?.title ?? ""])
                 if nav.phase == .agentReady { emit("DOM.documentUpdated", [:]) }
