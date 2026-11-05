@@ -83,7 +83,10 @@ final class DownloadRowView: NSView, NSDraggingSource {
         text.orientation = .vertical
         text.alignment = .leading
         text.spacing = 2
-        let row = NSStackView(views: [icon, text, primaryButton, revealButton, removeButton])
+        // What can be done sits at the row's far edge, lined up from row to row.
+        let row = NSStackView()
+        row.setViews([icon, text], in: .leading)
+        row.setViews([primaryButton, revealButton, removeButton], in: .trailing)
         row.spacing = 8
         row.alignment = .centerY
         row.translatesAutoresizingMaskIntoConstraints = false
@@ -211,6 +214,11 @@ final class DownloadsListController: NSViewController {
         scroll.hasVerticalScroller = true
         scroll.drawsBackground = false
         scroll.translatesAutoresizingMaskIntoConstraints = false
+        if Keel.chromeEnabled {
+            // No standing scroller track beside the list.
+            scroll.autohidesScrollers = true
+            scroll.scrollerStyle = .overlay
+        }
         emptyLabel.textColor = .secondaryLabelColor
         emptyLabel.translatesAutoresizingMaskIntoConstraints = false
         clearButton.target = self
@@ -356,6 +364,7 @@ final class DownloadsWindowController: NSWindowController {
         window.minSize = NSSize(width: 420, height: 240)
         window.isReleasedWhenClosed = false
         window.contentViewController = list
+        Keel.styleListWindow(window, list: nil, scroll: nil)
         window.setContentSize(NSSize(width: 620, height: 440))
         if !window.setFrameUsingName("DownloadsWindow") { window.center() }
         window.setFrameAutosaveName("DownloadsWindow")

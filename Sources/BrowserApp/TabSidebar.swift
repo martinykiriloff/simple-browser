@@ -49,16 +49,35 @@ final class TabSidebarController: NSViewController, NSTableViewDataSource, NSTab
     }
 
     override func loadView() {
-        let root = NSVisualEffectView()
-        root.material = .sidebar
-        root.blendingMode = .behindWindow
-        root.state = .followsWindowActiveState
+        // In Keel's chrome, the chrome's own blue-black, not the system's grey sidebar blur.
+        let root: NSView
+        if Keel.chromeEnabled {
+            let fill = KeelFill(fill: Keel.surface)
+            fill.translatesAutoresizingMaskIntoConstraints = true
+            root = fill
+        } else {
+            let effect = NSVisualEffectView()
+            effect.material = .sidebar
+            effect.blendingMode = .behindWindow
+            effect.state = .followsWindowActiveState
+            root = effect
+        }
         root.setAccessibilityLabel("Sidebar")
 
         let column = NSTableColumn(identifier: .init("row"))
         table.addTableColumn(column)
         table.headerView = nil
-        table.style = .sourceList
+        // A source list puts the system's selection material behind the row
+        // and never asks it to draw; in Keel's chrome the table is plain, so
+        // `SidebarRowView` draws Design D's selection, and its section
+        // headers stay in the list rather than floating over it.
+        if Keel.chromeEnabled {
+            table.style = .plain
+            table.selectionHighlightStyle = .regular
+            table.floatsGroupRows = false
+        } else {
+            table.style = .sourceList
+        }
         table.backgroundColor = .clear
         table.rowSizeStyle = .custom
         table.intercellSpacing = NSSize(width: 0, height: 2)
@@ -98,7 +117,9 @@ final class TabSidebarController: NSViewController, NSTableViewDataSource, NSTab
         ])
         view = root
 
-        for name in [TabOrganizer.didChange, Favicons.didLoad] {
+        // Favorites and the reading list show here too: a bookmark added,
+        // renamed or deleted anywhere appears without waiting for a tab change.
+        for name in [TabOrganizer.didChange, Favicons.didLoad, .bookmarksDidChange] {
             observers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.reload() }
             })
@@ -126,7 +147,7 @@ final class TabSidebarController: NSViewController, NSTableViewDataSource, NSTab
         pinnedStrip.show(pinned.compactMap { id in tabs.first { $0.tab == id } }, selected: browser.tab)
 
         favorites = (bookmarks()?.favorites ?? []).filter { $0.url != nil }
-        readingList = ((try? bookmarks()?.readingList(includeRead: false)) ?? []) ?? []
+        readingList = (try? bookmarks()?.readingList(includeRead: false)) ?? []
         let open = Set(organizer.groups.keys)
         saved = browser.isPrivate ? [] : organizer.savedGroups(profile: browser.profile).filter { !open.contains($0.id) }
 
@@ -217,7 +238,7 @@ final class TabSidebarController: NSViewController, NSTableViewDataSource, NSTab
             cell.toolTip = node.url?.absoluteString
         case .reading(let id):
             guard let item = readingList.first(where: { $0.id == id }) else { break }
-            cell.configure(icon: NSImage(systemSymbolName: "eyeglasses", accessibilityDescription: nil), title: item.title.isEmpty ? item.url.absoluteString : item.title)
+            cell.configure(icon: Favicons.shared.icon(for: item.url, title: item.title), title: item.title.isEmpty ? item.url.absoluteString : item.title)
             cell.toolTip = item.url.absoluteString
         }
         return cell
@@ -291,16 +312,49 @@ final class TabSidebarController: NSViewController, NSTableViewDataSource, NSTab
             menu.addItem(ClosureMenuItem("Open Group") { [weak self] in self?.organizer.openSaved(group, besides: browser) })
             menu.addItem(ClosureMenuItem("Delete Saved Group") { [weak self] in self?.organizer.forgetSaved(id, profile: browser.profile) })
         case .bookmark(let id):
-            guard let url = favorites.first(where: { $0.id == id })?.url else { return }
-            menu.addItem(ClosureMenuItem("Open") { [weak self] in self?.open?(url, false) })
-            menu.addItem(ClosureMenuItem("Open in New Tab") { [weak self] in self?.open?(url, true) })
+            guard let node = favorites.first(where: { $0.id == id }), let context = bookmarkMenuContext(row: row) else { return }
+            BookmarkMenus.fill(menu, for: node, context)
         case .reading(let id):
-            guard let url = readingList.first(where: { $0.id == id })?.url else { return }
+            guard let item = readingList.first(where: { $0.id == id }), let store = bookmarks() else { return }
+            let url = item.url
             menu.addItem(ClosureMenuItem("Open") { [weak self] in self?.open?(url, false) })
             menu.addItem(ClosureMenuItem("Open in New Tab") { [weak self] in self?.open?(url, true) })
+            menu.addItem(.separator())
+            menu.addItem(ClosureMenuItem("Copy Address") { BookmarkMenus.copy([url]) })
+            menu.addItem(ClosureMenuItem("Mark as Read") { [weak self] in
+                try? store.markRead(id)
+                self?.browser?.onBookmarksChanged?()
+            })
+            menu.addItem(.separator())
+            menu.addItem(ClosureMenuItem("Remove from Reading List") { [weak self] in
+                try? store.removeFromReadingList(id)
+                self?.browser?.onBookmarksChanged?()
+            })
         case .header, .newTab: break
         }
     }
+
+    /// A favorite's menu here: its editor opens beside the row. Anchored to
+    /// the table, which outlives the row's cell when the list reloads.
+    private func bookmarkMenuContext(row: Int) -> BookmarkMenuContext? {
+        guard let store = bookmarks() else { return nil }
+        let changed: () -> Void = { [weak self] in self?.browser?.onBookmarksChanged?() }
+        return BookmarkMenuContext(
+            store: store,
+            open: { [weak self] url, newTab in self?.open?(url, newTab) },
+            openInNewWindow: browser?.openInNewWindow,
+            edit: { [weak self] node in
+                guard let self else { return }
+                let rect = self.rows.firstIndex(of: .bookmark(node.id)).map { self.table.rect(ofRow: $0) } ?? self.table.rect(ofRow: row)
+                self.lastBookmarkEditor = BookmarkMenus.showEditor(for: node, store: store, relativeTo: rect, of: self.table,
+                                                                   preferredEdge: .maxX, changed: changed)
+            },
+            window: { [weak self] in self?.view.window },
+            changed: changed)
+    }
+
+    /// For the self-test.
+    private(set) weak var lastBookmarkEditor: AddBookmarkController?
 
     private func pinnedMenu(for id: TabID) -> NSMenu? {
         guard let tab = tab(id) else { return nil }
@@ -387,19 +441,39 @@ extension NSPasteboard.PasteboardType {
 /// A chosen row: a rounded fill in the system's selection colour, and the
 /// row's text in the colour that goes on it.
 final class SidebarRowView: NSTableRowView {
+    /// Design D's flat selection, as its menus and lists have, in Keel's chrome.
+    private let keel = Keel.chromeEnabled
+
+    /// Section headers are group rows: in Keel's chrome they sit on the
+    /// sidebar's own fill, with no band of their own.
+    override func drawBackground(in dirtyRect: NSRect) {
+        if keel, isGroupRowStyle { return }
+        super.drawBackground(in: dirtyRect)
+    }
+
     override func drawSelection(in dirtyRect: NSRect) {
         guard selectionHighlightStyle != .none else { return }
+        if keel {
+            Keel.selection.setFill()
+            NSBezierPath(roundedRect: bounds.insetBy(dx: 8, dy: 1), xRadius: 7, yRadius: 7).fill()
+            return
+        }
         (isEmphasized ? NSColor.selectedContentBackgroundColor : NSColor.unemphasizedSelectedContentBackgroundColor).setFill()
         NSBezierPath(roundedRect: bounds.insetBy(dx: 8, dy: 1), xRadius: 6, yRadius: 6).fill()
     }
 
-    override var interiorBackgroundStyle: NSView.BackgroundStyle { isSelected && isEmphasized ? .emphasized : .normal }
+    /// Text stays light on Keel's flat selection, never inverted.
+    override var interiorBackgroundStyle: NSView.BackgroundStyle { !keel && isSelected && isEmphasized ? .emphasized : .normal }
 }
 
 /// A sidebar row: an icon, a title, and a close button that shows on hover.
 @MainActor
 final class SidebarCell: NSTableCellView {
     enum Disclosure { case none, collapsed, expanded }
+
+    /// The margin a source list gives its rows, kept by hand in Keel's
+    /// chrome, where the list is plain so that it can draw its own selection.
+    static var edgeInset: CGFloat { Keel.chromeEnabled ? 12 : 0 }
 
     private let icon = NSImageView()
     private let label = NSTextField(labelWithString: "")
@@ -437,7 +511,7 @@ final class SidebarCell: NSTableCellView {
         }
         imageView = icon
         textField = label
-        let leading = disclosureButton.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4)
+        let leading = disclosureButton.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4 + Self.edgeInset)
         self.leading = leading
         NSLayoutConstraint.activate([
             leading,
@@ -452,7 +526,7 @@ final class SidebarCell: NSTableCellView {
             detailLabel.leadingAnchor.constraint(greaterThanOrEqualTo: label.trailingAnchor, constant: 4),
             detailLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
             closeButton.leadingAnchor.constraint(equalTo: detailLabel.trailingAnchor, constant: 2),
-            closeButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            closeButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8 - Self.edgeInset),
             closeButton.centerYAnchor.constraint(equalTo: centerYAnchor),
             closeButton.widthAnchor.constraint(equalToConstant: 14),
         ])
@@ -469,10 +543,16 @@ final class SidebarCell: NSTableCellView {
         label.stringValue = title
         label.font = header ? .systemFont(ofSize: 11, weight: .semibold) : .systemFont(ofSize: NSFont.systemFontSize)
         label.textColor = header ? .secondaryLabelColor : dimmed ? .secondaryLabelColor : .labelColor
+        if header, Keel.chromeEnabled {
+            // A section label as Design D writes them: tracked, dim.
+            label.attributedStringValue = NSAttributedString(string: title, attributes: [
+                .font: Keel.font(11, .semibold), .foregroundColor: Keel.dim, .kern: 0.66,
+            ])
+        }
         isHeader = header
         self.dimmed = dimmed
         detailLabel.stringValue = detail
-        leading?.constant = 4 + indent
+        leading?.constant = 4 + Self.edgeInset + indent
         disclosureButton.isHidden = disclosure == .none
         disclosureButton.image = NSImage(systemSymbolName: disclosure == .collapsed ? "chevron.right" : "chevron.down", accessibilityDescription: nil)
         disclosureButton.setAccessibilityLabel(disclosure == .collapsed ? "Expand" : "Collapse")
@@ -509,9 +589,21 @@ final class PinnedTabsView: NSView {
         buttons = tabs.map { tab in
             let title = tab.window?.title ?? ""
             let button = NSButton(image: Favicons.shared.icon(for: tab.currentURL, title: title), target: self, action: #selector(pick(_:)))
-            button.bezelStyle = .smallSquare
             button.setButtonType(.pushOnPushOff)
             button.state = tab.tab == selected ? .on : .off
+            if Keel.chromeEnabled {
+                // Flat rounded tiles; the tab showing is lifted with a hairline ring.
+                let isSelected = tab.tab == selected
+                button.isBordered = false
+                button.imageScaling = .scaleProportionallyDown
+                button.wantsLayer = true
+                button.layer?.cornerRadius = 8
+                button.layer?.backgroundColor = (isSelected ? Keel.selection : Keel.raised).cgColor
+                button.layer?.borderColor = Keel.inputBorder.cgColor
+                button.layer?.borderWidth = isSelected ? 1 : 0
+            } else {
+                button.bezelStyle = .smallSquare
+            }
             button.toolTip = title
             button.setAccessibilityLabel("Pinned tab: \(title)")
             addSubview(button)
@@ -564,6 +656,26 @@ final class ClosureMenuItem: NSMenuItem {
     @available(*, unavailable)
     required init(coder: NSCoder) { fatalError("not supported") }
     @objc private func fire(_ sender: Any?) { run() }
+
+    /// Greyed out. `isEnabled` alone does not stick in a menu that enables
+    /// its items itself; the item is its own target, so it answers here.
+    var isAvailable = true {
+        didSet { isEnabled = isAvailable }
+    }
+}
+
+extension ClosureMenuItem: NSMenuItemValidation {
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool { isAvailable }
+}
+
+extension NSTableView {
+    /// The rows a list's command acts on. From its right-click menu: the row
+    /// clicked, with the rest of the selection when it is part of it. From
+    /// anywhere else (a key, a button, the menu bar): the selection.
+    func rowsActedOn(by sender: Any?) -> IndexSet {
+        guard let item = sender as? NSMenuItem, item.menu === menu, clickedRow >= 0 else { return selectedRowIndexes }
+        return selectedRowIndexes.contains(clickedRow) ? selectedRowIndexes : [clickedRow]
+    }
 }
 
 /// The menus for tabs and groups, shared by the sidebar, the pinned icons

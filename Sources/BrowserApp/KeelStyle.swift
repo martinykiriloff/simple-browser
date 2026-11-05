@@ -127,6 +127,9 @@ final class KeelChip: NSView {
     private let label = NSTextField(labelWithString: "")
     private let dot = NSView()
     var onClick: (() -> Void)?
+    /// The label follows the dot, or with no dot starts where the dot would.
+    private var labelAfterDot: NSLayoutConstraint!
+    private var labelAtEdge: NSLayoutConstraint!
 
     init() {
         super.init(frame: .zero)
@@ -146,10 +149,12 @@ final class KeelChip: NSView {
             dot.widthAnchor.constraint(equalToConstant: 7), dot.heightAnchor.constraint(equalToConstant: 7),
             dot.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
             dot.centerYAnchor.constraint(equalTo: centerYAnchor),
-            label.leadingAnchor.constraint(equalTo: dot.trailingAnchor, constant: 6),
             label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
             label.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
+        labelAfterDot = label.leadingAnchor.constraint(equalTo: dot.trailingAnchor, constant: 6)
+        labelAtEdge = label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10)
+        labelAfterDot.isActive = true
         setAccessibilityElement(true)
         setAccessibilityRole(.button)
     }
@@ -162,6 +167,8 @@ final class KeelChip: NSView {
         layer?.backgroundColor = fill.cgColor
         dot.isHidden = dotColor == nil
         dot.layer?.backgroundColor = dotColor?.cgColor
+        labelAfterDot.isActive = dotColor != nil
+        labelAtEdge.isActive = dotColor == nil
         setAccessibilityLabel(text)
     }
 
@@ -210,6 +217,34 @@ extension Keel {
         window.standardWindowButton(.zoomButton)?.isHidden = true
         QuietMode.apply(to: window)
         return window
+    }
+
+    /// A list window (Bookmarks, History, Downloads) in the chrome's colours
+    /// when Keel's chrome is on: dark, flat, no stripes, scrollers that only
+    /// show while scrolling. Rows come from `listRowView()`. In the system
+    /// chrome it is left as AppKit draws it.
+    static func styleListWindow(_ window: NSWindow?, list: NSTableView?, scroll: NSScrollView?) {
+        guard chromeEnabled else { return }
+        window?.appearance = darkAppearance
+        window?.backgroundColor = surface
+        list?.backgroundColor = .clear
+        list?.usesAlternatingRowBackgroundColors = false
+        list?.gridStyleMask = []
+        scroll?.drawsBackground = false
+        scroll?.borderType = .noBorder
+        scroll?.autohidesScrollers = true
+        scroll?.scrollerStyle = .overlay
+    }
+
+    /// A list window's row: Design D's flat selection in Keel's chrome, AppKit's otherwise.
+    static func listRowView() -> NSTableRowView? { chromeEnabled ? KeelRowView() : nil }
+
+    /// A list window's toolbar button: flat in Keel's chrome, AppKit's push button otherwise.
+    static func listButton(_ title: String, kind: KeelButton.Kind = .neutral, target: AnyObject, action: Selector) -> NSButton {
+        guard chromeEnabled else { return NSButton(title: title, target: target, action: action) }
+        return miniButton(title, kind: kind) { [weak target] in
+            if let target { NSApp.sendAction(action, to: target, from: nil) }
+        }
     }
 
     /// Puts a view in a dialog window and sizes the window to it, keeping the

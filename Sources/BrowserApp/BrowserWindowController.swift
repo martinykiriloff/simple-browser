@@ -1725,7 +1725,9 @@ final class BrowserWindowController: NSWindowController,
         let bookmarked = shownURL.flatMap { try? bookmarks?()?.bookmark(for: $0) } != nil
         starButton.image = NSImage(systemSymbolName: bookmarked ? "star.fill" : "star", accessibilityDescription: "Bookmark")?
             .withSymbolConfiguration(.init(paletteColors: [bookmarked ? .systemYellow : .labelColor]))
-        starButton.toolTip = bookmarked ? "Edit bookmark (⌘D)" : "Bookmark this page (⌘D)"
+        // The key Add Bookmark has now: a person may have moved it in Settings.
+        let key = (Shortcuts.effective(overrides: BrowserSettings.shortcutOverrides)["addBookmark:"] ?? nil).map { " (\($0.display))" } ?? ""
+        starButton.toolTip = (bookmarked ? "Edit bookmark" : "Bookmark this page") + key
         starButton.isEnabled = !(StartPageSchemeHandler.isStartPage(webView.url) || shownURL == nil)
     }
 

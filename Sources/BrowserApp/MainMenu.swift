@@ -225,6 +225,12 @@ enum MainMenu {
         let menu = NSMenu(title: "Bookmarks")
         menu.delegate = delegate
         menu.addItem(withTitle: "Add Bookmark…", action: #selector(BrowserWindowController.addBookmark(_:)), keyEquivalent: "d")
+        // ⌘B as well, hidden like Zoom In's ⌘=: one Add Bookmark in the menu,
+        // and the alias goes with ⌘D if a person moves Add Bookmark's key.
+        let addBookmarkB = menu.addItem(withTitle: "Add Bookmark…", action: #selector(BrowserWindowController.addBookmark(_:)), keyEquivalent: "b")
+        addBookmarkB.isHidden = true
+        addBookmarkB.allowsKeyEquivalentWhenHidden = true
+        addBookmarkB.identifier = NSUserInterfaceItemIdentifier("addBookmark:b")
         let reading = menu.addItem(withTitle: "Add to Reading List",
                                    action: #selector(BrowserWindowController.addToReadingList(_:)), keyEquivalent: "d")
         reading.keyEquivalentModifierMask = [.command, .shift]

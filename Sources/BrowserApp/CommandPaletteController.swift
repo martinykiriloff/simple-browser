@@ -254,7 +254,9 @@ final class CommandPaletteController: NSWindowController, NSTextFieldDelegate, N
         var last: Group?
         for (index, entry) in results.enumerated() {
             let group = Self.group(of: entry.item)
-            if group != last { rows.append(.header(group)); last = group }
+            // Headers only where the results are grouped: a single letter's are
+            // in the ranking's order, and would show ACTIONS, AGENTS, ACTIONS…
+            if group != last, trimmed.count != 1 { rows.append(.header(group)); last = group }
             rows.append(.entry(index))
         }
         countLabel.stringValue = (filter.map { "\($0.title) · " } ?? "") + "\(results.count) of \(all.count) results"

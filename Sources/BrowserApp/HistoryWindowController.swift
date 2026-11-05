@@ -16,6 +16,7 @@ final class HistoryWindowController: NSWindowController, NSOutlineViewDataSource
 
     let searchField = NSSearchField()
     let outline = NSOutlineView()
+    private let scroll = NSScrollView()
     private let emptyLabel = NSTextField(labelWithString: "")
 
     private struct Day { let title: String; let visits: [HistoryStore.Visit] }
@@ -42,6 +43,7 @@ final class HistoryWindowController: NSWindowController, NSOutlineViewDataSource
         window.isReleasedWhenClosed = false
         window.delegate = self
         window.contentView = buildContent()
+        Keel.styleListWindow(window, list: outline, scroll: scroll)
         if !window.setFrameUsingName("HistoryWindow") { window.center() }
         window.setFrameAutosaveName("HistoryWindow")
         reload()
@@ -67,19 +69,18 @@ final class HistoryWindowController: NSWindowController, NSOutlineViewDataSource
         outline.delegate = self
         outline.allowsMultipleSelection = true
         outline.usesAlternatingRowBackgroundColors = true
-        outline.rowHeight = 22
+        outline.rowHeight = 24
         outline.target = self
         outline.doubleAction = #selector(openSelected(_:))
         outline.setAccessibilityLabel("History")
         outline.menu = contextMenu()
-        let scroll = NSScrollView()
         scroll.documentView = outline
         scroll.hasVerticalScroller = true
         scroll.borderType = .noBorder
 
-        let clearButton = NSButton(title: "Clear History…", target: self, action: #selector(clearHistory(_:)))
-        let deleteButton = NSButton(title: "Delete", target: self, action: #selector(delete(_:)))
-        emptyLabel.textColor = .secondaryLabelColor
+        let clearButton = Keel.listButton("Clear History…", kind: .danger, target: self, action: #selector(clearHistory(_:)))
+        let deleteButton = Keel.listButton("Delete", target: self, action: #selector(delete(_:)))
+        emptyLabel.textColor = Keel.chromeEnabled ? Keel.dim : .secondaryLabelColor
         let spacer = NSView()
         spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
         let bar = NSStackView(views: [searchField, spacer, deleteButton, clearButton])
@@ -148,13 +149,25 @@ final class HistoryWindowController: NSWindowController, NSOutlineViewDataSource
 
     func outlineView(_ outlineView: NSOutlineView, isGroupItem item: Any) -> Bool { item is DayItem }
 
+    func outlineView(_ outlineView: NSOutlineView, rowViewForItem item: Any) -> NSTableRowView? { Keel.listRowView() }
+
     func outlineView(_ outlineView: NSOutlineView, viewFor tableColumn: NSTableColumn?, item: Any) -> NSView? {
+        let cell = NSTableCellView()
         let label = NSTextField(labelWithString: "")
         label.lineBreakMode = .byTruncatingTail
+        label.translatesAutoresizingMaskIntoConstraints = false
+        label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        cell.addSubview(label)
+        cell.textField = label
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 2),
+            label.trailingAnchor.constraint(lessThanOrEqualTo: cell.trailingAnchor, constant: -4),
+            label.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+        ])
         if let day = item as? DayItem {
             label.stringValue = day.title
             label.font = .boldSystemFont(ofSize: NSFont.systemFontSize)
-            return tableColumn == nil || tableColumn === outlineView.tableColumns.first ? label : nil
+            return tableColumn == nil || tableColumn === outlineView.tableColumns.first ? cell : nil
         }
         guard let visit = (item as? VisitItem)?.visit else { return nil }
         switch tableColumn?.identifier.rawValue {
@@ -168,31 +181,34 @@ final class HistoryWindowController: NSWindowController, NSOutlineViewDataSource
             label.stringValue = visit.visitedAt.formatted(date: .omitted, time: .shortened)
             label.textColor = .secondaryLabelColor
         }
-        return label
+        return cell
     }
 
-    private var selectedVisits: [HistoryStore.Visit] {
-        outline.selectedRowIndexes.compactMap { (outline.item(atRow: $0) as? VisitItem)?.visit }
+    /// The visits a command acts on: the row right-clicked, or the selection
+    /// (see `rowsActedOn(by:)`). A day's row stands for nothing here.
+    private func visits(_ sender: Any?) -> [HistoryStore.Visit] {
+        outline.rowsActedOn(by: sender).compactMap { (outline.item(atRow: $0) as? VisitItem)?.visit }
     }
 
     // MARK: - Actions
 
     @objc func openSelected(_ sender: Any?) {
-        let newTab = NSEvent.modifierFlags.contains(.command) || selectedVisits.count > 1
-        for visit in selectedVisits { open?(visit.url, newTab) }
+        let chosen = visits(sender)
+        let newTab = NSEvent.modifierFlags.contains(.command) || chosen.count > 1
+        for visit in chosen { open?(visit.url, newTab) }
     }
 
     @objc func openSelectedInNewTab(_ sender: Any?) {
-        for visit in selectedVisits { open?(visit.url, true) }
+        for visit in visits(sender) { open?(visit.url, true) }
     }
 
     @objc func copyLinks(_ sender: Any?) {
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(selectedVisits.map(\.url.absoluteString).joined(separator: "\n"), forType: .string)
+        NSPasteboard.general.setString(visits(sender).map(\.url.absoluteString).joined(separator: "\n"), forType: .string)
     }
 
     @objc func delete(_ sender: Any?) {
-        for visit in selectedVisits { try? store.deleteVisit(visit.id) }
+        for visit in visits(sender) { try? store.deleteVisit(visit.id) }
         reload()
     }
 

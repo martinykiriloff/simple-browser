@@ -1266,11 +1266,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 tab.zoomChanged(for: site, to: level)
             }
         }
-        controller.favoritesBar.items = { [weak self] in self?.bookmarks(for: profile)?.favorites ?? [] }
-        controller.favoritesBar.childrenOf = { [weak self] id in (try? self?.bookmarks(for: profile)?.children(of: id)) ?? [] }
+        controller.favoritesBar.store = { [weak self] in self?.bookmarks(for: profile) }
         controller.favoritesBar.open = { [weak self, weak controller] url, newTab in
             if newTab { self?.newTab(beside: controller, url: url, inFront: false) } else { controller?.load(url) }
         }
+        controller.favoritesBar.openInNewWindow = { [weak controller] url in controller?.openInNewWindow?(url) }
+        controller.favoritesBar.changed = { [weak self] in self?.bookmarksChanged() }
         controller.syncFavoritesBar()
         controller.profilesMenuFiller = ProfilesMenuFiller(store: profiles) { [weak controller] in
             controller?.profile ?? profile

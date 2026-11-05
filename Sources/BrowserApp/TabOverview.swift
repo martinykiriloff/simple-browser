@@ -404,8 +404,9 @@ final class TabTile: NSView {
         closeButton.toolTip = "Close Tab"
         closeButton.setAccessibilityLabel("Close Tab")
         closeButton.setContentCompressionResistancePriority(.required, for: .horizontal)
-        row.append(closeButton)
-        let footer = NSStackView(views: row)
+        let footer = NSStackView()
+        footer.setViews(row, in: .leading)
+        footer.setViews([closeButton], in: .trailing)
         footer.spacing = 10
         footer.alignment = .centerY
         footer.translatesAutoresizingMaskIntoConstraints = false

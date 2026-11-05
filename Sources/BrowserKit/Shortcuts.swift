@@ -164,6 +164,9 @@ public enum Shortcuts {
         ShortcutCommand("goHome:", "Home", menu: "History", KeyShortcut("h", [.command, .shift]), safari: "⇧⌘H", chrome: "⇧⌘H"),
         ShortcutCommand("showHistory:", "Show All History", menu: "History", KeyShortcut("y"), safari: "⌘Y", chrome: "⌘Y"),
         ShortcutCommand("addBookmark:", "Add Bookmark…", menu: "Bookmarks", KeyShortcut("d"), safari: "⌘D", chrome: "⌘D"),
+        // ⌘B too: the B of bookmark, which neither Safari nor Chrome uses. A
+        // page that handles ⌘B itself (bold, in an editor) still gets it first.
+        ShortcutCommand("addBookmark:b", "Add Bookmark…", menu: "Bookmarks", KeyShortcut("b"), safari: "—", chrome: "—", fixed: true, aliasOf: "addBookmark:"),
         ShortcutCommand("addToReadingList:", "Add to Reading List", menu: "Bookmarks", KeyShortcut("d", [.command, .shift]), safari: "⇧⌘D", chrome: "⇧⌘D (bookmark all tabs)"),
         ShortcutCommand("showBookmarks:", "Show Bookmarks", menu: "Bookmarks", KeyShortcut("b", [.command, .option]), safari: "⌥⌘B", chrome: "⌥⌘B"),
         ShortcutCommand("toggleFavoritesBar:", "Show Favorites Bar", menu: "Bookmarks", KeyShortcut("b", [.command, .shift]), safari: "⇧⌘B", chrome: "⇧⌘B"),
@@ -242,7 +245,9 @@ public enum Shortcuts {
         var lines = ["| Command | Keel | Safari | Chrome |", "|---|---|---|---|"]
         // An alias shares its command's row: ⌘= is not a command of its own.
         for command in commands where !standard.contains(command.id) && !command.isAlias {
-            let ours = command.id == "tab.select" ? "⌘1–⌘9" : command.id == "openProfileWindow:" ? "⌥⇧⌘1–9" : (command.shortcut?.display ?? "—")
+            let keys = ([command.shortcut] + commands.filter { $0.aliasOf == command.id }.map(\.shortcut)).compactMap { $0?.display }
+            let ours = command.id == "tab.select" ? "⌘1–⌘9" : command.id == "openProfileWindow:" ? "⌥⇧⌘1–9"
+                : (keys.isEmpty ? "—" : keys.joined(separator: " or "))
             lines.append("| \(command.title) | \(ours) | \(command.safari) | \(command.chrome) |")
         }
         return lines.joined(separator: "\n")

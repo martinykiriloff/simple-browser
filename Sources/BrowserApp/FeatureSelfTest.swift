@@ -1,6 +1,7 @@
 import AppKit
 import WebKit
 import BrowserKit
+import DataKit
 
 /// Developer aid (`--feature-selftest <file>`, run by `scripts/test-features.sh`):
 /// the roadmap features, each in its own section, against the fixture site in
@@ -308,6 +309,26 @@ final class FeatureSelfTest {
         check("bookmarks: …the favorites bar shows it", await waitFor { browser.favoritesBar.titles == ["Second"] }, browser.favoritesBar.titles)
         check("bookmarks: …the star fills in", browser.isStarFilled)
 
+        // ⌘B, through the menu bar as a key press goes: the page is bookmarked, so it edits.
+        let addBookmarkB = NSApp.mainMenu?.items.first { $0.submenu?.title == "Bookmarks" }?.submenu?.items
+            .first { $0.identifier?.rawValue == "addBookmark:b" }
+        check("bookmarks: ⌘B is a key for Add Bookmark",
+              addBookmarkB?.keyEquivalent == "b" && addBookmarkB?.keyEquivalentModifierMask == .command
+                && addBookmarkB?.action == #selector(BrowserWindowController.addBookmark(_:)) && addBookmarkB?.allowsKeyEquivalentWhenHidden == true)
+        let earlier = browser.lastBookmarkPopover
+        if NSApp.isActive {
+            _ = menuKey("b", keyCode: 11, in: browser.window)
+        } else if let item = addBookmarkB, let action = item.action {
+            // Run quietly the app is never active, and AppKit offers key
+            // equivalents to the menus only in the active app: the item's own
+            // action stands in for the key, which the check above has bound.
+            NSApp.sendAction(action, to: browser, from: item)
+        }
+        let opened = await waitFor { browser.lastBookmarkPopover.map { $0 !== earlier && $0.isViewLoaded } ?? false }
+        check("bookmarks: …and opens the bookmark popover", opened)
+        if opened { browser.lastBookmarkPopover?.done(nil) }
+        check("bookmarks: …which leaves the bookmark as it was", (try? store.bookmark(for: URL(string: site + "/second")!))?.title == "Second")
+
         await open("/tabs", in: browser)
         check("bookmarks: the star is empty on a page that is not bookmarked", !browser.isStarFilled)
         await open("/tabs", in: browser)   // a second visit makes it frequent
@@ -350,13 +371,104 @@ final class FeatureSelfTest {
         check("bookmarks: Show Bookmarks (⌥⌘B) opens the manager", manager != nil)
         check("bookmarks: …with Favorites open", (manager?.outline.numberOfRows ?? 0) >= 3, manager?.outline.numberOfRows as Any)
         snapshot(manager?.window, "bookmarks")
+        if let manager { await bookmarksManager(manager, store: store) }
         manager?.window?.close()
+
+        // The folder picker: folders that share a name are all there, and a
+        // folder being edited is not offered as a place to put itself.
+        if let first = try? store.addFolder("Dup", in: store.favoritesID), let second = try? store.addFolder("Dup", in: store.menuID) {
+            let picker = AddBookmarkController(store: store, url: URL(string: site + "/long")!, title: "Long") {}
+            _ = picker.view
+            let folders = (try? store.folders().count) ?? 0
+            check("bookmarks: the folder picker lists folders that share a name", picker.folderPopUp.numberOfItems == folders,
+                  "\(picker.folderPopUp.numberOfItems) of \(folders)")
+            if let node = try? store.node(first) {
+                let editor = AddBookmarkController(store: store, editing: node) {}
+                _ = editor.view
+                check("bookmarks: …and a folder cannot be moved into itself", editor.folderPopUp.indexOfItem(withTag: Int(first)) == -1)
+            }
+            try? store.delete(first)
+            try? store.delete(second)
+            NotificationCenter.default.post(name: .bookmarksDidChange, object: nil)
+        }
+
+        // A right click on a favorite in the bar.
+        _ = await waitFor { browser.favoritesBar.titles == ["Second"] }
+        if let button = browser.favoritesBar.buttons.first, let menu = browser.favoritesBar.menu(for: button) {
+            let titles = menu.items.map(\.title)
+            check("bookmarks: a right click on a favorite has its menu",
+                  ["Open", "Open in New Tab", "Open in New Window", "Copy Address", "Edit…", "Delete"].allSatisfy(titles.contains), titles)
+            menu.performActionForItem(at: menu.indexOfItem(withTitle: "Edit…"))
+            check("bookmarks: …Edit… opens the editor", await waitFor { browser.favoritesBar.lastEditor?.isViewLoaded == true })
+            if let editor = browser.favoritesBar.lastEditor {
+                check("bookmarks: …with the address to change", editor.addressField.superview != nil && editor.addressField.stringValue == site + "/second",
+                      editor.addressField.stringValue)
+                editor.titleField.stringValue = "Renamed"
+                editor.addressField.stringValue = "not an address"
+                editor.done(nil)
+                check("bookmarks: …an address that is not one is refused", (try? store.bookmark(for: URL(string: site + "/second")!))?.title == "Second")
+                editor.addressField.stringValue = site + "/tabs"
+                editor.done(nil)
+            }
+            check("bookmarks: …a new name and address are saved", (try? store.bookmark(for: URL(string: site + "/tabs")!))?.title == "Renamed")
+            check("bookmarks: …and the bar follows", await waitFor { browser.favoritesBar.titles == ["Renamed"] }, browser.favoritesBar.titles)
+            if let button = browser.favoritesBar.buttons.first, let menu = browser.favoritesBar.menu(for: button) {
+                menu.performActionForItem(at: menu.indexOfItem(withTitle: "Delete"))
+                check("bookmarks: …Delete removes it", await waitFor { browser.favoritesBar.titles.isEmpty } && (try? store.bookmark(for: URL(string: site + "/tabs")!)) == nil,
+                      browser.favoritesBar.titles)
+            }
+            // Put it back for what follows.
+            _ = try? store.addBookmark(url: URL(string: site + "/second")!, title: "Second", in: store.favoritesID)
+            NotificationCenter.default.post(name: .bookmarksDidChange, object: nil)
+            _ = await waitFor { browser.favoritesBar.titles == ["Second"] }
+        } else {
+            check("bookmarks: a right click on a favorite has its menu", false, browser.favoritesBar.titles)
+        }
 
         browser.toggleFavoritesBar(nil)
         check("bookmarks: ⇧⌘B hides the favorites bar", await waitFor { browser.window?.titlebarAccessoryViewControllers.contains(browser.favoritesBar) == false })
         browser.toggleFavoritesBar(nil)
         check("bookmarks: …and shows it again", await waitFor { browser.window?.titlebarAccessoryViewControllers.contains(browser.favoritesBar) == true })
         snapshot(browser.window, "favorites-bar")
+    }
+
+    /// The manager: renaming in place, and a new folder named at once.
+    private func bookmarksManager(_ manager: BookmarksWindowController, store: BookmarkStore) async {
+        func row(of id: Int64) -> Int? {
+            (0..<manager.outline.numberOfRows).first { (manager.outline.item(atRow: $0) as? BookmarksWindowController.Item)?.node.id == id }
+        }
+        func editingField() -> NSTextField? { (manager.window?.firstResponder as? NSTextView)?.delegate as? NSTextField }
+        guard let second = try? store.bookmark(for: URL(string: site + "/second")!), let secondRow = row(of: second.id) else {
+            check("bookmarks: the manager lists the bookmark", false)
+            return
+        }
+        manager.outline.selectRowIndexes([secondRow], byExtendingSelection: false)
+        manager.rename(nil)
+        check("bookmarks: Rename edits the name in place", editingField()?.tag == Int(second.id), editingField()?.stringValue as Any)
+        manager.window?.makeFirstResponder(manager.outline)
+        check("bookmarks: …and leaving it unchanged changes nothing", (try? store.node(second.id))?.title == "Second")
+
+        manager.newFolder(nil)
+        check("bookmarks: New Folder is named at once", editingField()?.stringValue == "New Folder", editingField()?.stringValue as Any)
+        (manager.window?.firstResponder as? NSTextView)?.string = "Work"
+        manager.window?.makeFirstResponder(manager.outline)
+        let work = ((try? store.children(of: store.favoritesID)) ?? []).first { $0.kind == .folder }
+        check("bookmarks: …beside the bookmark chosen, with the name typed", work?.title == "Work", work as Any)
+        if let work, let workRow = row(of: work.id) {
+            manager.outline.selectRowIndexes([workRow], byExtendingSelection: false)
+            manager.delete(nil)
+            check("bookmarks: an empty folder is deleted without asking", (try? store.node(work.id)) == nil)
+        }
+        NotificationCenter.default.post(name: .bookmarksDidChange, object: nil)
+    }
+
+    /// A ⌘ key press offered to the menu bar, as AppKit does with one the window leaves.
+    private func menuKey(_ key: String, keyCode: UInt16, in window: NSWindow?) -> Bool {
+        guard let window, let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command,
+                                                       timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                                                       context: nil, characters: key, charactersIgnoringModifiers: key,
+                                                       isARepeat: false, keyCode: keyCode) else { return false }
+        return NSApp.mainMenu?.performKeyEquivalent(with: event) ?? false
     }
 
     // MARK: - #6 History

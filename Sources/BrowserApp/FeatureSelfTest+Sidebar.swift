@@ -139,6 +139,15 @@ extension FeatureSelfTest {
         _ = await waitFor { still.isSidebarShown }
         guard let side = still.sidebar else { return }
         check("sidebar: …and it waits under Saved Groups", await waitFor { side.rows.contains(.saved(groupID)) }, side.rows)
+        // A favorite added anywhere shows here at once, not at the next tab change.
+        if let store = app.bookmarks(for: still.profile),
+           let id = try? store.addBookmark(url: URL(string: site + "/second")!, title: "Sidebar favorite", in: store.favoritesID) {
+            NotificationCenter.default.post(name: .bookmarksDidChange, object: nil)
+            check("sidebar: a new favorite appears at once", await waitFor { side.rows.contains(.bookmark(id)) }, side.rows)
+            try? store.delete(id)
+            NotificationCenter.default.post(name: .bookmarksDidChange, object: nil)
+            check("sidebar: …and goes when it is deleted", await waitFor { !side.rows.contains(.bookmark(id)) }, side.rows)
+        }
         side.activate(side.rows.firstIndex(of: .saved(groupID))!)
         check("sidebar: opening it brings its tabs back, grouped", await waitFor { organizer.tabs(in: groupID).count == 2 && organizer.groups[groupID]?.name == "Research" })
         let reopened = organizer.tabs(in: groupID)

@@ -458,7 +458,7 @@ catalogue, and the feature self-test fails if the menu bar drifts from it.
 | Reload Page From Origin | ⌥⌘R | ⌥⌘R | ⇧⌘R |
 | Stop | ⌘. | ⌘. | ⌘. / Esc |
 | Actual Size | ⌘0 | ⌘0 | ⌘0 |
-| Zoom In | ⌘+ | ⌘+ | ⌘+ |
+| Zoom In | ⌘+ or ⌘= | ⌘+ | ⌘+ |
 | Zoom Out | ⌘- | ⌘- | ⌘- |
 | Show Reader | ⇧⌘R | ⇧⌘R | — |
 | Translate Page | ⌥⌘T | — | — |
@@ -466,7 +466,7 @@ catalogue, and the feature self-test fails if the menu bar drifts from it.
 | Forward | ⌘] | ⌘] | ⌘] |
 | Home | ⇧⌘H | ⇧⌘H | ⇧⌘H |
 | Show All History | ⌘Y | ⌘Y | ⌘Y |
-| Add Bookmark… | ⌘D | ⌘D | ⌘D |
+| Add Bookmark… | ⌘D or ⌘B | ⌘D | ⌘D |
 | Add to Reading List | ⇧⌘D | ⇧⌘D | ⇧⌘D (bookmark all tabs) |
 | Show Bookmarks | ⌥⌘B | ⌥⌘B | ⌥⌘B |
 | Show Favorites Bar | ⇧⌘B | ⇧⌘B | ⇧⌘B |
