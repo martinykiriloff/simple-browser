@@ -198,6 +198,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.frontmostBrowser?.profile ?? self?.currentProfile ?? Profile(name: "Default")
         }
         controller.importPasswordFile = { [weak self] in self?.importPasswordFile() }
+        controller.importBookmarkFile = { [weak self] in self?.importBookmarkFile() }
         controller.onFinish = { BrowserSettings.didFirstRun = true }
         return controller
     }()
@@ -929,6 +930,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     label.stringValue = "That file could not be imported: \(PasswordCoordinator.describe(error))"
                 }
             }
+        }
+        if let window = importWindow.window { panel.beginSheetModal(for: window, completionHandler: finish) } else { finish(panel.runModal()) }
+    }
+
+    /// Bookmarks a browser exported to a file (the HTML every browser
+    /// writes): for one Keel cannot read on disk, or one on another Mac.
+    func importBookmarkFile() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.html]
+        panel.message = "Choose the bookmarks file exported from another browser (Bookmarks → Export, which every browser offers)."
+        let profile = importWindow.profile()
+        let finish: (NSApplication.ModalResponse) -> Void = { [weak self] response in
+            guard let self, response == .OK, let url = panel.url else { return }
+            let label = self.importWindow.resultLabel
+            guard let data = try? Data(contentsOf: url), let contents = BookmarksHTML.parse(data) else {
+                label.stringValue = "That file could not be read as bookmarks. Export it from the other browser as an HTML bookmarks file."
+                return
+            }
+            label.stringValue = self.importWindow.importer.importBookmarks(from: contents, into: profile).summary
         }
         if let window = importWindow.window { panel.beginSheetModal(for: window, completionHandler: finish) } else { finish(panel.runModal()) }
     }

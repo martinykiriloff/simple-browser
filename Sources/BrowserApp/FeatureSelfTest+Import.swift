@@ -115,7 +115,7 @@ extension FeatureSelfTest {
         window.sourcePopUp.selectItem(withTitle: "Firefox")
         _ = window.sourcePopUp.target?.perform(window.sourcePopUp.action, with: window.sourcePopUp)
         check("import: Firefox's passwords are not offered, and where to get them is said", !window.passwordsBox.isEnabled
-              && window.note.stringValue.contains("about:logins") && !window.noteButton.isHidden)
+              && window.note.stringValue.contains("about:logins") && window.passwordFileButton.isEnabled)
         let foxBefore = app.browserControllers.count
         window.importClicked(nil)
         check("import: Firefox comes over", await waitFor(15) { !window.isImporting && window.lastResult?.tabs == 1 }, window.resultLabel.stringValue)
@@ -132,6 +132,28 @@ extension FeatureSelfTest {
         check("import: Safari without Full Disk Access says what to do", window.note.stringValue.contains("Full Disk Access")
               && window.noteButton.title == "Open Privacy Settings" && !window.importButton.isEnabled)
         snapshot(window.window, "import-safari")
+
+        // From a file exported by any browser: offered whatever the source,
+        // even here where Safari's own files are blocked.
+        check("import: the file buttons are always there, and wired", window.bookmarkFileButton.isEnabled && window.passwordFileButton.isEnabled
+              && window.importBookmarkFile != nil && window.importPasswordFile != nil)
+        let html = """
+            <!DOCTYPE NETSCAPE-Bookmark-file-1>
+            <DL><p>
+              <DT><H3 PERSONAL_TOOLBAR_FOLDER="true">Bookmarks bar</H3>
+              <DL><p><DT><A HREF="https://files.example.com/">From a File</A></DL><p>
+              <DT><A HREF="https://menu.example.com/">In the Menu</A>
+            </DL><p>
+            """
+        let fileContents = BookmarksHTML.parse(Data(html.utf8))
+        check("import: an exported bookmarks file is read", fileContents?.bookmarksBar.first?.title == "From a File")
+        let fileResult = window.importer.importBookmarks(from: fileContents ?? .init(), into: profile)
+        check("import: …its bookmarks are brought in", fileResult.bookmarks == 2
+              && bookmarks?.favorites.contains { $0.title == "From a File" } == true, fileResult.summary)
+        check("import: …and the favorites bar shows it at once",
+              await waitFor { browser.favoritesBar.titles.contains("From a File") }, browser.favoritesBar.titles)
+        check("import: a file that is not bookmarks is refused", BookmarksHTML.parse(Data("<html>nope</html>".utf8)) == nil)
+
         window.window?.close()
         _ = await waitFor { self.tabs(of: browser).count == 1 }
     }

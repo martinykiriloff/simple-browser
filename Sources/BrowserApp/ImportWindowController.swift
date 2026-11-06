@@ -15,8 +15,11 @@ final class ImportWindowController: NSWindowController {
     var profile: () -> Profile
     /// Every browser profile on this Mac. Tests point it at fixtures.
     var findSources: () -> [BrowserImport.Source] = { BrowserImport.sources() }
-    /// The CSV import of the Passwords settings, for Safari and Firefox.
+    /// Passwords from a file exported by any browser or password manager.
     var importPasswordFile: (() -> Void)?
+    /// Bookmarks from a file exported by any browser: the universal path,
+    /// for a browser not on this Mac, or one Keel does not read on disk.
+    var importBookmarkFile: (() -> Void)?
     /// Makes this app the default for web links: `NSWorkspace`, or a stand-in in tests.
     var makeDefaultBrowser: @MainActor () async -> Bool = { await ImportWindowController.setAsDefaultBrowser() }
     var isDefaultBrowser: @MainActor () -> Bool = { ImportWindowController.isTheDefaultBrowser() }
@@ -43,12 +46,18 @@ final class ImportWindowController: NSWindowController {
     let defaultButton = NSButton(title: "Make Keel the Default Browser", target: nil, action: nil)
     let defaultLabel = NSTextField(labelWithString: "")
     let doneButton = NSButton(title: "Start Browsing", target: nil, action: nil)
+    let fileLabel = NSTextField(wrappingLabelWithString: "Or bring in a file you exported from another browser — this works for any browser, even one not on this Mac.")
+    let bookmarkFileButton = NSButton(title: "Import Bookmarks from a File…", target: nil, action: nil)
+    let passwordFileButton = NSButton(title: "Import Passwords from a File…", target: nil, action: nil)
     private var firstRunRows: [NSView] = []
+    /// The grid rows the first launch adds (search engine, default browser),
+    /// collapsed when importing later so the window is not left with a gap.
+    private var firstRunGridRows: [NSGridRow] = []
 
     init(importer: BrowserImporter, profile: @escaping () -> Profile) {
         self.importer = importer
         self.profile = profile
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 580, height: 420), styleMask: [.titled, .closable],
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 580, height: 512), styleMask: [.titled, .closable],
                               backing: .buffered, defer: false)
         super.init(window: window)
         QuietMode.apply(to: window)
@@ -94,6 +103,14 @@ final class ImportWindowController: NSWindowController {
         defaultButton.setContentCompressionResistancePriority(.required, for: .horizontal)
         doneButton.target = self
         doneButton.action = #selector(finish(_:))
+        fileLabel.textColor = .secondaryLabelColor
+        fileLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        bookmarkFileButton.target = self
+        bookmarkFileButton.action = #selector(importBookmarkFileClicked(_:))
+        bookmarkFileButton.bezelStyle = .rounded
+        passwordFileButton.target = self
+        passwordFileButton.action = #selector(importPasswordFileClicked(_:))
+        passwordFileButton.bezelStyle = .rounded
 
         let fromTitle = NSTextField(labelWithString: "Import from:")
         let bringTitle = NSTextField(labelWithString: "Bring over:")
@@ -130,14 +147,25 @@ final class ImportWindowController: NSWindowController {
         grid.row(at: 8).yPlacement = .center
         grid.row(at: 9).yPlacement = .center
         firstRunRows = [engineTitle, enginePopUp, defaultTitle, defaultRow]
+        firstRunGridRows = [grid.row(at: 8), grid.row(at: 9)]
 
+        let separator = NSBox()
+        separator.boxType = .separator
+        let fileButtons = NSStackView(views: [bookmarkFileButton, passwordFileButton])
+        fileButtons.spacing = 10
+        let fileSection = NSStackView(views: [fileLabel, fileButtons])
+        fileSection.orientation = .vertical
+        fileSection.alignment = .leading
+        fileSection.spacing = 8
         let buttons = NSStackView(views: [NSView(), doneButton])
-        let stack = NSStackView(views: [headline, intro, grid, buttons])
+        let stack = NSStackView(views: [headline, intro, grid, separator, fileSection, buttons])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 14
         stack.edgeInsets = NSEdgeInsets(top: 24, left: 28, bottom: 20, right: 28)
         stack.setCustomSpacing(20, after: intro)
+        stack.setCustomSpacing(18, after: grid)
+        stack.setCustomSpacing(18, after: separator)
         stack.translatesAutoresizingMaskIntoConstraints = false
         let root = NSView()
         root.addSubview(stack)
@@ -151,6 +179,8 @@ final class ImportWindowController: NSWindowController {
             note.widthAnchor.constraint(equalToConstant: 400),
             resultLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 300),
             buttons.widthAnchor.constraint(equalToConstant: 524),
+            separator.widthAnchor.constraint(equalToConstant: 524),
+            fileLabel.widthAnchor.constraint(equalToConstant: 524),
         ])
         window?.contentView = root
     }
@@ -169,6 +199,8 @@ final class ImportWindowController: NSWindowController {
             ? "Bring your bookmarks, history, open tabs and passwords from the browser you use now, straight from its files: nothing to export. You can do this again at any time from File → Import From…."
             : "Bookmarks, history, open tabs and passwords, straight from the other browser’s files. Nothing already here is duplicated."
         for view in firstRunRows { view.isHidden = !firstRun }
+        for row in firstRunGridRows { row.isHidden = !firstRun }
+        window?.setContentSize(NSSize(width: 580, height: firstRun ? 512 : 448))
         doneButton.title = firstRun ? "Start Browsing" : "Done"
         // An engine of the person's own (Settings → General) is none of the
         // built-in rows, so it gets a row of its own, named after its site:
@@ -187,6 +219,8 @@ final class ImportWindowController: NSWindowController {
             enginePopUp.selectItem(at: enginePopUp.numberOfItems - 1)
         }
         syncDefault()
+        bookmarkFileButton.isEnabled = importBookmarkFile != nil
+        passwordFileButton.isEnabled = importPasswordFile != nil
         resultLabel.stringValue = ""
         lastResult = nil
         sourceChanged(nil)
@@ -212,10 +246,10 @@ final class ImportWindowController: NSWindowController {
     @objc private func sourceChanged(_ sender: Any?) {
         guard let source = selectedSource else {
             for box in [bookmarksBox, historyBox, tabsBox, passwordsBox] { box.isEnabled = false }
-            note.stringValue = "No other browser was found on this Mac. Passwords exported to a file from any browser or password manager can still be imported."
-            noteButton.title = "Import Passwords from a File…"
-            noteButton.isHidden = importPasswordFile == nil
+            note.stringValue = "No other browser was found on this Mac. You can still bring in bookmarks or passwords you exported from any browser to a file — see below."
+            noteButton.title = ""
             importButton.isEnabled = false
+            setNoteButtonHidden(true)
             return
         }
         let blocked = source.needsFullDiskAccess
@@ -230,14 +264,13 @@ final class ImportWindowController: NSWindowController {
             note.stringValue = "\(source.browser.name) keeps its passwords’ key in your Keychain: macOS will ask you to allow Keel to use it, once."
             noteButton.title = ""
         } else {
-            let how = source.browser == .safari
-                ? "Safari’s passwords are in the Passwords app, which other apps cannot read: there, choose File → Export All Passwords to File…, then import that file here."
-                : "Firefox encrypts its passwords for itself: in Firefox open about:logins, choose ⋯ → Export Passwords…, then import that file here."
-            note.stringValue = how
-            noteButton.title = "Import Passwords from a File…"
+            let name = source.browser.name
+            note.stringValue = source.browser == .safari
+                ? "Safari’s passwords live in the Passwords app, which other apps cannot read. To bring them over, open Passwords, choose File → Export All Passwords to File…, then use “Import Passwords from a File…” below."
+                : "\(name) keeps its passwords for itself. To bring them over, open its passwords page (about:logins), choose Export…, then use “Import Passwords from a File…” below."
+            noteButton.title = ""
         }
-        noteButton.isHidden = noteButton.title.isEmpty || (!blocked && importPasswordFile == nil)
-        (noteButton.superview as? NSGridView)?.cell(for: noteButton)?.row?.isHidden = noteButton.isHidden
+        setNoteButtonHidden(blocked == false)
         partsChanged(nil)
     }
 
@@ -251,6 +284,14 @@ final class ImportWindowController: NSWindowController {
         } else {
             importPasswordFile?()
         }
+    }
+
+    @objc func importBookmarkFileClicked(_ sender: Any?) { importBookmarkFile?() }
+    @objc func importPasswordFileClicked(_ sender: Any?) { importPasswordFile?() }
+
+    private func setNoteButtonHidden(_ hidden: Bool) {
+        noteButton.isHidden = hidden
+        (noteButton.superview as? NSGridView)?.cell(for: noteButton)?.row?.isHidden = hidden
     }
 
     @objc func importClicked(_ sender: Any?) {

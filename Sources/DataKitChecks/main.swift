@@ -201,5 +201,101 @@ do {
     check("import checks", false, error)
 }
 
+// MARK: The bookmarks file every browser exports (Netscape HTML)
+
+do {
+    // Chrome / Edge / Brave / Opera: a toolbar marked PERSONAL_TOOLBAR_FOLDER,
+    // a nested folder, an entity in a title.
+    let chrome = """
+        <!DOCTYPE NETSCAPE-Bookmark-file-1>
+        <META HTTP-EQUIV="Content-Type" CONTENT="text/html; charset=UTF-8">
+        <TITLE>Bookmarks</TITLE>
+        <H1>Bookmarks</H1>
+        <DL><p>
+            <DT><H3 ADD_DATE="1" PERSONAL_TOOLBAR_FOLDER="true">Bookmarks bar</H3>
+            <DL><p>
+                <DT><A HREF="https://github.com/" ADD_DATE="1">GitHub</A>
+                <DT><H3>Work</H3>
+                <DL><p>
+                    <DT><A HREF="https://linear.app/">Linear &amp; Co</A>
+                    <DT><A HREF="https://www.figma.com/">Figma</A>
+                </DL><p>
+                <DT><A HREF="https://forums.swift.org/">Swift Forums</A>
+            </DL><p>
+            <DT><H3>Recipes</H3>
+            <DL><p>
+                <DT><A HREF="https://example.com/sourdough">Sourdough</A>
+                <DT><A HREF="javascript:void(0)">A bookmarklet</A>
+            </DL><p>
+        </DL><p>
+        """
+    let parsed = BookmarksHTML.parse(Data(chrome.utf8))
+    check("html: a bookmarks file is recognised and the bar is the toolbar folder",
+          parsed?.bookmarksBar.map(\.title) == ["GitHub", "Work", "Swift Forums"], parsed?.bookmarksBar.map(\.title) as Any)
+    check("html: a folder keeps its nesting, and an &amp; is decoded",
+          parsed?.bookmarksBar.first(where: { $0.title == "Work" })?.children.map(\.title) == ["Linear & Co", "Figma"],
+          parsed?.bookmarksBar.first(where: { $0.title == "Work" })?.children.map(\.title) as Any)
+    check("html: everything outside the bar is kept too", parsed?.otherBookmarks.map(\.title) == ["Recipes"], parsed?.otherBookmarks.map(\.title) as Any)
+    check("html: a javascript: bookmarklet is left out", parsed?.otherBookmarks.first?.children.map(\.title) == ["Sourdough"],
+          parsed?.otherBookmarks.first?.children.map(\.title) as Any)
+
+    // Firefox: the menu's bookmarks at the top, the toolbar marked, Other Bookmarks.
+    let firefox = """
+        <!DOCTYPE NETSCAPE-Bookmark-file-1>
+        <META HTTP-EQUIV="Content-Type" CONTENT="text/html; charset=UTF-8">
+        <TITLE>Bookmarks</TITLE>
+        <H1>Bookmarks Menu</H1>
+        <DL><p>
+            <DT><A HREF="https://www.mozilla.org/">Mozilla</A>
+            <DT><H3 PERSONAL_TOOLBAR_FOLDER="true">Bookmarks Toolbar</H3>
+            <DL><p>
+                <DT><A HREF="https://developer.mozilla.org/">MDN</A>
+            </DL><p>
+            <DT><H3>Other Bookmarks</H3>
+            <DL><p>
+                <DT><A HREF="https://example.org/">Example</A>
+            </DL><p>
+        </DL><p>
+        """
+    let fox = BookmarksHTML.parse(Data(firefox.utf8))
+    check("html: Firefox's toolbar becomes the bar", fox?.bookmarksBar.map(\.title) == ["MDN"], fox?.bookmarksBar.map(\.title) as Any)
+    check("html: its menu bookmarks and Other Bookmarks are kept", fox?.otherBookmarks.map(\.title) == ["Mozilla", "Other Bookmarks"],
+          fox?.otherBookmarks.map(\.title) as Any)
+
+    // Safari: no outer <DL>, the bar named Favorites, a title with an entity.
+    let safari = """
+        <!DOCTYPE NETSCAPE-Bookmark-file-1>
+        <Title>Bookmarks</Title>
+        <H1>Bookmarks</H1>
+        <DT><H3 FOLDED>Favorites</H3>
+        <DL><p>
+            <DT><A HREF="https://www.apple.com/">Apple &#8212; Home</A>
+        </DL><p>
+        <DT><A HREF="https://webkit.org/">WebKit</A>
+        """
+    let saf = BookmarksHTML.parse(Data(safari.utf8))
+    check("html: Safari's Favorites is the bar, a numeric entity decoded", saf?.bookmarksBar.map(\.title) == ["Apple — Home"], saf?.bookmarksBar.map(\.title) as Any)
+    check("html: a bookmark with no folder is kept", saf?.otherBookmarks.map(\.title) == ["WebKit"], saf?.otherBookmarks.map(\.title) as Any)
+
+    check("html: a page that is not a bookmarks file is refused", BookmarksHTML.parse(Data("<html><body>Hello</body></html>".utf8)) == nil)
+    check("html: an empty file is refused", BookmarksHTML.parse(Data()) == nil)
+
+    // Into the store, the same way a browser's own bookmarks go.
+    let store = try BookmarkStore(path: nil)
+    let added = try store.importBookmarks(parsed?.bookmarksBar ?? [], into: store.favoritesID)
+    check("html: imports into the favorites bar", added == 4 && store.favorites.map(\.title) == ["GitHub", "Work", "Swift Forums"], store.favorites.map(\.title))
+} catch {
+    check("bookmarks HTML checks", false, error)
+}
+
+// MARK: Every browser is found by engine
+
+do {
+    check("browsers: the Firefox family reads like Firefox, not Chromium",
+          [BrowserImport.Browser.zen, .librewolf, .waterfox, .floorp].allSatisfy { $0.engine == .firefox && $0.safeStorageService == nil })
+    check("browsers: the Chromium cousins offer passwords through the Keychain",
+          [BrowserImport.Browser.opera, .ecosia].allSatisfy { $0.engine == .chromium && $0.safeStorageService?.hasSuffix("Safe Storage") == true })
+}
+
 print(failures == 0 ? "✔ all \(passed) DataKit checks passed" : "✘ \(failures) of \(passed + failures) checks failed")
 exit(failures == 0 ? 0 : 1)

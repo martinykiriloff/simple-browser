@@ -7,8 +7,13 @@ import Compression
 /// databases locked, and nothing of the other browser is ever written.
 public enum BrowserImport {
 
+    /// What a browser is built on, which decides how its files are read.
+    public enum Engine: Sendable { case chromium, firefox, safari }
+
     public enum Browser: String, CaseIterable, Sendable {
-        case chrome, brave, edge, arc, vivaldi, chromium, firefox, safari
+        case chrome, brave, edge, arc, opera, vivaldi, ecosia, chromium
+        case firefox, zen, librewolf, waterfox, floorp
+        case safari
 
         public var name: String {
             switch self {
@@ -16,14 +21,28 @@ public enum BrowserImport {
             case .brave: return "Brave"
             case .edge: return "Microsoft Edge"
             case .arc: return "Arc"
+            case .opera: return "Opera"
             case .vivaldi: return "Vivaldi"
+            case .ecosia: return "Ecosia"
             case .chromium: return "Chromium"
             case .firefox: return "Firefox"
+            case .zen: return "Zen"
+            case .librewolf: return "LibreWolf"
+            case .waterfox: return "Waterfox"
+            case .floorp: return "Floorp"
             case .safari: return "Safari"
             }
         }
 
-        var isChromium: Bool { self != .firefox && self != .safari }
+        public var engine: Engine {
+            switch self {
+            case .firefox, .zen, .librewolf, .waterfox, .floorp: return .firefox
+            case .safari: return .safari
+            default: return .chromium
+            }
+        }
+
+        var isChromium: Bool { engine == .chromium }
 
         /// Where its profiles are, under ~/Library/Application Support.
         var supportPath: String? {
@@ -32,23 +51,33 @@ public enum BrowserImport {
             case .brave: return "BraveSoftware/Brave-Browser"
             case .edge: return "Microsoft Edge"
             case .arc: return "Arc/User Data"
+            case .opera: return "com.operasoftware.Opera"
             case .vivaldi: return "Vivaldi"
+            case .ecosia: return "EcosiaBrowser"
             case .chromium: return "Chromium"
             case .firefox: return "Firefox"
+            case .zen: return "zen"
+            case .librewolf: return "librewolf"
+            case .waterfox: return "Waterfox"
+            case .floorp: return "Floorp"
             case .safari: return nil
             }
         }
 
         /// The Keychain item a Chromium browser keeps its password key in.
+        /// The Firefox family keeps its key in the profile, not the Keychain,
+        /// and gives up its passwords only through its own export to a file.
         public var safeStorageService: String? {
             switch self {
             case .chrome: return "Chrome Safe Storage"
             case .brave: return "Brave Safe Storage"
             case .edge: return "Microsoft Edge Safe Storage"
             case .arc: return "Arc Safe Storage"
+            case .opera: return "Opera Safe Storage"
             case .vivaldi: return "Vivaldi Safe Storage"
+            case .ecosia: return "Ecosia Browser Safe Storage"
             case .chromium: return "Chromium Safe Storage"
-            case .firefox, .safari: return nil
+            case .firefox, .zen, .librewolf, .waterfox, .floorp, .safari: return nil
             }
         }
     }
@@ -140,7 +169,7 @@ public enum BrowserImport {
         let support = home.appendingPathComponent("Library/Application Support")
         var found: [Source] = []
         for browser in Browser.allCases {
-            switch browser {
+            switch browser.engine {
             case .safari:
                 let folder = home.appendingPathComponent("Library/Safari")
                 guard FileManager.default.fileExists(atPath: folder.path) else { continue }
@@ -148,8 +177,9 @@ public enum BrowserImport {
                     || FileManager.default.isReadableFile(atPath: folder.appendingPathComponent("History.db").path)
                 found.append(Source(browser: .safari, profile: "", directory: folder, needsFullDiskAccess: !readable))
             case .firefox:
-                found += firefoxProfiles(in: support.appendingPathComponent("Firefox"))
-            default:
+                guard let path = browser.supportPath else { continue }
+                found += firefoxProfiles(browser, in: support.appendingPathComponent(path))
+            case .chromium:
                 guard let path = browser.supportPath else { continue }
                 found += chromiumProfiles(browser, in: support.appendingPathComponent(path))
             }
@@ -178,7 +208,7 @@ public enum BrowserImport {
         }
     }
 
-    static func firefoxProfiles(in root: URL) -> [Source] {
+    static func firefoxProfiles(_ browser: Browser, in root: URL) -> [Source] {
         guard let ini = try? String(contentsOf: root.appendingPathComponent("profiles.ini"), encoding: .utf8) else { return [] }
         var profiles: [(name: String, path: URL)] = []
         var name = "", path = "", relative = true, inProfile = false
@@ -199,16 +229,16 @@ public enum BrowserImport {
         }
         flush()
         let usable = profiles.filter { FileManager.default.fileExists(atPath: $0.path.appendingPathComponent("places.sqlite").path) }
-        return usable.map { Source(browser: .firefox, profile: usable.count == 1 ? "" : $0.name, directory: $0.path, needsFullDiskAccess: false) }
+        return usable.map { Source(browser: browser, profile: usable.count == 1 ? "" : $0.name, directory: $0.path, needsFullDiskAccess: false) }
     }
 
     // MARK: - Reading
 
     public static func read(_ source: Source, parts: Parts = .all) throws -> Contents {
-        switch source.browser {
+        switch source.browser.engine {
         case .firefox: return try readFirefox(source.directory, parts: parts)
         case .safari: return try readSafari(source.directory, parts: parts)
-        default: return try readChromium(source.directory, parts: parts)
+        case .chromium: return try readChromium(source.directory, parts: parts)
         }
     }
 

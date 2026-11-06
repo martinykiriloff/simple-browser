@@ -256,9 +256,10 @@ brought over twice.
 
 | | Bookmarks | History | Open tabs | Passwords |
 |---|---|---|---|---|
-| Chrome, Brave, Edge, Arc, Vivaldi, Chromium (every profile) | ✓ | ✓ | ✓ | ✓ |
-| Firefox | ✓ | ✓ | ✓ | from a file: about:logins → Export |
+| Chrome, Brave, Edge, Arc, Opera, Vivaldi, Ecosia, Chromium (every profile) | ✓ | ✓ | ✓ | ✓ |
+| Firefox, Zen, LibreWolf, Waterfox, Floorp | ✓ | ✓ | ✓ | from a file: about:logins → Export |
 | Safari | ✓ with the reading list | ✓ | – | from a file: Passwords app → Export |
+| Any other browser | from a file: Bookmarks → Export (HTML) | | | from a file: Export passwords (CSV) |
 
 A browser's bookmarks bar becomes the favorites bar; its other bookmarks
 go in *Imported from …* in the Bookmarks menu. History comes with its
@@ -269,6 +270,14 @@ Chromium browsers encrypt their passwords with a key in your Keychain
 Safari's files are kept from other apps until Keel has Full Disk
 Access, which the window explains, with a button to the right place in
 System Settings.
+
+For a browser Keel does not read on disk — one not listed, or one on
+another Mac — the welcome and **Import From…** windows also take files:
+**Import Bookmarks from a File…** reads the Netscape HTML that every
+browser's *Export Bookmarks* writes (Chrome, Firefox, Safari, Edge,
+Opera, Arc, DuckDuckGo, Orion and the rest), and **Import Passwords from
+a File…** reads the CSV every browser and password manager exports. So
+anything with an export can come in.
 
 The other browser's databases are copied before they are read (a running
 browser keeps them locked) and never written. `DataKitChecks` and the

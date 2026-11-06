@@ -45,17 +45,8 @@ final class BrowserImporter {
             result.problems.append("Could not read \(source.browser.name)’s files: \(error).")
             return result
         }
-        if parts.contains(.bookmarks), let store = app.bookmarks(for: profile) {
-            do {
-                result.bookmarks += try store.importBookmarks(contents.bookmarksBar, into: store.favoritesID)
-                if contents.otherBookmarks.contains(where: { $0.count > 0 }) {
-                    result.bookmarks += try store.importBookmarks(contents.otherBookmarks, into: store.importFolder(named: "Imported from \(source.browser.name)"))
-                }
-                result.readingList += try store.importReadingList(contents.readingList)
-                NotificationCenter.default.post(name: .bookmarksDidChange, object: nil)
-            } catch {
-                result.problems.append("Some bookmarks could not be added: \(error).")
-            }
+        if parts.contains(.bookmarks) {
+            addBookmarks(contents, folderName: "Imported from \(source.browser.name)", into: profile, into: &result)
         }
         if parts.contains(.history), let history = app.history(for: profile) {
             do { result.pages = try history.importPages(contents.history) } catch { result.problems.append("History could not be added: \(error).") }
@@ -90,6 +81,32 @@ final class BrowserImporter {
             }
         }
         return result
+    }
+
+    /// Bookmarks from a file the person exported from another browser (the
+    /// Netscape HTML every browser writes): the bar into the favorites bar,
+    /// the rest into a folder of the Bookmarks menu. For a browser Keel
+    /// cannot read on disk, or one on another Mac.
+    func importBookmarks(from contents: BrowserImport.Contents, into profile: Profile) -> Result {
+        var result = Result()
+        addBookmarks(contents, folderName: "Imported Bookmarks", into: profile, into: &result)
+        return result
+    }
+
+    /// The bar becomes the favorites bar; everything else goes under one
+    /// folder of the Bookmarks menu. A page already bookmarked is left out.
+    private func addBookmarks(_ contents: BrowserImport.Contents, folderName: String, into profile: Profile, into result: inout Result) {
+        guard let store = app.bookmarks(for: profile) else { return }
+        do {
+            result.bookmarks += try store.importBookmarks(contents.bookmarksBar, into: store.favoritesID)
+            if contents.otherBookmarks.contains(where: { $0.count > 0 }) {
+                result.bookmarks += try store.importBookmarks(contents.otherBookmarks, into: store.importFolder(named: folderName))
+            }
+            result.readingList += try store.importReadingList(contents.readingList)
+            NotificationCenter.default.post(name: .bookmarksDidChange, object: nil)
+        } catch {
+            result.problems.append("Some bookmarks could not be added: \(error).")
+        }
     }
 
     /// Chromium's "… Safe Storage" item. macOS shows its own prompt, naming
